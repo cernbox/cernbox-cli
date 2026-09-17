@@ -1,0 +1,240 @@
+package auth
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+// SSOConfig describes the OIDC client the CLI uses against CERN SSO.
+type SSOConfig struct {
+	// Issuer is the OIDC issuer URL, for example
+	// https://auth.cern.ch/auth/realms/cern.
+	Issuer string
+	// ClientID is the public client registered for the CLI.
+	ClientID string
+	// Audience is the application the token should be valid for. CERN SSO
+	// issues tokens scoped to a target application, and a token minted for the
+	// CLI itself would not be accepted by CERNBox.
+	Audience string
+	// Scopes requested. offline_access is what yields a refresh token, which is
+	// what lets a shell loop avoid a round trip to the SSO server on every
+	// command.
+	Scopes []string
+	// RedirectURI registered for the authorization code flow.
+	RedirectURI string
+	// ServicePrincipal is the SPN of the SSO server, used for the Kerberos leg.
+	// Empty derives HTTP/<issuer host>.
+	ServicePrincipal string
+}
+
+// scopes returns the scopes to request, with sensible defaults.
+func (c *SSOConfig) scopes() []string {
+	if len(c.Scopes) > 0 {
+		return c.Scopes
+	}
+	return []string{"openid", "profile", "offline_access"}
+}
+
+func (c *SSOConfig) redirectURI() string {
+	if c.RedirectURI != "" {
+		return c.RedirectURI
+	}
+	// An out-of-band redirect keeps the CLI from having to run a local HTTP
+	// server: the Kerberos leg never renders a page, so nothing needs to
+	// receive a browser redirect.
+	return "urn:ietf:wg:oauth:2.0:oob"
+}
+
+func (c *SSOConfig) spn() string {
+	if c.ServicePrincipal != "" {
+		return c.ServicePrincipal
+	}
+	u, err := url.Parse(c.Issuer)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return "HTTP/" + u.Hostname()
+}
+
+// providerMetadata is the subset of the OIDC discovery document the CLI uses.
+type providerMetadata struct {
+	Issuer                      string `json:"issuer"`
+	AuthorizationEndpoint       string `json:"authorization_endpoint"`
+	TokenEndpoint               string `json:"token_endpoint"`
+	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
+}
+
+// discover fetches the OIDC discovery document.
+func discover(ctx context.Context, hc *http.Client, issuer string) (*providerMetadata, error) {
+	u := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("contacting the identity provider at %s: %w", issuer, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("the identity provider at %s returned %s for its discovery document", issuer, resp.Status)
+	}
+	var meta providerMetadata
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return nil, fmt.Errorf("parsing the discovery document from %s: %w", issuer, err)
+	}
+	if meta.TokenEndpoint == "" {
+		return nil, fmt.Errorf("the identity provider at %s advertises no token endpoint", issuer)
+	}
+	return &meta, nil
+}
+
+// tokenResponse is the OAuth token endpoint response.
+type tokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
+func (r *tokenResponse) toToken(provider string) *Token {
+	scheme := r.TokenType
+	if scheme == "" || strings.EqualFold(scheme, "bearer") {
+		scheme = "Bearer"
+	}
+	tok := &Token{
+		Header:       "Authorization",
+		Value:        scheme + " " + r.AccessToken,
+		RefreshToken: r.RefreshToken,
+		Provider:     provider,
+	}
+	switch {
+	case r.ExpiresIn > 0:
+		tok.Expiry = time.Now().Add(time.Duration(r.ExpiresIn) * time.Second)
+	default:
+		// Fall back to the token's own claim so a provider that omits
+		// expires_in still gets correct refresh behaviour.
+		tok.Expiry = jwtExpiry(r.AccessToken)
+	}
+	return tok
+}
+
+// postForm sends a form-encoded request to a token endpoint and decodes the
+// response. OAuth errors arrive with a non-2xx status and a JSON body, so the
+// body is decoded either way.
+func postForm(ctx context.Context, hc *http.Client, endpoint string, form url.Values) (*tokenResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("contacting the token endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	var tr tokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		return nil, fmt.Errorf("the token endpoint returned %s with an unparseable body", resp.Status)
+	}
+	if tr.Error != "" {
+		return &tr, fmt.Errorf("%s", oauthErrorMessage(&tr))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return &tr, fmt.Errorf("the token endpoint returned %s", resp.Status)
+	}
+	if tr.AccessToken == "" {
+		return &tr, fmt.Errorf("the token endpoint returned no access token")
+	}
+	return &tr, nil
+}
+
+func oauthErrorMessage(tr *tokenResponse) string {
+	if tr.ErrorDescription != "" {
+		return tr.Error + ": " + tr.ErrorDescription
+	}
+	return tr.Error
+}
+
+// pkce holds a PKCE verifier and its challenge.
+type pkce struct {
+	Verifier  string
+	Challenge string
+}
+
+func newPKCE() (*pkce, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	return newPKCEFrom(base64.RawURLEncoding.EncodeToString(b))
+}
+
+// newPKCEFrom derives the challenge for a given verifier. Splitting it out lets
+// a test recompute the challenge and check that the pair actually matches:
+// sending an unrelated pair passes a lax server and fails a strict one, which
+// is the worst way to discover the bug.
+func newPKCEFrom(verifier string) (*pkce, error) {
+	if verifier == "" {
+		return nil, fmt.Errorf("empty PKCE verifier")
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	return &pkce{
+		Verifier:  verifier,
+		Challenge: base64.RawURLEncoding.EncodeToString(sum[:]),
+	}, nil
+}
+
+func randomState() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// jwtExpiry reads the exp claim from a JWT without verifying it.
+//
+// Verification is the server's job; the client only needs to know when to stop
+// using the token. A token it cannot parse is treated as non-expiring, which is
+// the safe direction: it gets used until the server rejects it, and the 401
+// path re-authenticates.
+func jwtExpiry(raw string) time.Time {
+	raw = strings.TrimPrefix(raw, "Bearer ")
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return time.Time{}
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Time{}
+	}
+	return time.Unix(claims.Exp, 0)
+}
