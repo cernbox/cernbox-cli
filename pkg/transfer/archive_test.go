@@ -1,0 +1,224 @@
+package transfer
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// tarball builds a tar stream from a list of entries.
+func tarball(t *testing.T, entries []tar.Header, bodies map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, hdr := range entries {
+		h := hdr
+		if body, ok := bodies[h.Name]; ok {
+			h.Size = int64(len(body))
+		}
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+		if body, ok := bodies[h.Name]; ok {
+			if _, err := tw.Write([]byte(body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestExtractTar(t *testing.T) {
+	box := newFakeBox(t)
+	e := box.engine(Options{Overwrite: true})
+
+	data := tarball(t,
+		[]tar.Header{
+			{Name: "data", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "data/a.txt", Typeflag: tar.TypeReg, Mode: 0o644},
+			{Name: "data/sub", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "data/sub/b.txt", Typeflag: tar.TypeReg, Mode: 0o644},
+		},
+		map[string]string{"data/a.txt": "alpha", "data/sub/b.txt": "beta"},
+	)
+
+	dir := t.TempDir()
+	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Files != 2 || stats.Dirs != 2 {
+		t.Errorf("stats = %+v, want 2 files and 2 directories", stats)
+	}
+	if stats.Bytes != 9 {
+		t.Errorf("Bytes = %d, want 9", stats.Bytes)
+	}
+	assertFile(t, filepath.Join(dir, "data", "a.txt"), "alpha")
+	assertFile(t, filepath.Join(dir, "data", "sub", "b.txt"), "beta")
+}
+
+// TestExtractTarRejectsPathTraversal is the archive equivalent of zip-slip: an
+// entry named ../../etc/x must not be written outside the destination, no
+// matter what the server sends.
+func TestExtractTarRejectsPathTraversal(t *testing.T) {
+	box := newFakeBox(t)
+	e := box.engine(Options{Overwrite: true})
+
+	for _, name := range []string{
+		"../escaped.txt",
+		"../../etc/passwd",
+		"data/../../escaped.txt",
+		"/absolute.txt",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := tarball(t,
+				[]tar.Header{{Name: name, Typeflag: tar.TypeReg, Mode: 0o644}},
+				map[string]string{name: "malicious"},
+			)
+
+			parent := t.TempDir()
+			dest := filepath.Join(parent, "dest")
+
+			_, err := e.extractTar(context.Background(), bytes.NewReader(data), dest)
+			if err == nil {
+				// An absolute path is neutralised by Join rather than rejected,
+				// so accept either outcome as long as nothing escaped.
+				if _, statErr := os.Stat(filepath.Join(parent, "escaped.txt")); statErr == nil {
+					t.Fatal("an entry was written outside the destination")
+				}
+				return
+			}
+			if !strings.Contains(err.Error(), "outside the destination") {
+				t.Errorf("got %v, want a clear traversal rejection", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(parent, "escaped.txt")); statErr == nil {
+				t.Error("an entry was written outside the destination")
+			}
+		})
+	}
+}
+
+// TestExtractTarSkipsLinks: a link entry could point anywhere, and CERNBox does
+// not store symlinks anyway.
+func TestExtractTarSkipsLinks(t *testing.T) {
+	box := newFakeBox(t)
+	e := box.engine(Options{Overwrite: true})
+
+	data := tarball(t,
+		[]tar.Header{
+			{Name: "ok.txt", Typeflag: tar.TypeReg, Mode: 0o644},
+			{Name: "evil", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd", Mode: 0o777},
+		},
+		map[string]string{"ok.txt": "fine"},
+	)
+
+	dir := t.TempDir()
+	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Files != 1 {
+		t.Errorf("Files = %d, want 1", stats.Files)
+	}
+	if stats.Skipped != 1 {
+		t.Errorf("Skipped = %d, want the symlink skipped", stats.Skipped)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "evil")); err == nil {
+		t.Error("a symlink entry was created")
+	}
+}
+
+func TestExtractTarSkipsExistingWithoutOverwrite(t *testing.T) {
+	box := newFakeBox(t)
+	e := box.engine(Options{})
+
+	data := tarball(t,
+		[]tar.Header{{Name: "a.txt", Typeflag: tar.TypeReg, Mode: 0o644}},
+		map[string]string{"a.txt": "from archive"},
+	)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", stats.Skipped)
+	}
+	assertFile(t, filepath.Join(dir, "a.txt"), "local")
+}
+
+func TestExtractTarTruncatedStream(t *testing.T) {
+	box := newFakeBox(t)
+	e := box.engine(Options{Overwrite: true})
+
+	// The body must be large enough that the cut lands inside the file
+	// content: a tar stream truncated exactly at a block boundary after a
+	// complete entry is indistinguishable from a short archive.
+	body := strings.Repeat("x", 8<<10)
+	data := tarball(t,
+		[]tar.Header{{Name: "a.txt", Typeflag: tar.TypeReg, Mode: 0o644}},
+		map[string]string{"a.txt": body},
+	)
+
+	dir := t.TempDir()
+	_, err := e.extractTar(context.Background(), bytes.NewReader(data[:len(data)/2]), dir)
+	if err == nil {
+		t.Fatal("a truncated archive should be reported, not silently accepted")
+	}
+
+	// Whatever was written must not be presented as a complete file.
+	if got, readErr := os.ReadFile(filepath.Join(dir, "a.txt")); readErr == nil && len(got) == len(body) {
+		t.Error("a truncated entry was written out at full length")
+	}
+}
+
+func TestSafeJoin(t *testing.T) {
+	root := "/tmp/dest"
+
+	good := map[string]string{
+		"a.txt":        "/tmp/dest/a.txt",
+		"sub/b.txt":    "/tmp/dest/sub/b.txt",
+		"./sub/c.txt":  "/tmp/dest/sub/c.txt",
+		"sub/../d.txt": "/tmp/dest/d.txt",
+		"sub//e.txt":   "/tmp/dest/sub/e.txt",
+	}
+	for name, want := range good {
+		got, err := safeJoin(root, name)
+		if err != nil {
+			t.Errorf("safeJoin(%q): %v", name, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("safeJoin(%q) = %q, want %q", name, got, want)
+		}
+	}
+
+	for _, name := range []string{"../escape", "../../escape", "sub/../../escape", ".."} {
+		if _, err := safeJoin(root, name); err == nil {
+			t.Errorf("safeJoin(%q) should be rejected", name)
+		}
+	}
+}
+
+func TestArchiveDownloadNeedsTar(t *testing.T) {
+	box := newFakeBox(t)
+	box.archiverEnabled = false
+	e := box.engine(Options{Overwrite: true, Archive: true})
+
+	_, err := e.archiveDownload(context.Background(), "/eos/user/e/einstein/data", t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error with no archiver")
+	}
+}
