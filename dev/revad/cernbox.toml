@@ -1,0 +1,276 @@
+## Dev configuration with a minimal setup for CERNBox
+
+[vars]
+internal_gateway = "revad"
+provider_domain = "revad"
+machine_api_key = "machine-api-key"
+
+[http]
+
+[log]
+level = "debug"
+
+[shared]
+gatewaysvc = "{{ vars.internal_gateway }}:19000"
+jwt_secret = "reva-secret"
+
+[grpc.services.gateway]
+address = ":19000"
+authregistrysvc = "{{ grpc.services.authregistry.address }}"
+storageregistrysvc = "{{ grpc.services.storageregistry.address }}"
+preferencessvc = "{{ grpc.services.userprovider.address }}"
+userprovidersvc = "{{ grpc.services.userprovider.address }}"
+usershareprovidersvc = "{{ grpc.services.usershareprovider.address }}"
+publicshareprovidersvc = "{{ grpc.services.publicshareprovider.address }}"
+groupprovidersvc = "{{ grpc.services.groupprovider.address }}"
+spacessvc = "{{ grpc.services.spacesregistry.address }}"
+datagateway = "http://{{ http.services.datagateway.address }}/data"
+
+transfer_expires = 6     # give it a moment
+commit_share_to_storage_grant = true
+commit_share_to_storage_ref = true
+
+home_layout = "/eos/user/{{substr 0 1 .Username}}/{{.Username}}/"
+
+### AUTH ###
+
+[grpc.services.authregistry]
+driver = "static"
+
+[grpc.services.authregistry.drivers.static.rules]
+basic = "{{ grpc.services.authprovider[0].address }}"
+bearer = "{{ grpc.services.authprovider[0].address }}"
+machine = "{{ grpc.services.authprovider[1].address }}"
+
+[[grpc.services.authprovider]]
+auth_manager = "json"
+
+[grpc.services.authprovider.auth_managers.json]
+users = "/etc/revad/users.demo.json"
+
+[[grpc.services.authprovider]]
+auth_manager = "machine"
+
+[grpc.services.authprovider.auth_managers.machine]
+api_key = "{{ vars.machine_api_key }}"
+gateway_addr = "{{ vars.internal_gateway }}:19000"
+
+
+### STORAGE ###
+
+[grpc.services.storageregistry]
+driver = "static"
+
+[grpc.services.storageregistry.drivers.static]
+home_provider = "/"
+
+[grpc.services.storageregistry.drivers.static.rules]
+"/" = {"address" = "{{ grpc.services.storageprovider[0].address }}"}
+"localhome" = {"address" = "{{ grpc.services.storageprovider[0].address }}"}
+
+[[grpc.services.storageprovider]]
+driver = "eos"
+mount_path = "/"
+mount_id = "localhome"
+expose_data_server = true
+data_server_url = "http://localhost:{{ http.services.dataprovider[0].address.port }}/data"
+enable_home_creation = true
+space_depth = 4
+
+[grpc.services.storageprovider.drivers.eos]
+namespace = "/"
+quota_node = "/eos/user"
+user_layout = "{{substr 0 1 .Username}}/{{.Username}}"
+use_grpc = true
+gatewaysvc = "localhost:19000"
+grpc_auth_key = "eos_auth_key"
+https_auth_key = "eos_auth_key"
+master_grpc_uri = "eos-storage:50051"
+master_url = "https://eos-storage:8443" # I know it's wrong, but this is passed to the http layer like this...
+allow_insecure = true
+http_client_cafiles = "/etc/pki/ca.crt"
+
+[grpc.services.spacesregistry]
+driver = "memory"
+user_space = "/eos/user/{{substr 0 1 .Username}}/{{ .Username }}"
+machine_secret = "{{ vars.machine_api_key }}"
+
+[grpc.services.spacesregistry.drivers.memory]
+# Here the project spaces
+
+### OTHER PROVIDERS ###
+
+[grpc.services.usershareprovider]
+driver = "memory"
+
+[grpc.services.publicshareprovider]
+driver = "memory"
+
+[grpc.services.preferences]
+
+[grpc.services.userprovider]
+driver = "json"
+
+[grpc.services.userprovider.drivers.json]
+users = "/etc/revad/users.demo.json"
+
+[grpc.services.groupprovider]
+driver = "json"
+
+[grpc.services.groupprovider.drivers.json]
+groups = "/etc/revad/groups.demo.json"
+
+
+### HTTP ENDPOINTS ###
+
+[http.middlewares.auth]
+credential_chain = ["publicshares", "basic", "bearer"]
+token_strategy_chain = ["bearer", "header"]
+
+[http.middlewares.auth.credentials_by_user_agent]
+"mirall" = "basic"
+
+[http.services.datagateway]
+address = ":80"
+
+[[http.services.dataprovider]]
+driver = "eos"
+insecure = true
+
+[http.services.dataprovider.drivers.eos]
+namespace = "/"
+quota_node = "/eos/user"
+user_layout = "{{substr 0 1 .Username}}/{{.Username}}"
+use_grpc = true
+gatewaysvc = "localhost:19000"
+grpc_auth_key = "eos_auth_key"
+https_auth_key = "eos_auth_key"
+master_grpc_uri = "eos-storage:50051"
+master_url = "https://eos-storage:8443" # I know it's wrong, but this is passed to the http layer like this...
+allow_insecure = true
+http_client_cafiles = "/etc/pki/ca.crt"
+
+[http.services.wellknown]
+address = ":80"
+
+# OCS
+[http.services.ocs]
+address = ":80"
+prefix = "ocs"
+share_prefix = "/"
+home_namespace = "/"
+additional_info_attribute = "{{.Username}} ({{.Mail}})"
+cache_warmup_driver = "first-request"
+resource_info_cache_ttl = 60
+resource_info_cache_type = "memory"
+
+[http.services.ocs.config]
+version = "1.8"
+website = "reva"
+host = "http://localhost"
+contact = "cernbox@cernbox.org"
+ssl = "false"
+
+[http.services.ocs.capabilities.capabilities.core]
+poll_interval = 60
+webdav_root = "remote.php/webdav"
+status = { installed = true, maintenance = false, nwwsaDbUpgrade = false, version = "10.0.11.5", versionstring = "10.0.11", edition = "community", productname = "reva", hostname = "" }
+support_url_signing = false
+
+[http.services.ocs.capabilities.capabilities.checksums]
+supported_types = ["sha1", "md5", "adler32"]
+
+[http.services.ocs.capabilities.capabilities.files]
+private_links = false
+bigfilechunking = false
+blacklisted_files = []
+undelete = true
+versioning = true
+archivers = [
+  { enabled = true, version = "2.0.0", formats = [
+    "tar",
+    "zip",
+  ], archiver_url = "/archiver", max_num_files = "10000", max_size = "1073741824" },
+]
+favorites = true
+
+[http.services.ocs.capabilities.capabilities.dav]
+
+[http.services.ocs.capabilities.capabilities.files_sharing]
+api_enabled = true
+resharing = true
+deny_access = true
+resharing_default = false
+group_sharing = true
+auto_accept_share = true
+share_with_group_members_only = true
+share_with_membership_groups_only = true
+default_permissions = 22
+search_min_length = 3
+
+[http.services.ocs.capabilities.capabilities.files_sharing.public]
+enabled = true
+send_mail = true
+social_share = true
+upload = true
+multiple = true
+supports_upload_only = true
+password = { enforced = false, enforced_for = { read_only = false, read_write = false, upload_only = false } }
+expire_date = { enabled = true }
+can_edit = true
+can_contribute = false
+
+[http.services.ocs.capabilities.capabilities.files_sharing.user]
+send_mail = true
+profile_picture = false
+settings = [{ enabled = true, version = "1.0.0" }]
+
+[http.services.ocs.capabilities.capabilities.files_sharing.user_enumeration]
+enabled = true
+group_members_only = true
+
+[http.services.ocs.capabilities.capabilities.files_sharing.federation]
+outgoing = true
+incoming = true
+
+[http.services.ocs.capabilities.capabilities.spaces]
+enabled = true
+projects = true
+
+[http.services.ocs.capabilities.version]
+edition = "reva"
+major = 10
+minor = 0
+micro = 11
+string = "10.0.11"
+
+[http.services.ocdav]
+address = ":80"
+insecure = true
+public_url = "http://localhost"
+files_namespace = "/eos/{{substr 0 1 .Username}}"
+
+[http.services.archiver]
+address = ":80"
+prefix = "archiver"
+timeout = 300
+insecure = true
+max_num_files = 10000
+max_size = 1073741824
+
+[http.services.ocapi]
+address = ":80"
+
+[http.services.ocgraph]
+address = ":80"
+base_url = "http://localhost"
+
+[http.middlewares.cors]
+allowed_origins = ["*"]
+allowed_methods = ["OPTIONS", "LOCK", "GET", "HEAD", "POST", "DELETE", "PROPPATCH", "COPY", "MOVE", "UNLOCK", "PROPFIND", "MKCOL", "REPORT", "SEARCH", "PUT"]
+allowed_headers = ["Accept", "Accept-Language", "Authorization", "Content-Language", "Content-Type", "Depth", "OCS-APIREQUEST", "Referer", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "User-Agent", "X-Requested-With"]
+debug = true
+exposed_headers = []
+
+[http.middlewares.log]
+level = "debug"

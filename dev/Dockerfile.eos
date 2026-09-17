@@ -1,0 +1,15 @@
+# Changing ulimits inside the container may not be allowed.
+# This container is usually called from docker compose, 
+# where the ulimits are set in the docker compose file.
+# If the container needs to be run manually, the following flag
+# needs to be passed, else the container will run out of fd.
+# docker run myeoscontainer --ulimit nofiles:1024000:1024000
+
+FROM gitlab-registry.cern.ch/dss/eos/eos-ci:01b30857.el9
+
+COPY --chown=daemon:daemon --chmod=400 pki/eos.key /etc/grid-security/eos.key
+COPY --chown=daemon:daemon pki/eos.crt /etc/grid-security/eos.crt
+COPY --chown=daemon:daemon pki/ca.crt /etc/grid-security/certificates/ca.crt
+COPY --chmod=+x scripts/eos-run.sh /mnt/scripts/eos-run.sh
+
+ENTRYPOINT /mnt/scripts/eos-run.sh

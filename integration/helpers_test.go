@@ -1,0 +1,283 @@
+//go:build integration
+
+// Package integration drives the built cernbox binary against the dev
+// environment (revad on top of EOS), exercising the paths that a fake HTTP
+// server cannot: real WebDAV semantics, real TUS uploads, real EOS behaviour.
+//
+// Start the environment with "make dev-up" before running these.
+package integration_test
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const (
+	endpoint = "http://localhost"
+	username = "einstein"
+	password = "relativity"
+	// homeRoot matches the dev revad's home_layout for the test user.
+	homeRoot = "/eos/user/e/einstein"
+)
+
+// binary is the path to the cernbox binary built by TestMain.
+var binary string
+
+func TestMain(m *testing.M) {
+	if !reachable() {
+		fmt.Fprintln(os.Stderr, "===> dev environment not reachable — start it with 'make dev-up'")
+		os.Exit(1)
+	}
+
+	dir, err := os.MkdirTemp("", "cernbox-integration-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "MkdirTemp: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(dir)
+
+	binary = filepath.Join(dir, "cernbox")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/cernbox")
+	build.Dir = repoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "building cernbox: %v\n%s", err, out)
+		os.Exit(1)
+	}
+
+	os.Exit(m.Run())
+}
+
+func reachable() bool {
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(endpoint + "/status.php")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// repoRoot returns the repository root. Tests run with the working directory
+// set to integration/, so the root is one level up.
+func repoRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	return filepath.Dir(dir)
+}
+
+// env is one test's isolated world: a unique remote directory, a private token
+// cache, and a local scratch directory.
+type env struct {
+	t        *testing.T
+	remote   string // remote test directory, e.g. /eos/user/e/einstein/it-ab12cd34
+	localDir string
+	cacheDir string
+}
+
+func setup(t *testing.T) *env {
+	t.Helper()
+
+	e := &env{
+		t:        t,
+		remote:   path.Join(homeRoot, "it-"+randHex()),
+		localDir: t.TempDir(),
+		cacheDir: t.TempDir(),
+	}
+
+	e.mustRun("mkdir", "-p", e.remote)
+	t.Cleanup(func() {
+		// Best effort: a leftover directory would make the next run noisier but
+		// not wrong.
+		e.run("rm", "-r", "-f", e.remote)
+	})
+	return e
+}
+
+// cmd builds an exec.Cmd for the CLI with this test's isolated environment.
+func (e *env) cmd(args ...string) *exec.Cmd {
+	full := append([]string{
+		"--endpoint", endpoint,
+		"--method", "basic",
+	}, args...)
+
+	c := exec.Command(binary, full...)
+	c.Env = append(os.Environ(),
+		"CERNBOX_USERNAME="+username,
+		"CERNBOX_PASSWORD="+password,
+		"CERNBOX_TOKEN_CACHE="+filepath.Join(e.cacheDir, "tokens"),
+		// Point the config at a file that does not exist so a developer's own
+		// configuration cannot leak into the test.
+		"CERNBOX_CONFIG="+filepath.Join(e.cacheDir, "absent.yaml"),
+		"CERNBOX_TOKEN=",
+		"CERNBOX_APP_TOKEN=",
+	)
+	return c
+}
+
+// run executes the CLI and returns stdout, stderr and the exit code.
+func (e *env) run(args ...string) (stdout, stderr string, code int) {
+	e.t.Helper()
+
+	c := e.cmd(args...)
+	var outBuf, errBuf strings.Builder
+	c.Stdout = &outBuf
+	c.Stderr = &errBuf
+
+	err := c.Run()
+	code = 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if ok := asExitError(err, &exitErr); ok {
+			code = exitErr.ExitCode()
+		} else {
+			e.t.Fatalf("running %v: %v", args, err)
+		}
+	}
+	return outBuf.String(), errBuf.String(), code
+}
+
+// mustRun executes the CLI and fails the test on a non-zero exit.
+func (e *env) mustRun(args ...string) string {
+	e.t.Helper()
+	stdout, stderr, code := e.run(args...)
+	if code != 0 {
+		e.t.Fatalf("cernbox %v exited %d\nstdout:\n%s\nstderr:\n%s", args, code, stdout, stderr)
+	}
+	return stdout
+}
+
+// runJSON executes the CLI with --output json and decodes the result.
+func (e *env) runJSON(v any, args ...string) {
+	e.t.Helper()
+	out := e.mustRun(append([]string{"--output", "json"}, args...)...)
+	if err := json.Unmarshal([]byte(out), v); err != nil {
+		e.t.Fatalf("cernbox %v produced invalid JSON: %v\n%s", args, err, out)
+	}
+}
+
+// ── local helpers ────────────────────────────────────────────────────────────
+
+func (e *env) writeLocal(name string, body []byte) string {
+	e.t.Helper()
+	p := filepath.Join(e.localDir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, body, 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	return p
+}
+
+func (e *env) readLocal(name string) []byte {
+	e.t.Helper()
+	b, err := os.ReadFile(filepath.Join(e.localDir, name))
+	if err != nil {
+		e.t.Fatalf("reading %s: %v", name, err)
+	}
+	return b
+}
+
+func (e *env) localPath(name string) string {
+	return filepath.Join(e.localDir, name)
+}
+
+// remotePath returns a path inside this test's remote directory.
+func (e *env) remotePath(rel string) string {
+	return path.Join(e.remote, rel)
+}
+
+// ── assertions ───────────────────────────────────────────────────────────────
+
+// entry mirrors the JSON shape of a listing entry.
+type entry struct {
+	Path     string    `json:"path"`
+	Name     string    `json:"name"`
+	IsDir    bool      `json:"is_dir"`
+	Size     int64     `json:"size"`
+	Modified time.Time `json:"modified"`
+	ETag     string    `json:"etag"`
+	ID       string    `json:"id"`
+}
+
+func (e *env) list(remote string) []entry {
+	e.t.Helper()
+	var entries []entry
+	e.runJSON(&entries, "ls", remote)
+	return entries
+}
+
+func (e *env) stat(remote string) entry {
+	e.t.Helper()
+	var info entry
+	e.runJSON(&info, "stat", remote)
+	return info
+}
+
+func (e *env) names(remote string) []string {
+	e.t.Helper()
+	var out []string
+	for _, it := range e.list(remote) {
+		out = append(out, it.Name)
+	}
+	return out
+}
+
+func (e *env) requireNames(remote string, want ...string) {
+	e.t.Helper()
+	got := e.names(remote)
+	if len(got) != len(want) {
+		e.t.Fatalf("%s contains %v, want %v", remote, got, want)
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			e.t.Fatalf("%s contains %v, want %v", remote, got, want)
+		}
+	}
+}
+
+// ── misc ─────────────────────────────────────────────────────────────────────
+
+func randHex() string {
+	b := make([]byte, 4)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func payload(n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte('a' + i%26)
+	}
+	return b
+}
+
+func sha256hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func asExitError(err error, target **exec.ExitError) bool {
+	if e, ok := err.(*exec.ExitError); ok {
+		*target = e
+		return true
+	}
+	return false
+}
