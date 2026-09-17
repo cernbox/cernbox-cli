@@ -1,4 +1,26 @@
+volumes:
+  # The KDC writes the service keytab and the client krb5.conf here; revad
+  # mounts the same volume to read them.
+  krb5-share:
+
 services:
+  # The Kerberos realm. Native Kerberos cannot be tested without one.
+  kdc:
+    build:
+      context: .
+      dockerfile: Dockerfile.kdc
+    ports:
+      - "8088:88/udp"
+      - "8088:88/tcp"
+    volumes:
+      - krb5-share:/krb5-share
+    healthcheck:
+      # revad refuses to start without the keytab, so it waits for this.
+      test: ["CMD", "test", "-f", "/krb5-share/service.keytab"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   eos-storage:
     build:
       context: .
@@ -25,11 +47,15 @@ services:
     volumes:
       - ./revad:/etc/revad:ro
       - ./pki:/etc/pki:ro
+      - krb5-share:/krb5-share:ro
     environment:
       - SSL_CERT_FILE=/etc/pki/ca.crt
+      - KRB5_CONFIG=/krb5-share/krb5.conf
     command: -c /etc/revad/cernbox.toml
     depends_on:
       eos-storage:
+        condition: service_healthy
+      kdc:
         condition: service_healthy
 
   # The federation partner. Federated sharing needs two providers that trust
