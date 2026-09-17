@@ -46,6 +46,7 @@ basic = "{{ grpc.services.authprovider[0].address }}"
 bearer = "{{ grpc.services.authprovider[0].address }}"
 machine = "{{ grpc.services.authprovider[1].address }}"
 ocmshares = "{{ grpc.services.authprovider[2].address }}"
+kerberos = "{{ grpc.services.authprovider[3].address }}"
 
 [[grpc.services.authprovider]]
 auth_manager = "json"
@@ -64,6 +65,18 @@ gateway_addr = "{{ vars.internal_gateway }}:19000"
 auth_manager = "ocmshares"
 
 [grpc.services.authprovider.auth_managers.ocmshares]
+
+# Native Kerberos: a client with a ticket authenticates here directly, with no
+# identity provider in between. The keytab comes from the kdc container through
+# a shared volume.
+[[grpc.services.authprovider]]
+auth_manager = "kerberos"
+
+[grpc.services.authprovider.auth_managers.kerberos]
+keytab = "/krb5-share/service.keytab"
+service_principal = "HTTP/revad"
+realm = "TEST.CERN.CH"
+user_claim = "username"
 
 
 ### STORAGE ###
@@ -239,7 +252,7 @@ groups = "/etc/revad/groups.demo.json"
 ### HTTP ENDPOINTS ###
 
 [http.middlewares.auth]
-credential_chain = ["publicshares", "basic", "bearer"]
+credential_chain = ["spnego", "publicshares", "basic", "bearer"]
 token_strategy_chain = ["bearer", "header"]
 
 [http.middlewares.auth.credentials_by_user_agent]
@@ -369,6 +382,11 @@ timeout = 300
 insecure = true
 max_num_files = 10000
 max_size = 1073741824
+
+# Where a client exchanges a Kerberos ticket for a reva token.
+[http.services.authtoken]
+address = ":80"
+prefix = "auth"
 
 [http.services.appprovider]
 address = ":80"

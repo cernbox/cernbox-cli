@@ -1,0 +1,18 @@
+# A Kerberos KDC for the dev environment.
+#
+# Native Kerberos cannot be tested without a realm, so this provides one: it
+# creates the database, adds the test users and the service principal, exports
+# the service keytab into a volume revad also mounts, and then runs the KDC in
+# the foreground.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        krb5-kdc krb5-admin-server krb5-user \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=0755 scripts/kdc-run.sh /usr/local/bin/kdc-run.sh
+
+EXPOSE 88/udp 88/tcp
+
+ENTRYPOINT ["/usr/local/bin/kdc-run.sh"]
