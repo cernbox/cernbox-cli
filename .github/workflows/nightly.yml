@@ -1,0 +1,16 @@
+name: Nightly
+
+on:
+  schedule:
+    # 03:00 UTC, after the day's merges have settled.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    uses: ./.github/workflows/_build.yml
+    permissions:
+      contents: write
+    with:
+      publish: true
+      version: nightly

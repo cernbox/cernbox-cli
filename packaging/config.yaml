@@ -1,0 +1,31 @@
+# Site-wide configuration for the cernbox CLI, installed at /etc/cernbox/config.yaml.
+#
+# This file is what makes lxplus zero-configuration: a user logs in, runs
+# "cernbox ls", and it works, because the endpoint and the SSO client are
+# already set here. Per-user overrides go in ~/.config/cernbox/config.yaml.
+
+endpoint: https://cernbox.cern.ch
+
+auth:
+  kerberos:
+    # sso   — use the Kerberos ticket to obtain an OIDC token from CERN SSO.
+    #         Needs no server-side change, so this is the default.
+    # spnego— present the ticket directly to CERNBox. Requires the Kerberos
+    #         auth provider to be enabled server side.
+    # auto  — try spnego, fall back to sso. Switch to this once the server
+    #         side is deployed: it removes the hard dependency on SSO being
+    #         reachable.
+    mode: sso
+    path: /auth/kerberos
+
+  sso:
+    issuer: https://auth.cern.ch/auth/realms/cern
+    client_id: cernbox-cli
+    audience: cernbox
+
+transfer:
+  # Recursive downloads are served by the archiver as one stream when the
+  # server supports it, which is much faster for a directory of many small
+  # files. The client falls back to walking the tree if it cannot.
+  archive: true
+  chunk_size: 8M

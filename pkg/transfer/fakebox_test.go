@@ -183,9 +183,7 @@ func (b *fakeBox) servePropfind(w http.ResponseWriter, r *http.Request, p string
 	case b.dirs[p]:
 		entries = append(entries, davEntry{Path: p, IsDir: true})
 		if depth == "1" {
-			for _, child := range b.childrenLocked(p) {
-				entries = append(entries, child)
-			}
+			entries = append(entries, b.childrenLocked(p)...)
 		}
 	case b.files[p] != nil:
 		entries = append(entries, davEntry{Path: p, Size: int64(len(b.files[p])), Body: b.files[p]})
@@ -421,12 +419,12 @@ func multistatus(entries []davEntry) string {
 			sb.WriteString("<d:resourcetype><d:collection/></d:resourcetype>")
 		} else {
 			sb.WriteString("<d:resourcetype></d:resourcetype>")
-			sb.WriteString(fmt.Sprintf("<d:getcontentlength>%d</d:getcontentlength>", e.Size))
+			fmt.Fprintf(&sb, "<d:getcontentlength>%d</d:getcontentlength>", e.Size)
 			if e.Body != nil {
 				sb.WriteString("<oc:checksums><oc:checksum>MD5:" + md5hex(e.Body) + "</oc:checksum></oc:checksums>")
 			}
 		}
-		sb.WriteString(fmt.Sprintf("<oc:size>%d</oc:size>", e.Size))
+		fmt.Fprintf(&sb, "<oc:size>%d</oc:size>", e.Size)
 		sb.WriteString("<oc:fileid>localhome$ABC!" + xmlEscape(e.Path) + "</oc:fileid>")
 		sb.WriteString("</d:prop></d:propstat></d:response>")
 	}

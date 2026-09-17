@@ -625,7 +625,7 @@ func (c *Client) Search(ctx context.Context, p string, opts SearchOptions) ([]Re
 
 func xmlEscape(s string) string {
 	var b strings.Builder
-	xml.EscapeText(&b, []byte(s))
+	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
 }
 

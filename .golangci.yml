@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    # A leaked response body holds a connection open. In a CLI that issues one
+    # request per file, that shows up as a transfer that mysteriously stalls.
+    - bodyclose
+    - misspell
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    rules:
+      # Test helpers deliberately ignore errors from setup calls whose failure
+      # would already have failed the test.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt

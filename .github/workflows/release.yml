@@ -1,0 +1,14 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    uses: ./.github/workflows/_build.yml
+    permissions:
+      contents: write
+    with:
+      publish: true
+      version: ${{ github.ref_name }}
