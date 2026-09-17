@@ -42,6 +42,7 @@ type globalFlags struct {
 	user         string
 	appTokenFile string
 	kerberosMode string
+	kerberosSPN  string
 
 	insecure   bool
 	skipVerify bool
@@ -141,7 +142,9 @@ func newRootCmd(app *App) *cobra.Command {
 	pf.StringVar(&f.method, "method", "", "authentication method: kerberos, device, app-token, basic, token")
 	pf.StringVar(&f.user, "user", "", "username, for app-token and basic authentication")
 	pf.StringVar(&f.appTokenFile, "app-token-file", "", "file holding a CERNBox app token")
-	pf.StringVar(&f.kerberosMode, "kerberos-mode", "", "how Kerberos is used: sso, spnego, or auto")
+	pf.StringVar(&f.kerberosMode, "kerberos-mode", "", "how Kerberos is used: spnego, sso, or auto")
+	pf.StringVar(&f.kerberosSPN, "kerberos-spn", "",
+		"service principal to request a ticket for, when it differs from HTTP/<endpoint host>")
 
 	pf.BoolVar(&f.insecure, "insecure", false, "allow plain HTTP (development instances only)")
 	pf.BoolVar(&f.skipVerify, "skip-verify", false, "do not verify the server certificate (development instances only)")
@@ -224,6 +227,9 @@ func (a *App) setup(cmd *cobra.Command) error {
 	}
 	if f.kerberosMode != "" {
 		cfg.Auth.Kerberos.Mode = f.kerberosMode
+	}
+	if f.kerberosSPN != "" {
+		cfg.Auth.Kerberos.ServicePrincipal = f.kerberosSPN
 	}
 	if f.insecure {
 		cfg.Insecure = true

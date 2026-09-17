@@ -24,8 +24,13 @@ func TestDefaultConfigTargetsProduction(t *testing.T) {
 	if cfg.Endpoint != "https://cernbox.cern.ch" {
 		t.Errorf("Endpoint = %q", cfg.Endpoint)
 	}
-	if cfg.Auth.Kerberos.Mode != "sso" {
-		t.Errorf("Kerberos mode = %q, want sso, which needs no server-side change", cfg.Auth.Kerberos.Mode)
+	// Native Kerberos: the ticket goes straight to CERNBox, so a login depends
+	// on nothing but CERNBox being reachable.
+	if cfg.Auth.Kerberos.Mode != "spnego" {
+		t.Errorf("Kerberos mode = %q, want spnego", cfg.Auth.Kerberos.Mode)
+	}
+	if cfg.Auth.Kerberos.Path == "" {
+		t.Error("no path configured for the Kerberos token exchange")
 	}
 	if cfg.Auth.SSO.Issuer == "" || cfg.Auth.SSO.ClientID == "" {
 		t.Errorf("SSO defaults are incomplete: %+v", cfg.Auth.SSO)

@@ -85,7 +85,10 @@ func DefaultConfig() *Config {
 		Endpoint: "https://cernbox.cern.ch",
 		Auth: AuthConfig{
 			Kerberos: KerberosConfig{
-				Mode: "sso",
+				// Native Kerberos by default: the ticket goes straight to
+				// CERNBox, with no identity provider in between and nothing to
+				// be unavailable but CERNBox itself.
+				Mode: "spnego",
 				Path: "/auth/kerberos",
 			},
 			SSO: SSOConfig{

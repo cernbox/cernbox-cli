@@ -8,14 +8,13 @@ endpoint: https://cernbox.cern.ch
 
 auth:
   kerberos:
-    # sso   — use the Kerberos ticket to obtain an OIDC token from CERN SSO.
-    #         Needs no server-side change, so this is the default.
-    # spnego— present the ticket directly to CERNBox. Requires the Kerberos
-    #         auth provider to be enabled server side.
-    # auto  — try spnego, fall back to sso. Switch to this once the server
-    #         side is deployed: it removes the hard dependency on SSO being
-    #         reachable.
-    mode: sso
+    # spnego— present the ticket directly to CERNBox. This is the default: it
+    #         is the fewest moving parts, and nothing but CERNBox itself has to
+    #         be reachable for a login to work.
+    # sso   — use the ticket to obtain an OIDC token from CERN SSO instead.
+    #         For a deployment whose reva has no Kerberos auth provider.
+    # auto  — try spnego, fall back to sso.
+    mode: spnego
     path: /auth/kerberos
 
   sso:
