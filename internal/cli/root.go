@@ -176,6 +176,7 @@ func newRootCmd(app *App) *cobra.Command {
 		newVersionsCmd(app),
 		newOpenCmd(app),
 		newAppsCmd(app),
+		newOCMCmd(app),
 
 		newVersionCmd(app),
 		newCompletionCmd(),

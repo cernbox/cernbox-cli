@@ -409,3 +409,141 @@ func TestAppsCommand(t *testing.T) {
 		}
 	}
 }
+
+// ── federated sharing ────────────────────────────────────────────────────────
+
+func TestOCMInviteCreate(t *testing.T) {
+	box := newTestBox(t)
+	stdout, _, err := run(t, box, "ocm", "invite", "create", "--description", "joint analysis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The link is the thing the user has to pass on, so it must be on stdout.
+	if !strings.Contains(stdout, "https://cernbox.test/ocm/invite?token=abc123") {
+		t.Errorf("the invite link is missing from stdout:\n%s", stdout)
+	}
+}
+
+func TestOCMInviteList(t *testing.T) {
+	box := newTestBox(t)
+	stdout, _, err := run(t, box, "ocm", "invite", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "abc123") {
+		t.Errorf("invite list:\n%s", stdout)
+	}
+}
+
+func TestOCMInviteAcceptWithProvider(t *testing.T) {
+	box := newTestBox(t)
+	if _, _, err := run(t, box, "ocm", "invite", "accept", "abc123", "--provider", "other-lab.org"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(box.acceptedInvite, `"providerDomain":"other-lab.org"`) {
+		t.Errorf("accept request = %q", box.acceptedInvite)
+	}
+}
+
+// TestOCMInviteAcceptFromLink: both the token and the provider are already in
+// the link someone was sent, so retyping either is needless friction.
+func TestOCMInviteAcceptFromLink(t *testing.T) {
+	box := newTestBox(t)
+	_, _, err := run(t, box, "ocm", "invite", "accept",
+		"https://other-lab.org/ocm/invite?token=xyz789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(box.acceptedInvite, `"token":"xyz789"`) {
+		t.Errorf("the token was not taken from the link: %q", box.acceptedInvite)
+	}
+	if !strings.Contains(box.acceptedInvite, `"providerDomain":"other-lab.org"`) {
+		t.Errorf("the provider was not taken from the link: %q", box.acceptedInvite)
+	}
+}
+
+func TestOCMInviteAcceptNeedsAProvider(t *testing.T) {
+	box := newTestBox(t)
+	_, _, err := run(t, box, "ocm", "invite", "accept", "abc123")
+	if cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Errorf("got %v, want a usage error", err)
+	}
+}
+
+func TestOCMContacts(t *testing.T) {
+	box := newTestBox(t)
+	stdout, _, err := run(t, box, "ocm", "contacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The address column is what gets pasted into --with-remote.
+	if !strings.Contains(stdout, "alice@other-lab.org") {
+		t.Errorf("contacts output:\n%s", stdout)
+	}
+}
+
+func TestOCMContactsRemove(t *testing.T) {
+	box := newTestBox(t)
+	if _, _, err := run(t, box, "ocm", "contacts", "--remove", "alice@other-lab.org"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(box.removedContact, `"user_id":"alice"`) {
+		t.Errorf("remove request = %q", box.removedContact)
+	}
+}
+
+func TestOCMProviders(t *testing.T) {
+	box := newTestBox(t)
+	stdout, _, err := run(t, box, "ocm", "providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "other-lab.org") {
+		t.Errorf("providers output:\n%s", stdout)
+	}
+}
+
+func TestOCMReceived(t *testing.T) {
+	box := newTestBox(t)
+	stdout, _, err := run(t, box, "ocm", "received")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "shared-data") || !strings.Contains(stdout, "Alice") {
+		t.Errorf("received shares output:\n%s", stdout)
+	}
+}
+
+func TestShareWithRemoteRecipient(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/notes.txt", "x")
+
+	_, _, err := run(t, box, "share", "create", "/eos/user/e/einstein/notes.txt",
+		"--with-remote", "alice@other-lab.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := box.lastPostBody()
+	if !strings.Contains(body, `"@libre.graph.recipient.type":"remote"`) {
+		t.Errorf("the recipient type should be remote:\n%s", body)
+	}
+	if !strings.Contains(body, `"objectId":"alice@other-lab.org"`) {
+		t.Errorf("the recipient address is wrong:\n%s", body)
+	}
+}
+
+// TestShareWithRemoteRejectsBareUsername: a federated recipient without a
+// provider is not addressable, and failing early with advice beats a 400.
+func TestShareWithRemoteRejectsBareUsername(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/notes.txt", "x")
+
+	_, _, err := run(t, box, "share", "create", "/eos/user/e/einstein/notes.txt",
+		"--with-remote", "alice")
+	if cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Errorf("got %v, want a usage error", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "ocm contacts") {
+		t.Errorf("the error should point at 'ocm contacts', got %v", err)
+	}
+}

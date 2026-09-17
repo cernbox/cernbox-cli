@@ -29,6 +29,10 @@ type testBox struct {
 	// appMethod is the HTTP method the fake application session advertises.
 	appMethod string
 
+	acceptedInvite string
+	removedContact string
+	postBodies     []string
+
 	requests []string
 }
 
@@ -79,6 +83,13 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		  {"id":"c1","name":"laptop","description":"cernbox-sync","created_at":"2026-01-02T10:00:00Z","last_seen_at":"2026-09-01T08:00:00Z"}
 		]}}`)
 
+	case strings.HasPrefix(r.URL.Path, "/sciencemesh/"):
+		b.serveOCM(w, r)
+
+	case strings.HasPrefix(r.URL.Path, "/ocs/v1.php/apps/files_sharing/api/v1/shares/remote_shares"):
+		fmt.Fprint(w, `{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[`+
+			`{"id":"7","name":"shared-data","displayname_owner":"Alice","permissions":1,"state":0}]}}`)
+
 	case r.URL.Path == "/app/open":
 		method := b.appMethod
 		if method == "" {
@@ -127,6 +138,7 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 func (b *testBox) serveGraphItem(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/invite"):
+		b.postBodies = append(b.postBodies, readBody(r))
 		fmt.Fprint(w, `{"value":[{"id":"share-1","roles":["fb6c3e19-e378-47e5-b277-9732f9de6e21"],
 		  "grantedToV2":{"user":{"id":"marie","displayName":"Marie Curie"}}}]}`)
 	case strings.HasSuffix(r.URL.Path, "/createLink"):
@@ -344,10 +356,52 @@ func (b *testBox) serveVersions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// serveOCM implements the user-facing federated sharing endpoints.
+func (b *testBox) serveOCM(w http.ResponseWriter, r *http.Request) {
+	switch strings.TrimPrefix(r.URL.Path, "/sciencemesh/") {
+	case "generate-invite":
+		fmt.Fprint(w, `{"token":"abc123","description":"joint analysis",`+
+			`"invite_link":"https://cernbox.test/ocm/invite?token=abc123"}`)
+	case "list-invite":
+		fmt.Fprint(w, `[{"token":"abc123","description":"joint analysis"}]`)
+	case "accept-invite":
+		b.acceptedInvite = r.Method + " " + readBody(r)
+		fmt.Fprint(w, `{}`)
+	case "find-accepted-users":
+		fmt.Fprint(w, `[{"display_name":"Alice","idp":"https://other-lab.org",`+
+			`"user_id":"alice","mail":"alice@other-lab.org"}]`)
+	case "delete-accepted-user":
+		b.removedContact = readBody(r)
+		fmt.Fprint(w, `{}`)
+	case "list-providers":
+		fmt.Fprint(w, `[{"name":"OtherLab","full_name":"The Other Laboratory","domain":"other-lab.org"}]`)
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
+func readBody(r *http.Request) string {
+	var sb strings.Builder
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Body.Read(buf)
+		sb.Write(buf[:n])
+		if err != nil {
+			break
+		}
+	}
+	return sb.String()
+}
+
 func (b *testBox) mkdir(p string) {
 	for d := p; d != "/" && d != "."; d = path.Dir(d) {
 		b.dirs[d] = true
 	}
+}
+
+// lastPostBody returns the body of the most recent POST the box received.
+func (b *testBox) lastPostBody() string {
+	return b.postBodies[len(b.postBodies)-1]
 }
 
 func (b *testBox) putFile(p, body string) {

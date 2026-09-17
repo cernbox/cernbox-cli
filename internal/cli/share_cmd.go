@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
@@ -44,6 +45,7 @@ func newShareCmd(app *App) *cobra.Command {
 func newShareCreateCmd(app *App) *cobra.Command {
 	var with []string
 	var groups []string
+	var remotes []string
 	var role, expiry string
 
 	cmd := &cobra.Command{
@@ -55,8 +57,15 @@ func newShareCreateCmd(app *App) *cobra.Command {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
 
-			if len(with) == 0 && len(groups) == 0 {
-				return cberr.Usagef("pass --with USER or --with-group GROUP")
+			if len(with) == 0 && len(groups) == 0 && len(remotes) == 0 {
+				return cberr.Usagef("pass --with USER, --with-group GROUP, or --with-remote USER@PROVIDER")
+			}
+			for _, r := range remotes {
+				if !strings.Contains(r, "@") {
+					return cberr.Usagef(
+						"--with-remote takes an address like user@their-provider.org, got %q.\n"+
+							"Run 'cernbox ocm contacts' to see the addresses you can share with.", r)
+				}
 			}
 			roleID, err := client.RoleID(role)
 			if err != nil {
@@ -79,6 +88,9 @@ func newShareCreateCmd(app *App) *cobra.Command {
 			for _, g := range groups {
 				recipients = append(recipients, client.Recipient{ID: g, Type: "group"})
 			}
+			for _, r := range remotes {
+				recipients = append(recipients, client.Recipient{ID: r, Type: client.RecipientRemote})
+			}
 
 			perms, err := app.client.Share(ctx, info.ID, recipients, roleID, exp)
 			if err != nil {
@@ -90,6 +102,8 @@ func newShareCreateCmd(app *App) *cobra.Command {
 
 	cmd.Flags().StringSliceVar(&with, "with", nil, "username to share with (repeatable)")
 	cmd.Flags().StringSliceVar(&groups, "with-group", nil, "group to share with (repeatable)")
+	cmd.Flags().StringSliceVar(&remotes, "with-remote", nil,
+		"federated user to share with, as user@their-provider.org (repeatable)")
 	cmd.Flags().StringVar(&role, "role", "viewer", "viewer, editor, collab, or denied")
 	cmd.Flags().StringVar(&expiry, "expiry", "", "expiry date, YYYY-MM-DD")
 	return cmd
