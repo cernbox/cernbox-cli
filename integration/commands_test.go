@@ -373,15 +373,39 @@ func TestLinkPasswordNeedsATerminal(t *testing.T) {
 // environment and run against a deployment with a real provider such as
 // Collabora. The provider is configured all the same: the moment one is added,
 // these start exercising it.
+// requireApps skips when nothing on this deployment can open a file.
+//
+// It reads the JSON rather than the table: the table always prints its header,
+// so testing the text for content only ever detected that the command ran.
+//
+// The skip is expected against the dev environment and is not a gap in the CLI.
+// reva ships two app drivers: wopi, which needs a real WOPI server such as
+// Collabora, and demo, which reports an empty mime type list. The app provider
+// advertises the intersection of what its driver reports with what it was
+// configured for, and an intersection with nothing is nothing — so no
+// configuration can make the demo provider open anything.
 func requireApps(t *testing.T, e *env) {
 	t.Helper()
-	stdout, stderr, code := e.run("apps")
+
+	stdout, stderr, code := e.run("--output", "json", "apps")
 	if code != 0 {
 		t.Skipf("no application provider on this deployment: %s", stderr)
 	}
-	if strings.TrimSpace(stdout) == "" || !strings.Contains(stdout, "\n") {
-		t.Skip("no application can open anything here; reva's demo provider advertises no mime types")
+
+	var types []struct {
+		MimeType string   `json:"mime_type"`
+		Apps     []string `json:"apps"`
 	}
+	if err := json.Unmarshal([]byte(stdout), &types); err != nil {
+		t.Fatalf("apps produced invalid JSON: %v\n%s", err, stdout)
+	}
+	for _, ty := range types {
+		if len(ty.Apps) > 0 {
+			return
+		}
+	}
+	t.Skipf("no application can open anything here: %d mime types, none with an app "+
+		"(reva's demo provider reports no mime types, and wopi needs a real WOPI server)", len(types))
 }
 
 func TestAppsListsMimeTypes(t *testing.T) {

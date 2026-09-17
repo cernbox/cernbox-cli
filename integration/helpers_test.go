@@ -10,6 +10,8 @@ package integration_test
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,13 +20,14 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 const (
-	endpoint = "http://localhost"
+	endpoint = "https://localhost"
 	username = "einstein"
 	password = "relativity"
 	// homeRoot matches the dev revad's home_layout for the test user.
@@ -36,7 +39,7 @@ const (
 
 	// The federation partner: a second provider, so the OCM commands have a
 	// real far end rather than only an error path.
-	partnerEndpoint = "http://localhost:8081"
+	partnerEndpoint = "https://localhost:8081"
 	partnerDomain   = "revad-partner"
 	partnerUser     = "alice"
 	partnerPassword = "wonderland"
@@ -81,13 +84,25 @@ func partnerReachable() bool {
 }
 
 func respondsOK(url string) bool {
-	c := &http.Client{Timeout: 3 * time.Second}
+	c := &http.Client{Timeout: 3 * time.Second, Transport: devTransport()}
 	resp, err := c.Get(url)
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// devTransport trusts the dev certificate authority, which signs the
+// certificates the dev instances serve. The test process needs this for its own
+// probes; the CLI gets the same CA through SSL_CERT_FILE.
+func devTransport() *http.Transport {
+	pool := x509.NewCertPool()
+	pem, err := os.ReadFile(devCACert())
+	if err == nil {
+		pool.AppendCertsFromPEM(pem)
+	}
+	return &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
 }
 
 // repoRoot returns the repository root. Tests run with the working directory
@@ -175,8 +190,20 @@ func (e *env) cmdAs(a account, args ...string) *exec.Cmd {
 		"CERNBOX_CONFIG="+filepath.Join(e.cacheDir, "absent.yaml"),
 		"CERNBOX_TOKEN=",
 		"CERNBOX_APP_TOKEN=",
+		// The dev instances serve TLS with a certificate from the dev CA, so
+		// the CLI is pointed at that CA rather than run with --insecure: the
+		// tests should exercise the same certificate verification a real
+		// install does.
+		"SSL_CERT_FILE="+devCACert(),
 	)
 	return c
+}
+
+// devCACert locates the dev certificate authority, which signs the certificates
+// the dev instances serve.
+func devCACert() string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(filepath.Dir(thisFile)), "dev", "pki", "ca.crt")
 }
 
 // run executes the CLI and returns stdout, stderr and the exit code.
