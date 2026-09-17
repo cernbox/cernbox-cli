@@ -436,6 +436,10 @@ func TestBadCredentialsExitThree(t *testing.T) {
 		"CERNBOX_PASSWORD=definitely-not-the-password",
 		"CERNBOX_TOKEN_CACHE="+filepath.Join(e.cacheDir, "bad-tokens"),
 		"CERNBOX_CONFIG="+filepath.Join(e.cacheDir, "absent.yaml"),
+		// Without the dev CA the run fails on the certificate instead, which
+		// is a different error and a different exit code — and the point here
+		// is precisely which code a rejected password produces.
+		"SSL_CERT_FILE="+devCACert(),
 	)
 	out, err := c.CombinedOutput()
 	if err == nil {

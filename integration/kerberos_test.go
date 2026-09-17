@@ -131,6 +131,7 @@ func (e *env) runKerberos(k *krb5Env, args ...string) (stdout, stderr string, co
 		"CERNBOX_APP_TOKEN=",
 		"CERNBOX_USERNAME=",
 		"CERNBOX_PASSWORD=",
+		"SSL_CERT_FILE="+devCACert(),
 	)
 
 	var outBuf, errBuf strings.Builder
@@ -240,6 +241,7 @@ func TestKerberosWrongServicePrincipal(t *testing.T) {
 		"CERNBOX_TOKEN_CACHE="+filepath.Join(e.cacheDir, "spn-tokens"),
 		"CERNBOX_CONFIG="+filepath.Join(e.cacheDir, "absent.yaml"),
 		"CERNBOX_TOKEN=", "CERNBOX_APP_TOKEN=", "CERNBOX_USERNAME=", "CERNBOX_PASSWORD=",
+		"SSL_CERT_FILE="+devCACert(),
 	)
 	out, err := c.CombinedOutput()
 	if err == nil {
