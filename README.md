@@ -12,17 +12,29 @@ On lxplus there is nothing to configure and nothing to log into: the CLI picks u
 
 ## Install
 
-RPM on AlmaLinux (lxplus and friends):
-
-```bash
-dnf install cernbox-cli
-```
-
 From source:
 
 ```bash
 go install github.com/cernbox/cernbox-cli/cmd/cernbox@latest
 ```
+
+RPM and deb packages are built by the release pipeline and attached to each release. Once the package is in the CERN repositories, `dnf install cernbox-cli` will be the way in on AlmaLinux.
+
+## What works today
+
+| Area | Commands |
+| --- | --- |
+| Identity | `login` `logout` `status` `whoami` |
+| Browse | `ls` `stat` `find` `du` `cat` |
+| Namespace | `mkdir` `touch` `rm` `mv` |
+| Transfer | `cp` `get` `put` |
+| Sharing | `share create/list/update/remove/received` |
+| Links | `link create/list/remove/password` |
+| Spaces | `space list/info` |
+| Tokens | `token list/revoke` |
+| Shell | `version` `completion` |
+
+Still in [the design](docs/design.md) but not yet built: `sync`, `trash`, `versions`, `lock`/`unlock`, `open`, and OCM. `token create` reports how to create one instead: CERNBox exposes listing and revocation of app tokens over its public API, but not creation.
 
 ## Authentication
 
@@ -35,7 +47,9 @@ go install github.com/cernbox/cernbox-cli/cmd/cernbox@latest
 | 3 | Kerberos | A TGT is present — the lxplus path, silent |
 | 4 | App token | `$CERNBOX_APP_TOKEN`, for batch jobs and cron |
 | 5 | OIDC device flow | Laptops and accounts without a Kerberos principal |
-| 6 | Basic auth | Dev instances only, requires `--method basic` |
+| 6 | Basic auth | Dev instances only, and only with `--method basic` |
+
+Basic authentication is never reached automatically. Against a server that expects Kerberos, falling through to a password prompt would be the wrong thing to do, so it joins the chain only when asked for by name.
 
 Kerberos works in two modes, selected by `auth.kerberos.mode`:
 
