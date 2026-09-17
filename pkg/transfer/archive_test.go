@@ -50,7 +50,7 @@ func TestExtractTar(t *testing.T) {
 	)
 
 	dir := t.TempDir()
-	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir)
+	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestExtractTarRejectsPathTraversal(t *testing.T) {
 			parent := t.TempDir()
 			dest := filepath.Join(parent, "dest")
 
-			_, err := e.extractTar(context.Background(), bytes.NewReader(data), dest)
+			_, err := e.extractTar(context.Background(), bytes.NewReader(data), dest, "")
 			if err == nil {
 				// An absolute path is neutralised by Join rather than rejected,
 				// so accept either outcome as long as nothing escaped.
@@ -120,7 +120,7 @@ func TestExtractTarSkipsLinks(t *testing.T) {
 	)
 
 	dir := t.TempDir()
-	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir)
+	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestExtractTarSkipsExistingWithoutOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir)
+	stats, err := e.extractTar(context.Background(), bytes.NewReader(data), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestExtractTarTruncatedStream(t *testing.T) {
 	)
 
 	dir := t.TempDir()
-	_, err := e.extractTar(context.Background(), bytes.NewReader(data[:len(data)/2]), dir)
+	_, err := e.extractTar(context.Background(), bytes.NewReader(data[:len(data)/2]), dir, "")
 	if err == nil {
 		t.Fatal("a truncated archive should be reported, not silently accepted")
 	}
@@ -220,5 +220,56 @@ func TestArchiveDownloadNeedsTar(t *testing.T) {
 	_, err := e.archiveDownload(context.Background(), "/eos/user/e/einstein/data", t.TempDir())
 	if err == nil {
 		t.Fatal("expected an error with no archiver")
+	}
+}
+
+// TestExtractTarStripsTheArchiverWrapper: the archiver names its top directory
+// after the request, and the destination already stands for it.
+func TestExtractTarStripsTheArchiverWrapper(t *testing.T) {
+	box := newFakeBox(t)
+	e := box.engine(Options{Overwrite: true})
+
+	data := tarball(t,
+		[]tar.Header{
+			{Name: "tree/", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "tree/a.txt", Typeflag: tar.TypeReg, Mode: 0o644},
+			{Name: "tree/sub/b.txt", Typeflag: tar.TypeReg, Mode: 0o644},
+		},
+		map[string]string{"tree/a.txt": "a", "tree/sub/b.txt": "bb"},
+	)
+
+	dir := t.TempDir()
+	if _, err := e.extractTar(context.Background(), bytes.NewReader(data), dir, "tree"); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(dir, "a.txt"), "a")
+	assertFile(t, filepath.Join(dir, "sub", "b.txt"), "bb")
+	if _, err := os.Stat(filepath.Join(dir, "tree")); err == nil {
+		t.Error("the wrapper directory was recreated inside the destination")
+	}
+}
+
+// TestStripArchiveRootOnlyRemovesTheNamedWrapper guards the obvious wrong fix:
+// stripping the first component of every entry regardless of what it is.
+func TestStripArchiveRootOnlyRemovesTheNamedWrapper(t *testing.T) {
+	tests := []struct {
+		name, strip, want string
+	}{
+		{"tree/a.txt", "tree", "a.txt"},
+		{"tree/sub/b.txt", "tree", "sub/b.txt"},
+		{"tree", "tree", ""},
+		{"tree/", "tree", ""},
+		// Not the wrapper: a real directory that must survive.
+		{"other/a.txt", "tree", "other/a.txt"},
+		// No wrapper expected at all, as when a test builds a flat archive.
+		{"a.txt", "", "a.txt"},
+		{"sub/b.txt", "", "sub/b.txt"},
+		// A prefix that merely looks similar is not the wrapper.
+		{"treehouse/a.txt", "tree", "treehouse/a.txt"},
+	}
+	for _, tt := range tests {
+		if got := stripArchiveRoot(tt.name, tt.strip); got != tt.want {
+			t.Errorf("stripArchiveRoot(%q, %q) = %q, want %q", tt.name, tt.strip, got, tt.want)
+		}
 	}
 }

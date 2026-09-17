@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"github.com/cernbox/cernbox-cli/pkg/cberr"
 	"net/http"
 	"net/url"
 	"strings"
@@ -140,8 +141,17 @@ func TestTrashKeyFromHref(t *testing.T) {
 	}
 }
 
+// TestRestoreTrashToOriginalLocation: the server has no "put it back" — a
+// restore is a MOVE, and a MOVE with no Destination is a 400. Restoring in
+// place therefore means looking the original location up in the bin first.
 func TestRestoreTrashToOriginalLocation(t *testing.T) {
 	f := newFakeServer(t)
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, trashMultistatus("einstein",
+			trashFixture{Key: "key-1", Name: "notes.txt", Location: "Documents/notes.txt", Size: 120, Deleted: 1767225600},
+		))
+	})
 	f.on(MethodMove, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	})
@@ -151,13 +161,31 @@ func TestRestoreTrashToOriginalLocation(t *testing.T) {
 	}
 
 	req := f.lastRequest(MethodMove)
-	// With no destination the server restores to the original location, so
-	// sending one would override the user's intent.
-	if got := req.Header.Get("Destination"); got != "" {
-		t.Errorf("Destination = %q, want none for a restore in place", got)
+	// Rooted at the space, not at "/": the server reports the location
+	// relative to the space the bin belongs to.
+	if got := req.Header.Get("Destination"); !strings.HasSuffix(got, "/eos/user/e/einstein/Documents/notes.txt") {
+		t.Errorf("Destination = %q, want the location rooted at the personal space", got)
 	}
 	if !strings.HasSuffix(req.Path, "/key-1") {
 		t.Errorf("request path = %q", req.Path)
+	}
+}
+
+// TestRestoreTrashUnknownKey: without the listing there is no destination to
+// send, and a blind MOVE would just be a 400 from the server.
+func TestRestoreTrashUnknownKey(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, trashMultistatus("einstein"))
+	})
+
+	err := f.client().RestoreTrash(context.Background(), "nope", "", "")
+	if err == nil {
+		t.Fatal("restoring a key that is not in the bin should fail")
+	}
+	if cberr.KindOf(err) != cberr.KindNotFound {
+		t.Errorf("kind = %v, want not found", cberr.KindOf(err))
 	}
 }
 

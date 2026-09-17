@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -32,11 +33,19 @@ func (e *Engine) archiveDownload(ctx context.Context, remoteRoot, localRoot stri
 	}
 	defer body.Close()
 
-	return e.extractTar(ctx, body, localRoot)
+	// The archiver wraps everything in a directory named after what was asked
+	// for, so entries arrive as "tree/a.txt". localRoot already stands for that
+	// directory, so the wrapper is stripped; otherwise the same download would
+	// land at dest/tree/a.txt via the archiver and dest/a.txt via the walk.
+	return e.extractTar(ctx, body, localRoot, path.Base(remoteRoot))
 }
 
 // extractTar unpacks a tar stream into localRoot.
-func (e *Engine) extractTar(ctx context.Context, r io.Reader, localRoot string) (*Stats, error) {
+//
+// stripRoot names a leading directory to drop from each entry, empty for none.
+// Only that exact name is stripped: an archive whose entries are already
+// relative to localRoot must not lose its first directory.
+func (e *Engine) extractTar(ctx context.Context, r io.Reader, localRoot, stripRoot string) (*Stats, error) {
 	stats := &Stats{}
 
 	absRoot, err := filepath.Abs(localRoot)
@@ -60,10 +69,20 @@ func (e *Engine) extractTar(ctx context.Context, r io.Reader, localRoot string) 
 			return stats, cberr.Wrap(cberr.KindOther, "read archive", localRoot, err)
 		}
 
+		// The archiver wraps everything in a directory named after what was
+		// asked for, so entries arrive as "tree/a.txt". The caller already
+		// named the directory it wants the contents in, and keeping the wrapper
+		// would put them at dest/tree/a.txt instead of dest/a.txt — one level
+		// deeper than the same download served by walking the tree.
+		name := stripArchiveRoot(hdr.Name, stripRoot)
+		if name == "" {
+			continue
+		}
+
 		// The archive comes from the server, but a client that trusts entry
 		// names is one malformed entry away from writing outside the directory
 		// the user asked for. Resolve and check every one.
-		target, err := safeJoin(absRoot, hdr.Name)
+		target, err := safeJoin(absRoot, name)
 		if err != nil {
 			return stats, err
 		}
@@ -143,4 +162,22 @@ func safeJoin(root, name string) (string, error) {
 			fmt.Sprintf("the archive entry %q would be written outside the destination", name))
 	}
 	return target, nil
+}
+
+// stripArchiveRoot normalises an entry name and removes the wrapper directory,
+// when the entry actually is inside one by that name. An entry that is the
+// wrapper itself becomes empty, and the caller skips it: the destination
+// directory already stands for it.
+func stripArchiveRoot(name, stripRoot string) string {
+	name = strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(name, "\\", "/")), "/")
+	if name == "." {
+		return ""
+	}
+	if stripRoot == "" || stripRoot == "." || stripRoot == "/" {
+		return name
+	}
+	if name == stripRoot {
+		return ""
+	}
+	return strings.TrimPrefix(name, stripRoot+"/")
 }

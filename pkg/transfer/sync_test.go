@@ -352,3 +352,39 @@ func TestHasHiddenComponent(t *testing.T) {
 		}
 	}
 }
+
+// TestSyncPullCreatesTheDestination: taking a first copy of something is the
+// ordinary reason to pull, and the destination does not exist yet then.
+func TestSyncPullCreatesTheDestination(t *testing.T) {
+	box := newFakeBox(t)
+	box.mkdir("/eos/user/e/einstein/data")
+	box.putFile("/eos/user/e/einstein/data/a.txt", []byte("a"))
+
+	e := box.engine(Options{Overwrite: true})
+	dest := filepath.Join(t.TempDir(), "not-there-yet")
+
+	stats, err := e.Sync(context.Background(), dest, "/eos/user/e/einstein/data",
+		SyncOptions{Direction: Pull})
+	if err != nil {
+		t.Fatalf("pulling into a missing directory should create it: %v", err)
+	}
+	if stats.Created == 0 {
+		t.Errorf("stats = %+v, want something created", stats)
+	}
+	assertFile(t, filepath.Join(dest, "a.txt"), "a")
+}
+
+// TestSyncPushStillRequiresTheSource: the same leniency would be wrong here,
+// since an absent source would mirror an empty tree over the remote.
+func TestSyncPushStillRequiresTheSource(t *testing.T) {
+	box := newFakeBox(t)
+	box.mkdir("/eos/user/e/einstein/data")
+
+	e := box.engine(Options{Overwrite: true})
+	missing := filepath.Join(t.TempDir(), "not-there-yet")
+
+	if _, err := e.Sync(context.Background(), missing, "/eos/user/e/einstein/data",
+		SyncOptions{Direction: Push}); err == nil {
+		t.Error("pushing from a missing directory should fail, not create it and mirror nothing")
+	}
+}
