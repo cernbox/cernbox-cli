@@ -258,7 +258,7 @@ func newLinkCreateCmd(app *App) *cobra.Command {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
 
-			linkType := "view"
+			var linkType string
 			switch role {
 			case "viewer", "view", "read":
 				linkType = "view"

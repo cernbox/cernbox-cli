@@ -389,6 +389,6 @@ func drain(resp *http.Response) {
 	if resp == nil || resp.Body == nil {
 		return
 	}
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	resp.Body.Close()
 }

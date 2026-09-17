@@ -1,0 +1,79 @@
+version: 2
+
+project_name: cernbox-cli
+
+before:
+  hooks:
+    - go mod tidy
+    # Completions are generated rather than committed, so they can never drift
+    # from the command tree they describe.
+    - mkdir -p packaging/completions
+    - sh -c "go run ./cmd/cernbox completion bash > packaging/completions/cernbox.bash"
+    - sh -c "go run ./cmd/cernbox completion zsh  > packaging/completions/cernbox.zsh"
+    - sh -c "go run ./cmd/cernbox completion fish > packaging/completions/cernbox.fish"
+
+builds:
+  - id: cernbox
+    main: ./cmd/cernbox
+    binary: cernbox
+    # CGO off keeps the binary statically linkable, which is what lets one
+    # artifact run across AlmaLinux versions and inside minimal containers.
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.buildDate={{ .Date }}
+
+archives:
+  - id: default
+    ids: [cernbox]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+      - docs/design.md
+
+# RPM for AlmaLinux, which is what lxplus runs. The site configuration is
+# marked as a config file so a local edit survives an upgrade.
+nfpms:
+  - id: packages
+    ids: [cernbox]
+    package_name: cernbox-cli
+    vendor: CERN
+    homepage: https://github.com/cernbox/cernbox-cli
+    maintainer: CERNBox <cernbox-admins@cern.ch>
+    description: |
+      Command-line client for CERNBox. Browse, transfer, and share files from
+      your terminal, with Kerberos single sign-on on lxplus.
+    license: Apache-2.0
+    formats: [rpm, deb]
+    bindir: /usr/bin
+    contents:
+      - src: packaging/config.yaml
+        dst: /etc/cernbox/config.yaml
+        type: config|noreplace
+      - src: packaging/completions/cernbox.bash
+        dst: /usr/share/bash-completion/completions/cernbox
+      - src: packaging/completions/cernbox.zsh
+        dst: /usr/share/zsh/site-functions/_cernbox
+      - src: packaging/completions/cernbox.fish
+        dst: /usr/share/fish/vendor_completions.d/cernbox.fish
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

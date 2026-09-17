@@ -709,7 +709,7 @@ func (c *Client) sendJSON(ctx context.Context, method, u, op, path string, in, o
 	}
 	defer resp.Body.Close()
 	if out == nil {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		return nil
 	}
 	return decodeJSON(resp.Body, out, op, path)

@@ -245,9 +245,9 @@ func multistatusXML(user string, entries ...davEntry) string {
 			sb.WriteString("<d:resourcetype><d:collection/></d:resourcetype>")
 		} else {
 			sb.WriteString("<d:resourcetype></d:resourcetype>")
-			sb.WriteString(fmt.Sprintf("<d:getcontentlength>%d</d:getcontentlength>", e.Size))
+			fmt.Fprintf(&sb, "<d:getcontentlength>%d</d:getcontentlength>", e.Size)
 		}
-		sb.WriteString(fmt.Sprintf("<oc:size>%d</oc:size>", e.Size))
+		fmt.Fprintf(&sb, "<oc:size>%d</oc:size>", e.Size)
 		if e.Modified != "" {
 			sb.WriteString("<d:getlastmodified>" + e.Modified + "</d:getlastmodified>")
 		}

@@ -1,0 +1,183 @@
+name: _build
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: "Build artifacts and publish a release"
+        type: boolean
+        default: false
+      version:
+        description: "Release version (e.g. nightly or v1.2.3)"
+        type: string
+        default: ""
+
+jobs:
+  # ── Lint ─────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      # The integration suite is behind a build tag, so a plain "go vet ./..."
+      # never compiles it. Without this, it can rot unnoticed until someone
+      # brings up Docker.
+      - name: Vet the integration suite
+        run: go vet -tags integration ./integration/...
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          install-mode: goinstall
+
+  # ── Build ────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.os }})
+    needs: [lint]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      # A binary that cannot print its own help is broken in a way no unit test
+      # would catch: cobra panics on a duplicate flag shorthand at startup, not
+      # at compile time.
+      - name: Smoke test
+        run: |
+          ./cernbox version
+          ./cernbox --help
+          ./cernbox ls --help
+          ./cernbox completion bash > /dev/null
+
+  # ── Unit tests ───────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests (${{ matrix.os }})
+    needs: [lint]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Report coverage
+        run: go tool cover -func=coverage.out | tail -1
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: coverage
+          path: coverage.out
+
+  # ── Integration tests ────────────────────────────────────────────────────────
+  integration-tests:
+    name: Integration Tests
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Start dev services
+        run: docker compose -f dev/docker-compose.yaml up -d --build
+
+      - name: Wait for revad
+        run: ./dev/wait-for-revad.sh
+
+      - name: Run integration tests
+        run: go test -tags integration -count=1 -timeout 20m ./integration/...
+
+      # The revad and EOS logs are the only way to tell a client bug from a
+      # server one when a test fails, and the containers are gone by the time
+      # anyone looks.
+      - name: Dump service logs
+        if: failure()
+        run: |
+          echo "=== revad ==="
+          docker compose -f dev/docker-compose.yaml logs --tail=200 revad
+          echo "=== eos-storage ==="
+          docker compose -f dev/docker-compose.yaml logs --tail=100 eos-storage
+
+      - name: Stop dev services
+        if: always()
+        run: docker compose -f dev/docker-compose.yaml down -v
+
+  # ── Release ──────────────────────────────────────────────────────────────────
+  release:
+    name: Release
+    if: inputs.publish
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Move the nightly tag to this commit
+        if: inputs.version == 'nightly'
+        run: |
+          git tag -f nightly
+          git push origin nightly --force
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: >-
+            release --clean
+            ${{ inputs.version == 'nightly' && '--snapshot --skip=publish' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the nightly pre-release
+        if: inputs.version == 'nightly'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          prerelease: true
+          make_latest: false
+          body: "Built from commit ${{ github.sha }}"
+          files: dist/**/*

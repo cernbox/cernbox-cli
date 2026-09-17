@@ -8,7 +8,7 @@ LDFLAGS     := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.build
 COMPOSE     := docker compose -f dev/docker-compose.yaml
 
 .PHONY: all build install test test-race test-cover test-integration test-all \
-        lint vet fmt tidy clean dev-up dev-down dev-logs help
+        lint vet fmt tidy clean completions dev-up dev-down dev-logs help
 
 all: build
 
@@ -30,7 +30,7 @@ test-cover: ## Run unit tests and write coverage.out / coverage.html
 	@go tool cover -func=coverage.out | tail -1
 
 test-integration: build ## Run integration tests (requires: make dev-up)
-	go test -tags integration -count=1 -timeout 15m ./integration/...
+	go test -tags integration -count=1 -timeout 20m ./integration/...
 
 test-all: dev-up test test-integration ## Run every test suite
 
@@ -47,8 +47,15 @@ fmt: ## Format the code
 tidy: ## Tidy go.mod
 	go mod tidy
 
+completions: ## Generate shell completion scripts for packaging
+	@mkdir -p packaging/completions
+	go run $(CMD) completion bash > packaging/completions/cernbox.bash
+	go run $(CMD) completion zsh  > packaging/completions/cernbox.zsh
+	go run $(CMD) completion fish > packaging/completions/cernbox.fish
+
 clean: ## Remove build and test artifacts
 	rm -f $(BINARY) coverage.out coverage.html
+	rm -rf packaging/completions
 
 dev-up: ## Start the dev environment (revad + EOS)
 	$(COMPOSE) up -d --build

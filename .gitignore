@@ -2,6 +2,9 @@
 /cernbox
 /dist/
 
+# Generated shell completions
+/packaging/completions/
+
 # Test artifacts
 *.test
 *.out
