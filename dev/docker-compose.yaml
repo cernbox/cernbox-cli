@@ -30,7 +30,9 @@ services:
       nofile: 1024000
       core: -1
     healthcheck:
-      test: eos file info /eos/user
+      # Both checks matter: the MGM answers well before the gRPC server is
+      # listening, and revad dies on startup if it cannot reach gRPC.
+      test: ["CMD-SHELL", "eos file info /eos/user && ss -lnt | grep -q ':50051'"]
       interval: 10s
       timeout: 5s
 
@@ -42,8 +44,10 @@ services:
     ports:
       - "80:80"
     tmpfs:
+      # Mounted at /var/tmp/reva, not /var/tmp: every file-backed driver writes
+      # under this path, and a tmpfs at the parent would shadow it away empty.
       - /tmp:size=256m,mode=1777
-      - /var/tmp:size=64m,mode=1777
+      - /var/tmp/reva:size=64m,mode=1777
     volumes:
       - ./revad:/etc/revad:ro
       - ./pki:/etc/pki:ro
@@ -70,7 +74,7 @@ services:
       - "8081:80"
     tmpfs:
       - /tmp:size=64m,mode=1777
-      - /var/tmp:size=64m,mode=1777
+      - /var/tmp/reva:size=64m,mode=1777
     volumes:
       - ./revad:/etc/revad:ro
       - ./pki:/etc/pki:ro

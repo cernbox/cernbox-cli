@@ -74,7 +74,11 @@ auth_manager = "kerberos"
 
 [grpc.services.authprovider.auth_managers.kerberos]
 keytab = "/krb5-share/service.keytab"
-service_principal = "HTTP/revad"
+# No service_principal: this revad answers to both "revad" (inside the compose
+# network) and "localhost" (from the host running the tests), and a client asks
+# the KDC for a ticket named after whichever it dialled. Leaving it empty
+# accepts any principal the keytab holds, which is also what a deployment behind
+# a DNS alias wants.
 realm = "TEST.CERN.CH"
 user_claim = "username"
 
@@ -264,6 +268,10 @@ address = ":80"
 [[http.services.dataprovider]]
 driver = "eos"
 insecure = true
+# The storage provider finds its data server by matching this against its own
+# mount_id in the service registry, so the two must agree or every upload fails
+# with "no selectable node for dataprovider".
+mount_id = "localhome"
 
 [http.services.dataprovider.drivers.eos]
 namespace = "/"
@@ -373,7 +381,11 @@ string = "10.0.11"
 address = ":80"
 insecure = true
 public_url = "http://localhost"
-files_namespace = "/eos/{{substr 0 1 .Username}}"
+# A literal prefix, not a template: ocdav's applyLayout returns the namespace
+# unchanged, so a {{.Username}} in here reaches the storage provider verbatim.
+# "/" means a WebDAV path is the canonical CERNBox path, which is what the CLI
+# sends.
+files_namespace = "/"
 
 [http.services.archiver]
 address = ":80"

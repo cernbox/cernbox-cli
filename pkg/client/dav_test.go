@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"strings"
 	"testing"
 
@@ -292,9 +293,49 @@ func TestMkdir(t *testing.T) {
 	}
 }
 
-// TestMkdirAllCreatesEveryAncestor walks downwards so a missing intermediate
-// directory does not fail the whole operation.
-func TestMkdirAllCreatesEveryAncestor(t *testing.T) {
+// TestMkdirAllCreatesOnlyWhatIsMissing: the leading segments of a CERNBox path
+// are not real directories, so creating every prefix fails on the first one.
+// Only the missing levels may be touched.
+func TestMkdirAllCreatesOnlyWhatIsMissing(t *testing.T) {
+	f := newFakeServer(t)
+	var created []string
+	// Everything up to and including einstein exists; a/b/c do not.
+	existing := "/eos/user/e/einstein"
+	exists := map[string]bool{existing: true}
+	f.on(MethodMkcol, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		target := strings.TrimPrefix(r.URL.Path, davFilesPrefix+"/einstein")
+		// Like reva: a collection can only be made inside one that is there
+		// already, and the namespace root is not something anyone may create.
+		if !exists[path.Dir(target)] {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		exists[target] = true
+		created = append(created, target)
+		w.WriteHeader(http.StatusCreated)
+	})
+	f.on(MethodPropfind, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	if err := f.client().Mkdir(context.Background(), existing+"/a/b/c", true); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{existing + "/a", existing + "/a/b", existing + "/a/b/c"}
+	if len(created) != len(want) {
+		t.Fatalf("created %v, want exactly %v", created, want)
+	}
+	// Parents must come before children, or the server would reject them.
+	for i, w := range want {
+		if created[i] != w {
+			t.Errorf("created[%d] = %q, want %q", i, created[i], w)
+		}
+	}
+}
+
+// TestMkdirAllDoesNotTouchTheNamespaceRoot is the regression: "mkdir -p" used to
+// walk from "/" and died creating "/eos", which is not a directory at all.
+func TestMkdirAllDoesNotTouchTheNamespaceRoot(t *testing.T) {
 	f := newFakeServer(t)
 	var created []string
 	f.on(MethodMkcol, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
@@ -302,15 +343,16 @@ func TestMkdirAllCreatesEveryAncestor(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	if err := f.client().Mkdir(context.Background(), "/eos/user/e/einstein/a/b/c", true); err != nil {
+	if err := f.client().Mkdir(context.Background(), "/eos/user/e/einstein/new", true); err != nil {
 		t.Fatal(err)
 	}
-	// One MKCOL per level: eos, user, e, einstein, a, b, c.
-	if len(created) != 7 {
-		t.Fatalf("created %d levels (%v), want 7", len(created), created)
+	if len(created) != 1 {
+		t.Fatalf("created %v, want only the leaf: everything above it already exists", created)
 	}
-	if !strings.HasSuffix(created[len(created)-1], "/a/b/c") {
-		t.Errorf("last MKCOL was %q, want the full path", created[len(created)-1])
+	for _, p := range created {
+		if strings.HasSuffix(p, "/eos") {
+			t.Errorf("tried to create the namespace root %q", p)
+		}
 	}
 }
 
