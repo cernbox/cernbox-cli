@@ -19,3 +19,4 @@ go.work.sum
 .claude
 .idea/
 *.swp
+dev/pki/ca.srl

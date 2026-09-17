@@ -4,7 +4,7 @@
 		"full_name": "CERNBox (dev)",
 		"organization": "CERN",
 		"domain": "revad",
-		"homepage": "http://revad",
+		"homepage": "https://revad",
 		"description": "The CERNBox instance under test.",
 		"services": [
 			{
@@ -14,7 +14,7 @@
 						"description": "CERNBox Open Cloud Mesh API"
 					},
 					"name": "CERNBox - OCM API",
-					"path": "http://revad/ocm/",
+					"path": "https://revad/ocm/",
 					"is_monitored": true
 				},
 				"api_version": "0.0.1",
@@ -27,7 +27,7 @@
 		"full_name": "Partner Lab (dev)",
 		"organization": "Partner Lab",
 		"domain": "revad-partner",
-		"homepage": "http://revad-partner",
+		"homepage": "https://revad-partner",
 		"description": "The second provider, so federated sharing has somewhere to go.",
 		"services": [
 			{
@@ -37,7 +37,7 @@
 						"description": "Partner Open Cloud Mesh API"
 					},
 					"name": "Partner Lab - OCM API",
-					"path": "http://revad-partner/ocm/",
+					"path": "https://revad-partner/ocm/",
 					"is_monitored": true
 				},
 				"api_version": "0.0.1",

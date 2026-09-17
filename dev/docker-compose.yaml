@@ -42,7 +42,9 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "80:80"
+      # Published on 443 because the service speaks TLS now, and the tests
+      # address it as https://localhost with no port.
+      - "443:443"
     tmpfs:
       # Mounted at /var/tmp/reva, not /var/tmp: every file-backed driver writes
       # under this path, and a tmpfs at the parent would shadow it away empty.
@@ -71,7 +73,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8081:80"
+      - "8081:443"
     tmpfs:
       - /tmp:size=64m,mode=1777
       - /var/tmp/reva:size=64m,mode=1777

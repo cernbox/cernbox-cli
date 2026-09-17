@@ -11,7 +11,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 wait_for() {
     local name="$1" url="$2"
     for i in $(seq 1 "$ATTEMPTS"); do
-        if curl -sf -o /dev/null "$url"; then
+        if curl -skf -o /dev/null "$url"; then
             echo "$name is up"
             return 0
         fi
@@ -24,5 +24,5 @@ wait_for() {
     return 1
 }
 
-wait_for revad "${CERNBOX_DEV_URL:-http://localhost/status.php}"
-wait_for "the federation partner" "${CERNBOX_PARTNER_URL:-http://localhost:8081/status.php}"
+wait_for revad "${CERNBOX_DEV_URL:-https://localhost/status.php}"
+wait_for "the federation partner" "${CERNBOX_PARTNER_URL:-https://localhost:8081/status.php}"
