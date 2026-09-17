@@ -79,10 +79,12 @@ func TestOCMInviteAcceptEstablishesAContact(t *testing.T) {
 		t.Fatal("no invitation token was issued")
 	}
 
-	// Alice, at the partner, accepts the invitation einstein created here.
+	// Alice, at the partner, accepts the invitation einstein created here. If a
+	// previous test already linked the two, reva rejects the second invitation
+	// and the contact this test is about exists anyway.
 	stdout, stderr, code := e.runAs(e.partner(),
 		"ocm", "invite", "accept", created.Token, "--provider", "revad")
-	if code != 0 {
+	if code != 0 && !strings.Contains(stderr, "already accepted") {
 		t.Fatalf("accepting the invitation failed (%d)\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
@@ -106,12 +108,7 @@ func TestOCMShareReachesThePartner(t *testing.T) {
 	requirePartner(t)
 	e := setup(t)
 
-	var created invite
-	e.runJSON(&created, "ocm", "invite", "create")
-	if _, stderr, code := e.runAs(e.partner(),
-		"ocm", "invite", "accept", created.Token, "--provider", "revad"); code != 0 {
-		t.Fatalf("accepting the invitation failed: %s", stderr)
-	}
+	ensureContact(e)
 
 	target := e.remotePath("federated.txt")
 	e.mustRun("put", e.writeLocal("federated.txt", []byte("across the mesh")), target)
@@ -140,12 +137,7 @@ func TestOCMContactRemoval(t *testing.T) {
 	requirePartner(t)
 	e := setup(t)
 
-	var created invite
-	e.runJSON(&created, "ocm", "invite", "create")
-	if _, stderr, code := e.runAs(e.partner(),
-		"ocm", "invite", "accept", created.Token, "--provider", "revad"); code != 0 {
-		t.Fatalf("accepting the invitation failed: %s", stderr)
-	}
+	ensureContact(e)
 
 	var contacts []contact
 	e.runJSON(&contacts, "ocm", "contacts")
@@ -185,9 +177,38 @@ func TestOCMInviteAcceptNeedsAProvider(t *testing.T) {
 	}
 }
 
+// containsUser finds a contact by the account name the tests know it by.
+//
+// It cannot simply compare the user id: a federated contact's id is an opaque
+// value the remote provider assigned, a UUID here, and not the username anyone
+// typed. The mail address carries the name across the federation, so that is
+// what identifies the contact, with the id still accepted for a provider that
+// does use names.
+// ensureContact makes einstein and alice federation contacts, and is happy if
+// they already are.
+//
+// Every OCM test needs the pair linked, but the link is deployment state rather
+// than per-test state: it survives between tests, and reva rejects a second
+// invitation between two users who already know each other. Treating that
+// rejection as success is correct — the postcondition the test wants holds
+// either way.
+func ensureContact(e *env) {
+	e.t.Helper()
+
+	var created invite
+	e.runJSON(&created, "ocm", "invite", "create")
+
+	_, stderr, code := e.runAs(e.partner(),
+		"ocm", "invite", "accept", created.Token, "--provider", "revad")
+	if code == 0 || strings.Contains(stderr, "already accepted") {
+		return
+	}
+	e.t.Fatalf("accepting the invitation failed (%d): %s", code, stderr)
+}
+
 func containsUser(contacts []contact, user string) bool {
 	for _, c := range contacts {
-		if c.UserID == user {
+		if c.UserID == user || strings.HasPrefix(c.Mail, user+"@") {
 			return true
 		}
 	}
