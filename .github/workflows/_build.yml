@@ -114,6 +114,14 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # kinit and klist. The Kerberos tests drive the real client tools rather
+      # than a Go-only approximation, because what has to work on lxplus is a
+      # ticket that kinit put in the cache.
+      - name: Install the Kerberos client tools
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq krb5-user
+
       - name: Start dev services
         run: docker compose -f dev/docker-compose.yaml up -d --build
 
@@ -121,6 +129,10 @@ jobs:
         run: ./dev/wait-for-revad.sh
 
       - name: Run integration tests
+        # A missing realm makes the Kerberos tests skip, and a skip in CI reads
+        # as a pass. Here the realm is always present, so demand it.
+        env:
+          CERNBOX_REQUIRE_KERBEROS: "1"
         run: go test -tags integration -count=1 -timeout 20m ./integration/...
 
       # The revad and EOS logs are the only way to tell a client bug from a
@@ -135,6 +147,8 @@ jobs:
           docker compose -f dev/docker-compose.yaml logs --tail=200 revad-partner
           echo "=== eos-storage ==="
           docker compose -f dev/docker-compose.yaml logs --tail=100 eos-storage
+          echo "=== kdc ==="
+          docker compose -f dev/docker-compose.yaml logs --tail=100 kdc
 
       - name: Stop dev services
         if: always()
