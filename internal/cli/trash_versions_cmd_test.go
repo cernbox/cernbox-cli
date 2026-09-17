@@ -62,7 +62,9 @@ func TestTrashListJSON(t *testing.T) {
 
 func TestTrashRestoreToOriginalLocation(t *testing.T) {
 	box := newTestBox(t)
-	box.trash["key-1"] = trashEntry{name: "notes.txt", location: "eos/user/e/einstein/notes.txt", body: "recovered"}
+	// The server reports the location relative to the root of the space the
+	// bin belongs to, as in TestTrashListJSON above, not as a full path.
+	box.trash["key-1"] = trashEntry{name: "notes.txt", location: "notes.txt", body: "recovered"}
 
 	if _, _, err := run(t, box, "trash", "restore", "key-1"); err != nil {
 		t.Fatal(err)
@@ -78,7 +80,9 @@ func TestTrashRestoreToOriginalLocation(t *testing.T) {
 func TestTrashRestoreToExplicitPath(t *testing.T) {
 	box := newTestBox(t)
 	box.mkdir("/eos/user/e/einstein")
-	box.trash["key-1"] = trashEntry{name: "notes.txt", location: "eos/user/e/einstein/notes.txt", body: "recovered"}
+	// The server reports the location relative to the root of the space the
+	// bin belongs to, as in TestTrashListJSON above, not as a full path.
+	box.trash["key-1"] = trashEntry{name: "notes.txt", location: "notes.txt", body: "recovered"}
 
 	_, _, err := run(t, box, "trash", "restore", "key-1", "--to", "/eos/user/e/einstein/elsewhere.txt")
 	if err != nil {

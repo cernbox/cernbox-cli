@@ -73,6 +73,18 @@ func (e *Engine) Sync(ctx context.Context, localRoot, remoteRoot string, opts Sy
 	start := time.Now()
 	stats := &SyncStats{}
 
+	// Pulling into a directory that is not there yet is the ordinary way to
+	// take a first copy of something, so create it rather than refusing. Push
+	// keeps the stricter reading: a missing source is a mistake, and creating
+	// it would mirror an empty tree over whatever is on the far side.
+	if opts.Direction == Pull {
+		if _, err := os.Stat(localRoot); os.IsNotExist(err) {
+			if err := os.MkdirAll(localRoot, 0o755); err != nil {
+				return nil, cberr.Wrap(cberr.KindOther, "create", localRoot, err)
+			}
+		}
+	}
+
 	localEntries, err := e.scanLocal(localRoot, opts)
 	if err != nil {
 		return nil, err

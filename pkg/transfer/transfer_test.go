@@ -470,8 +470,11 @@ func TestDownloadTreeViaArchiver(t *testing.T) {
 		t.Errorf("individual GETs = %d, want 0 when the archiver is used", box.getCount)
 	}
 
-	assertFile(t, filepath.Join(local, "data", "a.txt"), "a")
-	assertFile(t, filepath.Join(local, "data", "sub", "b.txt"), "bb")
+	// The same layout the walk produces: whether the archiver was used is a
+	// transport detail, and a download that lands a level deeper depending on
+	// which path the client took would be a trap for any script using it.
+	assertFile(t, filepath.Join(local, "a.txt"), "a")
+	assertFile(t, filepath.Join(local, "sub", "b.txt"), "bb")
 }
 
 // TestDownloadTreeFallsBackWhenArchiverIsAbsent: an unavailable archiver must

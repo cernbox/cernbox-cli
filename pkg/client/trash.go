@@ -4,9 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cernbox/cernbox-cli/pkg/cberr"
 )
 
 // TrashItem is one deleted resource.
@@ -153,21 +156,30 @@ func trashKeyFromHref(href string) string {
 
 // RestoreTrash puts a deleted item back. An empty dst restores it to where it
 // came from.
+//
+// The server has no notion of "put it back": a restore is a MOVE, and a MOVE
+// without a Destination is rejected outright. So restoring to the original
+// location means looking that location up in the bin first.
 func (c *Client) RestoreTrash(ctx context.Context, key, dst, basePath string) error {
 	src, err := c.trashURL(ctx, key, basePath)
 	if err != nil {
 		return err
 	}
 
-	header := http.Header{}
-	if dst != "" {
-		dstURL, err := c.davURL(ctx, dst)
+	if dst == "" {
+		dst, err = c.originalPathOf(ctx, key, basePath)
 		if err != nil {
 			return err
 		}
-		header.Set("Destination", dstURL)
-		header.Set("Overwrite", "F")
 	}
+
+	dstURL, err := c.davURL(ctx, dst)
+	if err != nil {
+		return err
+	}
+	header := http.Header{}
+	header.Set("Destination", dstURL)
+	header.Set("Overwrite", "F")
 
 	resp, err := c.do(ctx, request{
 		method:  MethodMove,
@@ -182,6 +194,40 @@ func (c *Client) RestoreTrash(ctx context.Context, key, dst, basePath string) er
 	}
 	drain(resp)
 	return nil
+}
+
+// originalPathOf finds where a deleted item used to live.
+func (c *Client) originalPathOf(ctx context.Context, key, basePath string) (string, error) {
+	items, err := c.ListTrash(ctx, basePath)
+	if err != nil {
+		return "", err
+	}
+	for _, it := range items {
+		if it.Key != key {
+			continue
+		}
+		if it.OriginalPath == "" {
+			return "", cberr.New(cberr.KindOther, "restore from the trash bin", key,
+				"the server did not say where this item came from; name a destination")
+		}
+		if path.IsAbs(it.OriginalPath) {
+			return it.OriginalPath, nil
+		}
+		// The server reports the location relative to the root of the space
+		// the bin belongs to, while a WebDAV path is absolute. Rooting it at
+		// "/" would aim the restore at the top of the namespace instead of
+		// back inside the space.
+		root := basePath
+		if root == "" {
+			root, err = c.ResolveSpace(ctx, "home")
+			if err != nil {
+				return "", err
+			}
+		}
+		return path.Join(root, it.OriginalPath), nil
+	}
+	return "", cberr.New(cberr.KindNotFound, "restore from the trash bin", key,
+		"no item with this key is in the trash bin")
 }
 
 // PurgeTrash permanently deletes one item, or the whole bin when key is empty.

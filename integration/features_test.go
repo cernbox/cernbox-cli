@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,14 +26,18 @@ func TestTrashRoundTrip(t *testing.T) {
 	}
 	e.runJSON(&items, "trash", "list")
 
+	// The bin outlives the test, so previous runs have left their own
+	// doomed.txt in it. Matching on the name alone picks one whose directory
+	// was cleaned up long ago, and restoring that fails for want of a parent.
+	mine := path.Base(e.remote)
 	key := ""
 	for _, it := range items {
-		if it.Name == "doomed.txt" {
+		if it.Name == "doomed.txt" && strings.Contains(it.OriginalPath, mine) {
 			key = it.Key
 		}
 	}
 	if key == "" {
-		t.Fatalf("the deleted file is not in the trash bin: %+v", items)
+		t.Fatalf("this run's deleted file is not in the trash bin (looking for %s): %+v", mine, items)
 	}
 
 	e.mustRun("trash", "restore", key)
@@ -47,13 +52,15 @@ func TestTrashPurge(t *testing.T) {
 	e.mustRun("rm", e.remotePath("gone.txt"))
 
 	var items []struct {
-		Key  string `json:"key"`
-		Name string `json:"name"`
+		Key          string `json:"key"`
+		Name         string `json:"name"`
+		OriginalPath string `json:"original_path"`
 	}
 	e.runJSON(&items, "trash", "list")
 
+	mine := path.Base(e.remote)
 	for _, it := range items {
-		if it.Name == "gone.txt" {
+		if it.Name == "gone.txt" && strings.Contains(it.OriginalPath, mine) {
 			e.mustRun("trash", "purge", it.Key)
 		}
 	}
