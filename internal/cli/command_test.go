@@ -86,10 +86,6 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/sciencemesh/"):
 		b.serveOCM(w, r)
 
-	case strings.HasPrefix(r.URL.Path, "/ocs/v1.php/apps/files_sharing/api/v1/shares/remote_shares"):
-		fmt.Fprint(w, `{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[`+
-			`{"id":"7","name":"shared-data","displayname_owner":"Alice","permissions":1,"state":0}]}}`)
-
 	case r.URL.Path == "/app/open":
 		method := b.appMethod
 		if method == "" {
@@ -114,9 +110,17 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		]}`)
 
 	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/me/drive/sharedWithMe"):
-		fmt.Fprint(w, `{"value":[{"id":"item-1","name":"Shared","@client.synchronize":true,
-		  "createdBy":{"user":{"id":"marie","displayName":"Marie Curie"}},
-		  "permissions":[{"id":"p1","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]}]}`)
+		// One local share and one federated one: only the remoteItem id prefix
+		// tells them apart, which is what ocm received filters on.
+		fmt.Fprint(w, `{"value":[
+		  {"id":"item-1","name":"Shared","@client.synchronize":true,
+		   "createdBy":{"user":{"id":"marie","displayName":"Marie Curie"}},
+		   "permissions":[{"id":"p1","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]},
+		  {"id":"item-2","name":"shared-data","@client.synchronize":true,
+		   "remoteItem":{"id":"ocm-received$ABC","name":"shared-data"},
+		   "createdBy":{"user":{"id":"alice@other-lab.org","displayName":"Alice"}},
+		   "permissions":[{"id":"p2","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]}
+		]}`)
 
 	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/drives/"):
 		b.serveGraphItem(w, r)

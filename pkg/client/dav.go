@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -191,7 +192,7 @@ func (c *Client) propfind(ctx context.Context, p string, depth int, op string) (
 			"Depth":        []string{strconv.Itoa(depth)},
 			"Content-Type": []string{"application/xml"},
 		},
-		body:    bodyFromString(propfindBody),
+		body:    stringBody(propfindBody),
 		op:      op,
 		path:    p,
 		expects: []int{http.StatusMultiStatus, http.StatusOK},
@@ -373,15 +374,12 @@ func (c *Client) Download(ctx context.Context, p string, offset int64) (io.ReadC
 
 // Upload writes a file in a single PUT. Large files should go through
 // UploadResumable instead.
-func (c *Client) Upload(ctx context.Context, p string, body func() (io.ReadCloser, error), size int64, checksum string) error {
+func (c *Client) Upload(ctx context.Context, p string, open func() (io.ReadCloser, error), size int64, checksum string) error {
 	u, err := c.davURL(ctx, p)
 	if err != nil {
 		return err
 	}
 	header := http.Header{"Content-Type": []string{"application/octet-stream"}}
-	if size >= 0 {
-		header.Set("Content-Length", strconv.FormatInt(size, 10))
-	}
 	if checksum != "" {
 		header.Set("OC-Checksum", checksum)
 	}
@@ -390,7 +388,7 @@ func (c *Client) Upload(ctx context.Context, p string, body func() (io.ReadClose
 		method:  http.MethodPut,
 		url:     u,
 		header:  header,
-		body:    body,
+		body:    readerBody(open, size),
 		op:      "upload",
 		path:    p,
 		expects: []int{http.StatusOK, http.StatusCreated, http.StatusNoContent},
@@ -528,13 +526,10 @@ func (c *Client) Touch(ctx context.Context, p string) error {
 		return err
 	}
 	resp, err := c.do(ctx, request{
-		method: http.MethodPut,
-		url:    u,
-		header: http.Header{
-			"Content-Length": []string{"0"},
-			"If-None-Match":  []string{"*"},
-		},
-		body:    bodyFromString(""),
+		method:  http.MethodPut,
+		url:     u,
+		header:  http.Header{"If-None-Match": []string{"*"}},
+		body:    stringBody(""),
 		op:      "create file",
 		path:    p,
 		expects: []int{http.StatusCreated, http.StatusOK, http.StatusNoContent},
@@ -606,7 +601,16 @@ const searchReportBody = `<?xml version="1.0" encoding="UTF-8"?>
   </oc:search>
 </oc:search-files>`
 
+// ErrSearchUnsupported reports that the server cannot search, so the caller
+// should walk the tree instead.
+var ErrSearchUnsupported = errors.New("the server does not support search")
+
 // Search runs a server-side search rooted at p.
+//
+// reva's search-files REPORT handler is a stub that answers 501, so this
+// returns ErrSearchUnsupported there and the caller falls back to walking. The
+// request is still worth making: a deployment that implements it answers in one
+// round trip instead of one per directory.
 func (c *Client) Search(ctx context.Context, p string, opts SearchOptions) ([]ResourceInfo, error) {
 	u, err := c.davURL(ctx, p)
 	if err != nil {
@@ -622,12 +626,16 @@ func (c *Client) Search(ctx context.Context, p string, opts SearchOptions) ([]Re
 		method:  MethodReport,
 		url:     u,
 		header:  http.Header{"Content-Type": []string{"application/xml"}},
-		body:    bodyFromString(body),
+		body:    stringBody(body),
 		op:      "search",
 		path:    p,
 		expects: []int{http.StatusMultiStatus, http.StatusOK},
 	})
 	if err != nil {
+		var ce *cberr.Error
+		if errors.As(err, &ce) && ce.Status == http.StatusNotImplemented {
+			return nil, ErrSearchUnsupported
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -639,10 +647,4 @@ func xmlEscape(s string) string {
 	var b strings.Builder
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
-}
-
-func bodyFromString(s string) func() (io.ReadCloser, error) {
-	return func() (io.ReadCloser, error) {
-		return io.NopCloser(strings.NewReader(s)), nil
-	}
 }

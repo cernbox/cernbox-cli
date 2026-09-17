@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -196,8 +197,10 @@ func newFindCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "find PATH",
 		Short: "Search for files by name",
-		Long: "Search a CERNBox subtree by name. The search runs on the server, so it\n" +
-			"does not walk the tree from the client.",
+		Long: "Search a CERNBox subtree by name.\n\n" +
+			"The search is asked of the server first, which answers in one round trip.\n" +
+			"Servers that do not implement it — reva's handler is currently a stub —\n" +
+			"get a client-side walk instead, which is slower but works.",
 		Example: "  cernbox find /eos/user/g/gdelmont --name report",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -212,6 +215,10 @@ func newFindCmd(app *App) *cobra.Command {
 				return err
 			}
 			results, err := app.client.Search(ctx, p, client.SearchOptions{Pattern: pattern, Limit: limit})
+			if errors.Is(err, client.ErrSearchUnsupported) {
+				app.out.Msg("This server cannot search, walking the tree instead...")
+				results, err = app.walkSearch(ctx, p, pattern, limit)
+			}
 			if err != nil {
 				return err
 			}
@@ -228,6 +235,34 @@ func newFindCmd(app *App) *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 200, "maximum number of results")
 	return cmd
 }
+
+// walkSearch matches names by walking the tree, for servers whose search
+// endpoint is not implemented.
+func (a *App) walkSearch(ctx context.Context, root, pattern string, limit int) ([]client.ResourceInfo, error) {
+	needle := strings.ToLower(pattern)
+	var results []client.ResourceInfo
+
+	err := a.client.Walk(ctx, root, func(info client.ResourceInfo) error {
+		if info.Path == root {
+			return nil
+		}
+		if strings.Contains(strings.ToLower(info.Name), needle) {
+			results = append(results, info)
+		}
+		if limit > 0 && len(results) >= limit {
+			return errSearchLimit
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errSearchLimit) {
+		return nil, err
+	}
+	return results, nil
+}
+
+// errSearchLimit stops a walk once enough matches are in hand. It never reaches
+// the caller.
+var errSearchLimit = errors.New("search limit reached")
 
 func newDuCmd(app *App) *cobra.Command {
 	var depth int

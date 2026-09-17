@@ -196,11 +196,30 @@ file = "/var/tmp/reva/ocm-shares.json"
 
 ### OTHER PROVIDERS ###
 
+# The sql driver on sqlite, not memory or json. The gateway probes the share
+# manager for liveness with GetShare(id=0) and insists on an error that reads
+# "not found: 0"; memory and json answer with the protobuf form of the whole
+# reference, fail the probe, and every share then comes back 500.
 [grpc.services.usershareprovider]
-driver = "memory"
+driver = "sql"
+
+[grpc.services.usershareprovider.drivers.sql]
+db_engine = "sqlite"
+db_name = "/var/tmp/reva/shares.sqlite"
 
 [grpc.services.publicshareprovider]
-driver = "memory"
+driver = "sql"
+
+[grpc.services.publicshareprovider.drivers.sql]
+db_engine = "sqlite"
+db_name = "/var/tmp/reva/shares.sqlite"
+
+# App tokens, which "cernbox token list" and "token revoke" go through.
+[grpc.services.applicationauth]
+driver = "json"
+
+[grpc.services.applicationauth.drivers.json]
+file = "/var/tmp/reva/app-tokens.json"
 
 [grpc.services.preferences]
 
@@ -394,6 +413,8 @@ address = ":80"
 [http.services.ocgraph]
 address = ":80"
 base_url = "http://localhost"
+# Without this, sharedWithMe silently leaves federated shares out.
+ocm_enabled = true
 
 [http.middlewares.cors]
 allowed_origins = ["*"]

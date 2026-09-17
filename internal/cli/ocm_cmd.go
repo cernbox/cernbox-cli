@@ -274,11 +274,11 @@ func newOCMReceivedCmd(app *App) *cobra.Command {
 				app.out.Msg("You have no federated shares.")
 			}
 
-			table := output.Table{Headers: []string{"ID", "NAME", "OWNER", "ROLE", "ACCEPTED"}, Items: shares}
+			table := output.Table{Headers: []string{"ID", "NAME", "SHARED BY", "PROVIDER", "ROLE", "ACCEPTED"}, Items: shares}
 			for _, s := range shares {
 				table.Rows = append(table.Rows, []string{
-					s.ID, orDash(firstNonEmpty(s.Name, s.Path)), orDash(s.Owner),
-					orDash(s.Permissions), yesNo(s.Accepted),
+					s.ID, orDash(s.Name), orDash(s.Owner), orDash(s.Provider),
+					orDash(s.Role), yesNo(s.Accepted),
 				})
 			}
 			return app.out.Render(table)

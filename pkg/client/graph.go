@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -141,6 +140,13 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 func (c *Client) fetchMe(ctx context.Context) (*User, error) {
 	var gu graphUser
 	if err := c.getJSON(ctx, c.URL(graphV1+"/me"), "identify the current user", "", &gu); err != nil {
+		// A 404 here is not a missing file, it is a missing API. The default
+		// "no such file or directory" sends whoever hits it looking for a path
+		// that was never involved.
+		if cberr.KindOf(err) == cberr.KindNotFound {
+			return nil, cberr.New(cberr.KindOther, "identify the current user", "",
+				"this server does not expose the graph API at "+graphV1+"/me")
+		}
 		return nil, err
 	}
 	u := &User{
@@ -564,6 +570,8 @@ type DriveItem struct {
 	Role string `json:"role,omitempty"`
 	// Accepted reports whether a received share has been accepted.
 	Accepted bool `json:"accepted"`
+	// Federated reports whether the share came from another OCM provider.
+	Federated bool `json:"federated,omitempty"`
 }
 
 type graphDriveItem struct {
@@ -606,6 +614,10 @@ func (d graphDriveItem) toDriveItem() DriveItem {
 		}
 		if d.RemoteItem.ID != nil {
 			out.ID = *d.RemoteItem.ID
+			// reva encodes the id of a received OCM share with this prefix, so
+			// it is what distinguishes a federated share from a local one in a
+			// listing that holds both.
+			out.Federated = strings.HasPrefix(*d.RemoteItem.ID, OCMReceivedPrefix)
 		}
 	}
 	if d.ParentReference != nil && d.ParentReference.Path != nil {
@@ -698,9 +710,7 @@ func (c *Client) sendJSON(ctx context.Context, method, u, op, path string, in, o
 			"Content-Type": []string{"application/json"},
 			"Accept":       []string{"application/json"},
 		},
-		body: func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(payload)), nil
-		},
+		body: bytesBody(payload),
 		op:   op,
 		path: path,
 	})

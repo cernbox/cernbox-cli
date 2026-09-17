@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -302,4 +303,9 @@ func (f *fakeServer) serveMultistatus(entries ...davEntry) {
 		w.WriteHeader(http.StatusMultiStatus)
 		fmt.Fprint(w, multistatusXML("einstein", entries...))
 	})
+}
+
+// openerOf adapts a string to the body opener Upload and UploadChunk take.
+func openerOf(s string) func() (io.ReadCloser, error) {
+	return func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(s)), nil }
 }

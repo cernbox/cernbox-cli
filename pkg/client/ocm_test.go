@@ -213,75 +213,61 @@ func TestListProviders(t *testing.T) {
 	}
 }
 
-func TestReceivedFederatedShares(t *testing.T) {
+// TestReceivedFederatedSharesFiltersOnTheOCMPrefix: sharedWithMe returns local
+// and federated shares in one listing, and only the id prefix tells them apart.
+func TestReceivedFederatedSharesFiltersOnTheOCMPrefix(t *testing.T) {
 	f := newFakeServer(t)
-	f.on(http.MethodGet, ocsRemoteShares, func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[
-		  {"id":"7","name":"shared-data","displayname_owner":"Alice","permissions":1,"state":0,"mountpoint":"/ocm/shared-data"},
-		  {"id":"8","name":"pending-data","uid_owner":"bob","permissions":15,"state":1}
-		]}}`)
+	f.on(http.MethodGet, graphBeta+"/me/drive/sharedWithMe", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"value":[
+		  {"id":"local-1","name":"local-folder","@client.synchronize":true,
+		   "createdBy":{"user":{"id":"marie","displayName":"Marie Curie"}},
+		   "permissions":[{"id":"p1","roles":["`+RoleViewer+`"]}]},
+		  {"id":"ocm-1","name":"shared-data","@client.synchronize":true,
+		   "remoteItem":{"id":"`+OCMReceivedPrefix+`ABC","name":"shared-data"},
+		   "createdBy":{"user":{"id":"alice@other-lab.org","displayName":"Alice"}},
+		   "permissions":[{"id":"p2","roles":["`+RoleEditor+`"]}]}
+		]}`)
 	})
 
 	shares, err := f.client().ReceivedFederatedShares(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(shares) != 2 {
-		t.Fatalf("got %d shares", len(shares))
+	if len(shares) != 1 {
+		t.Fatalf("got %d federated shares, want only the OCM one: %+v", len(shares), shares)
 	}
 
-	if shares[0].Owner != "Alice" {
-		t.Errorf("owner = %q, want the display name when there is one", shares[0].Owner)
+	s := shares[0]
+	if s.Name != "shared-data" {
+		t.Errorf("name = %q", s.Name)
 	}
-	if !shares[0].Accepted {
-		t.Error("state 0 means accepted")
+	if s.Owner != "alice@other-lab.org" {
+		t.Errorf("owner = %q", s.Owner)
 	}
-	if shares[0].Permissions != "viewer" {
-		t.Errorf("permissions = %q, want viewer for a read-only mask", shares[0].Permissions)
+	// The provider is split out of the address, so a listing can show where a
+	// share came from without the reader parsing it.
+	if s.Provider != "other-lab.org" {
+		t.Errorf("provider = %q", s.Provider)
 	}
-
-	if shares[1].Accepted {
-		t.Error("a non-zero state means the share is not accepted")
+	if s.Role != "editor" {
+		t.Errorf("role = %q", s.Role)
 	}
-	if shares[1].Owner != "bob" {
-		t.Errorf("owner = %q, want the uid when there is no display name", shares[1].Owner)
-	}
-	if shares[1].Permissions != "editor" {
-		t.Errorf("permissions = %q, want editor for a write mask", shares[1].Permissions)
+	if !s.Accepted {
+		t.Error("the share should read as accepted")
 	}
 }
 
-func TestOCSPermissionString(t *testing.T) {
-	tests := map[int]string{
-		0:  "",
-		1:  "viewer",
-		15: "editor",
-		19: "collab",
-		31: "collab",
-	}
-	for mask, want := range tests {
-		if got := ocsPermissionString(mask); got != want {
-			t.Errorf("ocsPermissionString(%d) = %q, want %q", mask, got, want)
-		}
-	}
-}
+func TestReceivedFederatedSharesWithNoneAtAll(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodGet, graphBeta+"/me/drive/sharedWithMe", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"value":[]}`)
+	})
 
-// TestNumericState covers both shapes OCS uses for the same field.
-func TestNumericState(t *testing.T) {
-	tests := []struct {
-		in   any
-		want int64
-	}{
-		{float64(0), 0},
-		{float64(15), 15},
-		{"0", 0},
-		{"15", 15},
-		{"not a number", -1},
-		{nil, -1},
+	shares, err := f.client().ReceivedFederatedShares(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		if got := numericState(tt.in); got != tt.want {
-			t.Errorf("numericState(%v) = %d, want %d", tt.in, got, tt.want)
-		}
+	if len(shares) != 0 {
+		t.Errorf("got %d shares, want none", len(shares))
 	}
 }

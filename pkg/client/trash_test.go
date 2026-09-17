@@ -211,3 +211,25 @@ func TestPurgeWholeTrashBin(t *testing.T) {
 		t.Errorf("purge path = %q, want the bin root", got)
 	}
 }
+
+func TestTrashDeletedAtFromMilliseconds(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, trashMultistatus("einstein",
+			trashFixture{Key: "key-1", Name: "notes.txt", Location: "Documents/notes.txt",
+				Size: 10, Deleted: 1767225600000},
+		))
+	})
+
+	items, err := f.client().ListTrash(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items", len(items))
+	}
+	if year := items[0].DeletedAt.Year(); year != 2026 {
+		t.Errorf("deleted year = %d, want 2026: the millisecond timestamp was read as seconds", year)
+	}
+}

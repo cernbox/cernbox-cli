@@ -36,7 +36,10 @@ ocmshareprovidersvc = "{{ grpc.services.ocmshareprovider.address }}"
 spacessvc = "{{ grpc.services.spacesregistry.address }}"
 datagateway = "http://{{ http.services.datagateway.address }}/data"
 
-home_layout = "/home/{{.Username}}"
+# With the localhome driver the home is the mount path itself: the driver maps
+# it to the caller's own directory. Templating a username in here as well would
+# ask for <root>/data/alice/alice, which is nobody's home.
+home_layout = "/home"
 
 ### AUTH ###
 
@@ -81,6 +84,9 @@ home_provider = "/home"
 "/ocm" = {"address" = "{{ grpc.services.storageprovider[1].address }}"}
 "ocm" = {"address" = "{{ grpc.services.storageprovider[1].address }}"}
 
+# A home is needed even though nobody stores anything here: the gateway creates
+# one as part of authenticating, and without somewhere to create it every
+# request comes back 401.
 [[grpc.services.storageprovider]]
 driver = "localhome"
 mount_path = "/home"
@@ -107,7 +113,7 @@ machine_secret = "{{ vars.machine_api_key }}"
 
 [grpc.services.spacesregistry]
 driver = "memory"
-user_space = "/home/{{ .Username }}"
+user_space = "/home"
 machine_secret = "{{ vars.machine_api_key }}"
 
 [grpc.services.spacesregistry.drivers.memory]
@@ -223,6 +229,13 @@ address = ":80"
 insecure = true
 public_url = "http://revad-partner"
 files_namespace = "/home"
+
+# The graph API, which is how the CLI learns who it is authenticated as.
+[http.services.ocgraph]
+address = ":80"
+base_url = "http://revad-partner"
+# Without this, sharedWithMe silently leaves federated shares out.
+ocm_enabled = true
 
 [http.services.ocs]
 address = ":80"

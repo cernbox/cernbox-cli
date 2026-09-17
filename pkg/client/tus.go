@@ -122,21 +122,18 @@ func (c *Client) UploadOffset(ctx context.Context, up *Upload) (int64, error) {
 
 // UploadChunk sends the next chunk at the given offset and returns the server's
 // new offset.
-func (c *Client) UploadChunk(ctx context.Context, up *Upload, offset int64, body func() (io.ReadCloser, error), length int64) (int64, error) {
+func (c *Client) UploadChunk(ctx context.Context, up *Upload, offset int64, open func() (io.ReadCloser, error), length int64) (int64, error) {
 	header := http.Header{
 		hdrTusResumable: []string{tusVersion},
 		hdrUploadOffset: []string{strconv.FormatInt(offset, 10)},
 		"Content-Type":  []string{"application/offset+octet-stream"},
-	}
-	if length >= 0 {
-		header.Set("Content-Length", strconv.FormatInt(length, 10))
 	}
 
 	resp, err := c.do(ctx, request{
 		method:  http.MethodPatch,
 		url:     up.URL,
 		header:  header,
-		body:    body,
+		body:    readerBody(open, length),
 		op:      "upload",
 		path:    up.Path,
 		expects: []int{http.StatusNoContent, http.StatusOK, http.StatusCreated},

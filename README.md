@@ -37,13 +37,19 @@ RPM and deb packages are built by the release pipeline and attached to each rele
 | Tokens | `token list/revoke` |
 | Shell | `version` `completion` |
 
-### Two things the CLI deliberately does not do
+### Server-side gaps this client works around
 
-**Locking.** There is no `cernbox lock`. Reva's WebDAV `LOCK` handler is a placeholder: it returns the same hardcoded token (`opaquelocktoken:0000…`) to every caller and records nothing, and `UNLOCK` returns 501. A lock command built on it would report success and lock nothing, which is worse than not having one. It can be added once reva implements locking for real.
+Running the CLI against a real reva turned up several endpoints that exist but do nothing. Each is handled deliberately rather than left to fail:
 
-**Two-way sync.** `sync` is a one-way mirror. Genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there"; without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
+| Gap | What the CLI does |
+| --- | --- |
+| `LOCK` returns a hardcoded token and records nothing; `UNLOCK` returns 501 | No `lock` command at all. One built on this would report success and lock nothing |
+| `search-files` REPORT is a stub returning 501 | `find` asks the server first, then falls back to walking the tree client-side |
+| OCS `remote_shares` is an empty handler that writes nothing | `ocm received` reads the graph `sharedWithMe` endpoint, filtering on the OCM id prefix |
+| App-token creation is not exposed publicly | `token create` explains where to create one; `list` and `revoke` work normally |
+| Reva's demo app provider advertises no mime types, so nothing can open anything | `open --web` works regardless; the application link needs a real provider such as Collabora |
 
-`token create` reports how to create one instead of failing with a 404: CERNBox exposes listing and revocation of app tokens over its public API, but creation goes through the browser enrolment flow.
+**Two-way sync** is a deliberate omission rather than a gap. `sync` is a one-way mirror: genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there", and without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
 
 ## Authentication
 

@@ -298,24 +298,6 @@ func TestUnicodeAndSpacesInNames(t *testing.T) {
 	}
 }
 
-// ── search ───────────────────────────────────────────────────────────────────
-
-func TestFind(t *testing.T) {
-	e := setup(t)
-	e.mustRun("put", e.writeLocal("needle.txt", []byte("x")), e.remotePath("needle.txt"))
-	e.mustRun("put", e.writeLocal("other.txt", []byte("y")), e.remotePath("other.txt"))
-
-	var results []entry
-	e.runJSON(&results, "find", e.remote, "--name", "needle")
-
-	for _, r := range results {
-		if strings.Contains(r.Name, "needle") {
-			return
-		}
-	}
-	t.Errorf("find did not return the matching file: %+v", results)
-}
-
 // ── sharing ──────────────────────────────────────────────────────────────────
 
 func TestShareLifecycle(t *testing.T) {
