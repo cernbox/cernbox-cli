@@ -65,7 +65,7 @@ The CLI resolves credentials through an ordered chain, first success wins. Each 
 
 1. **Explicit token** — `--token`, or `$CERNBOX_TOKEN`. Escape hatch and CI mechanism.
 2. **Cached session** — a previously obtained, still-valid token from the local token cache (§3.4).
-3. **Kerberos** — a TGT is present (`KRB5CCNAME` or the default ccache) and usable. This is the lxplus path and the one that must be silent. Phase 1 turns the TGT into an SSO access token (§3.2); phase 2 can turn it directly into a Reva token (§3.3).
+3. **Kerberos** — a TGT is present (`KRB5CCNAME` or the default ccache) and usable. This is the lxplus path and the one that must be silent. The ticket is presented straight to CERNBox, which verifies it against its own keytab (§3.3); exchanging it for an SSO token first (§3.2) is the fallback for deployments without the Kerberos auth provider.
 4. **App token** — a CERNBox app password from `$CERNBOX_APP_TOKEN` or a file referenced by `--app-token-file`. For batch jobs and cron where no ticket is forwarded.
 5. **OIDC device flow** — prints a URL and a user code, polls for completion. For laptops and non-CERN accounts. This is the same shape as the existing Nextcloud-client enrolment flow in [loginflow.go](https://github.com/cs3org/reva/blob/master/internal/http/services/loginflow/loginflow.go), and should reuse that server side rather than adding a second flow.
 
@@ -129,16 +129,19 @@ publicshares = "localhost:9142"
 auth_manager = "kerberos"
 
 [grpc.services.authprovider.auth_managers.kerberos]
-keytab             = "/etc/cernbox/krb5.keytab"
-service_principals = ["HTTP/cernbox.cern.ch@CERN.CH"]
-realm              = "CERN.CH"
-strip_realm        = true
+keytab                 = "/etc/cernbox/krb5.keytab"
+service_principal      = "HTTP/cernbox.cern.ch"
+realm                  = "CERN.CH"
+user_claim             = "username"   # which user field the principal names
+max_clock_skew_seconds = 300
 
 [http.middlewares.auth]
 credential_chain = ["spnego", "basic", "bearer", "publicshares"]
 ```
 
-**4. CLI provider** — the Kerberos chain entry gains a second mode: `GET https://cernbox.cern.ch/auth/kerberos` with `Authorization: Negotiate <AP-REQ>`, reading the Reva JWT back from the `x-access-token` response header written by the existing token writer. Which mode is used is a config toggle (`auth.kerberos.mode = sso|spnego|auto`), defaulting to `auto`: try SPNEGO, fall back to SSO. That fallback is what buys the resilience.
+**4. CLI provider** — the Kerberos chain entry gains a second mode: `GET https://cernbox.cern.ch/auth/kerberos` with `Authorization: Negotiate <AP-REQ>`, reading the Reva JWT back from the `x-access-token` response header written by the existing token writer. Which mode is used is a config toggle (`auth.kerberos.mode = sso|spnego|auto`).
+
+**This is what shipped, and `spnego` is the default.** The original plan was to default to `auto` and treat SSO as the safe fallback, on the reasoning that the server side did not exist yet. It does now — all four pieces above are implemented and tested against a real KDC — and with them in place the argument reverses: `auto` makes a successful login depend on either CERNBox or auth.cern.ch being reachable, which is two things that can be down instead of one. Native Kerberos keeps the identity path as short as it can be, so `spnego` is the default and `sso` is what a deployment without the auth provider selects explicitly.
 
 #### Design constraints worth stating explicitly
 

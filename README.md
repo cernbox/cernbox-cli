@@ -66,11 +66,15 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 
 Basic authentication is never reached automatically. Against a server that expects Kerberos, falling through to a password prompt would be the wrong thing to do, so it joins the chain only when asked for by name.
 
-Kerberos works in two modes, selected by `auth.kerberos.mode`:
+Kerberos works in three modes, selected by `auth.kerberos.mode`:
 
-- `sso` (default) — the ticket authenticates you to CERN SSO, which issues an OIDC token that CERNBox already accepts. No server-side change.
-- `spnego` — the ticket is presented directly to CERNBox as a SPNEGO token. Requires the Kerberos auth provider to be enabled server side.
+- `spnego` (default) — the ticket is presented directly to CERNBox, which verifies it against its own keytab. This is native Kerberos: nothing stands between the ticket and the service, so a login depends on nothing being up but CERNBox itself.
+- `sso` — the ticket authenticates you to CERN SSO, which issues an OIDC token that CERNBox accepts. For a deployment whose reva has no Kerberos auth provider.
 - `auto` — try `spnego`, fall back to `sso`.
+
+Native Kerberos needs the server side that ships with this work: the `kerberos` auth manager, the `spnego` credential strategy, and the `authtoken` HTTP service, all in reva. `dev/revad/cernbox.toml` is a working configuration of all three, against the realm the `kdc` container serves.
+
+If the endpoint is a DNS alias, the client may ask the KDC for a ticket under the node's name rather than the alias, and the KDC will refuse it. `--kerberos-spn` names the service principal explicitly; `rdns = false` in your `krb5.conf` fixes it for every Kerberos client on the machine.
 
 Tokens are cached in `/tmp/cernbox_cc_$(id -u)` at mode `0600`, not in your home directory: on lxplus home is shared across every node in the cluster, and a bearer token there has a wider blast radius than one in node-local `/tmp`. Override with `$CERNBOX_TOKEN_CACHE`.
 
