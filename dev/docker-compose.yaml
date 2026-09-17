@@ -1,0 +1,35 @@
+services:
+  eos-storage:
+    build:
+      context: .
+      dockerfile: Dockerfile.eos
+    # security_opt:
+    #   - seccomp:unconfined
+    ulimits:
+      nproc: 57875
+      nofile: 1024000
+      core: -1
+    # privileged: true
+    # sysctls:
+    #   - net.ipv6.conf.all.disable_ipv6=0
+    healthcheck:
+      test: eos file info /eos/user
+      interval: 10s
+      timeout: 5s
+  revad:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - ./revad:/etc/revad:ro
+      - ./pki:/etc/pki:ro
+    environment:
+      - SSL_CERT_FILE=/etc/pki/ca.crt
+    command: -c /etc/revad/cernbox.toml
+    depends_on:
+      eos-storage:
+        condition: service_healthy
