@@ -3,19 +3,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.eos
-    # security_opt:
-    #   - seccomp:unconfined
     ulimits:
       nproc: 57875
       nofile: 1024000
       core: -1
-    # privileged: true
-    # sysctls:
-    #   - net.ipv6.conf.all.disable_ipv6=0
     healthcheck:
       test: eos file info /eos/user
       interval: 10s
       timeout: 5s
+
+  # The CERNBox under test.
   revad:
     build:
       context: .
@@ -24,6 +21,7 @@ services:
       - "80:80"
     tmpfs:
       - /tmp:size=256m,mode=1777
+      - /var/tmp:size=64m,mode=1777
     volumes:
       - ./revad:/etc/revad:ro
       - ./pki:/etc/pki:ro
@@ -33,3 +31,23 @@ services:
     depends_on:
       eos-storage:
         condition: service_healthy
+
+  # The federation partner. Federated sharing needs two providers that trust
+  # each other, so the OCM commands have somewhere to send an invitation and a
+  # share. It runs on a local filesystem rather than EOS: its job is to be the
+  # far end, not to be a second CERNBox.
+  revad-partner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8081:80"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/tmp:size=64m,mode=1777
+    volumes:
+      - ./revad:/etc/revad:ro
+      - ./pki:/etc/pki:ro
+    environment:
+      - SSL_CERT_FILE=/etc/pki/ca.crt
+    command: -c /etc/revad/partner.toml

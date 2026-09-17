@@ -200,19 +200,3 @@ func TestOpenWebLink(t *testing.T) {
 		t.Errorf("stdout = %q, want a URL", stdout)
 	}
 }
-
-// ── federated sharing ────────────────────────────────────────────────────────
-
-// TestOCMReportsAbsenceClearly: the dev environment runs no sciencemesh
-// service, so this checks the explanation rather than the feature. Exercising
-// federated sharing for real needs two instances.
-func TestOCMReportsAbsenceClearly(t *testing.T) {
-	e := setup(t)
-	stdout, stderr, code := e.run("ocm", "contacts")
-	if code == 0 {
-		t.Skipf("this deployment does have federated sharing:\n%s", stdout)
-	}
-	if !strings.Contains(stderr, "federated sharing") {
-		t.Errorf("a missing OCM service should be explained, got:\n%s", stderr)
-	}
-}

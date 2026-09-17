@@ -883,3 +883,51 @@ func TestUnknownCommandIsAUsageError(t *testing.T) {
 func mustWriter(stdout, stderr *bytes.Buffer) *output.Writer {
 	return output.New(stdout, output.FormatTable, output.Stderr(stderr))
 }
+
+// TestCommandsDumpListsTheTree guards the hidden command the integration
+// coverage check depends on: if it stops listing the tree, that check silently
+// passes for commands it never saw.
+func TestCommandsDumpListsTheTree(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{flags: &globalFlags{}, stdout: &stdout, stderr: &stderr}
+	root := newRootCmd(app)
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetArgs([]string{"__commands"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	listed := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		listed[strings.TrimSpace(line)] = true
+	}
+
+	// A spread of leaves and nested subcommands, so a regression in either the
+	// walk or the nesting shows up.
+	for _, want := range []string{
+		"ls", "put", "get", "sync", "stat",
+		"share create", "link password", "trash purge",
+		"versions download", "space info", "ocm invite accept", "token revoke",
+	} {
+		if !listed[want] {
+			t.Errorf("%q is missing from the command dump:\n%s", want, stdout.String())
+		}
+	}
+
+	// Container commands are not runnable, so listing them would demand
+	// coverage for something that does nothing.
+	for _, unwanted := range []string{"share", "link", "trash", "ocm", "ocm invite"} {
+		if listed[unwanted] {
+			t.Errorf("%q is a container command and should not be listed", unwanted)
+		}
+	}
+
+	// Nor should the helpers cobra generates.
+	for _, unwanted := range []string{"help", "completion", "__commands"} {
+		if listed[unwanted] {
+			t.Errorf("%q should not be listed", unwanted)
+		}
+	}
+}

@@ -133,11 +133,13 @@ Code 3 versus 4 is the distinction that matters in scripts: 3 is worth retrying 
 ```bash
 make build              # build ./cernbox
 make test               # unit tests
-make dev-up             # revad + EOS in Docker
+make dev-up             # revad + EOS + the federation partner, in Docker
 make test-integration   # integration tests against the dev environment
 make dev-down
 make lint
 ```
+
+The dev environment runs three containers: EOS, the CERNBox under test, and a second reva acting as a federation partner so the `ocm` commands have a real far end. Every command in the tree is exercised against it — `TestEveryCommandIsCovered` compares the binary's own command list against a map of which test covers what, and fails when a command is added without one.
 
 See [docs/design.md](docs/design.md) for the full design, including the server-side Kerberos work.
 

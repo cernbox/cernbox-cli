@@ -180,6 +180,7 @@ func newRootCmd(app *App) *cobra.Command {
 
 		newVersionCmd(app),
 		newCompletionCmd(),
+		newCommandsCmd(),
 	)
 	return cmd
 }

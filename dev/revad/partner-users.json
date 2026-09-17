@@ -1,0 +1,16 @@
+[
+	{
+		"id": {
+			"opaque_id": "9c6e1f0a-3f8a-4a0e-9f1a-1d2c3b4a5e6f",
+			"idp": "revad-partner",
+			"type": 1
+		},
+		"username": "alice",
+		"secret": "wonderland",
+		"mail": "alice@partner.example.org",
+		"display_name": "Alice Partner",
+		"groups": ["partner-users"],
+		"uid_number": 20000,
+		"gid_number": 20000
+	}
+]
