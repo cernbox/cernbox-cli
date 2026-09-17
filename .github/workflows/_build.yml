@@ -131,6 +131,8 @@ jobs:
         run: |
           echo "=== revad ==="
           docker compose -f dev/docker-compose.yaml logs --tail=200 revad
+          echo "=== revad-partner ==="
+          docker compose -f dev/docker-compose.yaml logs --tail=200 revad-partner
           echo "=== eos-storage ==="
           docker compose -f dev/docker-compose.yaml logs --tail=100 eos-storage
 

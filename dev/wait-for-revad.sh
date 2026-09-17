@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-# Wait for the dev revad to answer. EOS takes a while to come up behind it, so
-# a bare "docker compose up" is not enough to start testing against.
+# Wait for the dev environment to answer. EOS takes a while to come up behind
+# revad, and the federation partner has to be reachable before the OCM tests
+# can run, so a bare "docker compose up" is not enough to start testing.
 set -euo pipefail
 
-URL="${CERNBOX_DEV_URL:-http://localhost/status.php}"
 ATTEMPTS="${CERNBOX_DEV_ATTEMPTS:-60}"
 SLEEP="${CERNBOX_DEV_SLEEP:-5}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
 
-for i in $(seq 1 "$ATTEMPTS"); do
-    if curl -sf -o /dev/null "$URL"; then
-        echo "revad is up"
-        exit 0
-    fi
-    echo "waiting for revad... ($i/$ATTEMPTS)"
-    sleep "$SLEEP"
-done
+wait_for() {
+    local name="$1" url="$2"
+    for i in $(seq 1 "$ATTEMPTS"); do
+        if curl -sf -o /dev/null "$url"; then
+            echo "$name is up"
+            return 0
+        fi
+        echo "waiting for $name... ($i/$ATTEMPTS)"
+        sleep "$SLEEP"
+    done
 
-echo "revad did not come up within $((ATTEMPTS * SLEEP))s" >&2
-docker compose -f "$(dirname "$0")/docker-compose.yaml" logs --tail=50 revad >&2 || true
-exit 1
+    echo "$name did not come up within $((ATTEMPTS * SLEEP))s" >&2
+    docker compose -f "$DIR/docker-compose.yaml" logs --tail=50 >&2 || true
+    return 1
+}
+
+wait_for revad "${CERNBOX_DEV_URL:-http://localhost/status.php}"
+wait_for "the federation partner" "${CERNBOX_PARTNER_URL:-http://localhost:8081/status.php}"

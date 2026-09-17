@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
 	"github.com/cernbox/cernbox-cli/pkg/client"
@@ -265,4 +267,46 @@ func newCompletionCmd() *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+// newCommandsCmd prints every command path in the tree, one per line.
+//
+// It is hidden because it is not for people: it exists so the integration
+// suite can assert that every command is actually exercised somewhere. Without
+// it, "everything is tested" is a claim nobody can check, and it silently stops
+// being true the first time someone adds a command.
+func newCommandsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "__commands",
+		Short:  "Print every command path (hidden; used by the test suite)",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			for _, path := range commandPaths(cmd.Root(), nil) {
+				if _, err := fmt.Fprintln(out, path); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+// commandPaths walks the tree and returns the runnable command paths, without
+// the root's own name.
+func commandPaths(cmd *cobra.Command, prefix []string) []string {
+	var out []string
+	for _, child := range cmd.Commands() {
+		if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
+			continue
+		}
+		path := append(append([]string{}, prefix...), child.Name())
+		if child.Runnable() {
+			out = append(out, strings.Join(path, " "))
+		}
+		out = append(out, commandPaths(child, path)...)
+	}
+	return out
 }

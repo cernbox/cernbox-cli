@@ -1,0 +1,14 @@
+[
+	{
+		"id": {
+			"opaque_id": "6b2f1d3e-7c4a-4b5d-8e9f-0a1b2c3d4e5f",
+			"idp": "revad-partner",
+			"type": 1
+		},
+		"group_name": "partner-users",
+		"mail": "partner-users@partner.example.org",
+		"display_name": "Partner users",
+		"gid_number": 20000,
+		"members": ["alice"]
+	}
+]

@@ -29,6 +29,17 @@ const (
 	password = "relativity"
 	// homeRoot matches the dev revad's home_layout for the test user.
 	homeRoot = "/eos/user/e/einstein"
+
+	// A second local user, so shares can be checked from the receiving side.
+	otherUser     = "marie"
+	otherPassword = "radioactivity"
+
+	// The federation partner: a second provider, so the OCM commands have a
+	// real far end rather than only an error path.
+	partnerEndpoint = "http://localhost:8081"
+	partnerDomain   = "revad-partner"
+	partnerUser     = "alice"
+	partnerPassword = "wonderland"
 )
 
 // binary is the path to the cernbox binary built by TestMain.
@@ -59,8 +70,19 @@ func TestMain(m *testing.M) {
 }
 
 func reachable() bool {
+	return respondsOK(endpoint + "/status.php")
+}
+
+// partnerReachable reports whether the federation partner is running. The OCM
+// tests skip rather than fail without it, so the suite still says something
+// useful against a deployment that has no partner.
+func partnerReachable() bool {
+	return respondsOK(partnerEndpoint + "/status.php")
+}
+
+func respondsOK(url string) bool {
 	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get(endpoint + "/status.php")
+	resp, err := c.Get(url)
 	if err != nil {
 		return false
 	}
@@ -106,18 +128,48 @@ func setup(t *testing.T) *env {
 	return e
 }
 
+// account identifies who the CLI runs as, and against which server.
+type account struct {
+	endpoint string
+	user     string
+	password string
+	// cacheKey keeps each account's token cache separate, so switching user
+	// within a test cannot reuse the previous identity's session.
+	cacheKey string
+}
+
+func (e *env) self() account {
+	return account{endpoint: endpoint, user: username, password: password, cacheKey: "self"}
+}
+
+func (e *env) other() account {
+	return account{endpoint: endpoint, user: otherUser, password: otherPassword, cacheKey: "other"}
+}
+
+func (e *env) partner() account {
+	return account{
+		endpoint: partnerEndpoint, user: partnerUser,
+		password: partnerPassword, cacheKey: "partner",
+	}
+}
+
 // cmd builds an exec.Cmd for the CLI with this test's isolated environment.
 func (e *env) cmd(args ...string) *exec.Cmd {
+	return e.cmdAs(e.self(), args...)
+}
+
+// cmdAs builds an exec.Cmd running as the given account.
+func (e *env) cmdAs(a account, args ...string) *exec.Cmd {
 	full := append([]string{
-		"--endpoint", endpoint,
+		"--endpoint", a.endpoint,
 		"--method", "basic",
 	}, args...)
 
 	c := exec.Command(binary, full...)
 	c.Env = append(os.Environ(),
-		"CERNBOX_USERNAME="+username,
-		"CERNBOX_PASSWORD="+password,
-		"CERNBOX_TOKEN_CACHE="+filepath.Join(e.cacheDir, "tokens"),
+		"CERNBOX_USERNAME="+a.user,
+		"CERNBOX_PASSWORD="+a.password,
+		"CERNBOX_TOKEN_CACHE="+filepath.Join(e.cacheDir, "tokens-"+a.cacheKey),
 		// Point the config at a file that does not exist so a developer's own
 		// configuration cannot leak into the test.
 		"CERNBOX_CONFIG="+filepath.Join(e.cacheDir, "absent.yaml"),
@@ -130,8 +182,14 @@ func (e *env) cmd(args ...string) *exec.Cmd {
 // run executes the CLI and returns stdout, stderr and the exit code.
 func (e *env) run(args ...string) (stdout, stderr string, code int) {
 	e.t.Helper()
+	return e.runAs(e.self(), args...)
+}
 
-	c := e.cmd(args...)
+// runAs executes the CLI as the given account.
+func (e *env) runAs(a account, args ...string) (stdout, stderr string, code int) {
+	e.t.Helper()
+
+	c := e.cmdAs(a, args...)
 	var outBuf, errBuf strings.Builder
 	c.Stdout = &outBuf
 	c.Stderr = &errBuf
@@ -152,9 +210,16 @@ func (e *env) run(args ...string) (stdout, stderr string, code int) {
 // mustRun executes the CLI and fails the test on a non-zero exit.
 func (e *env) mustRun(args ...string) string {
 	e.t.Helper()
-	stdout, stderr, code := e.run(args...)
+	return e.mustRunAs(e.self(), args...)
+}
+
+// mustRunAs executes the CLI as the given account and fails on a non-zero exit.
+func (e *env) mustRunAs(a account, args ...string) string {
+	e.t.Helper()
+	stdout, stderr, code := e.runAs(a, args...)
 	if code != 0 {
-		e.t.Fatalf("cernbox %v exited %d\nstdout:\n%s\nstderr:\n%s", args, code, stdout, stderr)
+		e.t.Fatalf("cernbox (%s@%s) %v exited %d\nstdout:\n%s\nstderr:\n%s",
+			a.user, a.endpoint, args, code, stdout, stderr)
 	}
 	return stdout
 }
@@ -162,7 +227,13 @@ func (e *env) mustRun(args ...string) string {
 // runJSON executes the CLI with --output json and decodes the result.
 func (e *env) runJSON(v any, args ...string) {
 	e.t.Helper()
-	out := e.mustRun(append([]string{"--output", "json"}, args...)...)
+	e.runJSONAs(e.self(), v, args...)
+}
+
+// runJSONAs executes the CLI as the given account with --output json.
+func (e *env) runJSONAs(a account, v any, args ...string) {
+	e.t.Helper()
+	out := e.mustRunAs(a, append([]string{"--output", "json"}, args...)...)
 	if err := json.Unmarshal([]byte(out), v); err != nil {
 		e.t.Fatalf("cernbox %v produced invalid JSON: %v\n%s", args, err, out)
 	}
