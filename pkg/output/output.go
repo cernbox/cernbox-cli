@@ -1,0 +1,301 @@
+// Package output renders command results as an aligned table, as JSON, or as
+// CSV, so that every command supports --output without each one re-inventing
+// formatting.
+//
+// A command builds a Table once, holding both the display strings and the
+// structured value behind them. Table mode prints the strings; JSON mode
+// marshals the structured value. Keeping the two separate is what stops JSON
+// output from degrading into pre-formatted human text ("1.2 MiB" instead of
+// 1258291), which would make it useless to a script.
+package output
+
+import (
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"text/tabwriter"
+	"time"
+)
+
+// Format selects the rendering style.
+type Format string
+
+const (
+	// FormatTable is aligned, human-readable columns.
+	FormatTable Format = "table"
+	// FormatJSON is a single JSON document, or newline-delimited JSON when
+	// streaming.
+	FormatJSON Format = "json"
+	// FormatCSV is comma-separated values with a header row.
+	FormatCSV Format = "csv"
+)
+
+// ParseFormat validates a --output value.
+func ParseFormat(s string) (Format, error) {
+	switch Format(strings.ToLower(s)) {
+	case FormatTable:
+		return FormatTable, nil
+	case FormatJSON:
+		return FormatJSON, nil
+	case FormatCSV:
+		return FormatCSV, nil
+	default:
+		return "", fmt.Errorf("unknown output format %q: want table, json, or csv", s)
+	}
+}
+
+// Table is a rendered result: display strings for humans, and the structured
+// value that JSON mode marshals.
+type Table struct {
+	// Headers label the columns. In CSV mode they become the header row; in
+	// table mode they are printed unless the writer is quiet.
+	Headers []string
+	// Rows holds the display strings, one slice per row.
+	Rows [][]string
+	// Items is the structured value marshalled in JSON mode. When nil, JSON
+	// mode falls back to objects built from Headers and Rows.
+	Items any
+}
+
+// Writer renders results in the configured format.
+type Writer struct {
+	out    io.Writer
+	err    io.Writer
+	format Format
+	quiet  bool
+	stream bool
+	color  bool
+
+	streamEnc *json.Encoder
+}
+
+// Option configures a Writer.
+type Option func(*Writer)
+
+// Quiet suppresses headers and informational messages.
+func Quiet(q bool) Option { return func(w *Writer) { w.quiet = q } }
+
+// Stream makes JSON mode emit newline-delimited JSON, one object per item,
+// instead of buffering a single document. Listings of unknown size use it so
+// the CLI does not hold the whole result in memory.
+func Stream(s bool) Option { return func(w *Writer) { w.stream = s } }
+
+// Color enables ANSI styling. Callers should pass IsTerminal(os.Stdout).
+func Color(c bool) Option { return func(w *Writer) { w.color = c } }
+
+// Stderr sets the stream used for informational messages. It defaults to
+// os.Stderr so that messages never contaminate piped output.
+func Stderr(e io.Writer) Option { return func(w *Writer) { w.err = e } }
+
+// New returns a Writer rendering to out in the given format.
+func New(out io.Writer, format Format, opts ...Option) *Writer {
+	w := &Writer{out: out, err: os.Stderr, format: format}
+	for _, o := range opts {
+		o(w)
+	}
+	return w
+}
+
+// Format reports the writer's format, for commands that need to vary behaviour
+// (for example suppressing a progress bar under --output json).
+func (w *Writer) Format() Format { return w.format }
+
+// IsQuiet reports whether informational output is suppressed.
+func (w *Writer) IsQuiet() bool { return w.quiet }
+
+// Render writes a complete table in the writer's format.
+func (w *Writer) Render(t Table) error {
+	switch w.format {
+	case FormatJSON:
+		return w.renderJSON(t)
+	case FormatCSV:
+		return w.renderCSV(t)
+	default:
+		return w.renderTable(t)
+	}
+}
+
+// Object writes a single structured value: a JSON document in JSON mode, an
+// aligned key/value list otherwise. Used by commands like status and stat whose
+// result is one record rather than a list.
+func (w *Writer) Object(v any, fields ...Field) error {
+	if w.format == FormatJSON {
+		return w.encodeJSON(v)
+	}
+	t := Table{Headers: nil}
+	for _, f := range fields {
+		t.Rows = append(t.Rows, []string{f.Name + ":", f.Value})
+	}
+	if w.format == FormatCSV {
+		t.Headers = []string{"field", "value"}
+		return w.renderCSV(t)
+	}
+	return w.renderTable(t)
+}
+
+// Field is one line of an Object rendering.
+type Field struct {
+	Name  string
+	Value string
+}
+
+// Item writes one element of a streaming result. In streaming JSON mode it
+// emits a single NDJSON line; otherwise it is a no-op and the caller is
+// expected to accumulate rows and call Render.
+func (w *Writer) Item(v any) error {
+	if w.format != FormatJSON || !w.stream {
+		return nil
+	}
+	if w.streamEnc == nil {
+		w.streamEnc = json.NewEncoder(w.out)
+	}
+	return w.streamEnc.Encode(v)
+}
+
+// Streaming reports whether Item will actually write something, so callers can
+// skip building display rows they will not use.
+func (w *Writer) Streaming() bool { return w.format == FormatJSON && w.stream }
+
+// Msg writes an informational line to stderr. It is suppressed when quiet, and
+// in JSON mode, so that --output json produces a parseable stream and nothing
+// else.
+func (w *Writer) Msg(format string, args ...any) {
+	if w.quiet || w.format == FormatJSON {
+		return
+	}
+	fmt.Fprintf(w.err, format+"\n", args...)
+}
+
+// Warn writes a warning to stderr. Unlike Msg it survives JSON mode, because a
+// warning the user cannot see is worse than one that interleaves with a pipe,
+// but it is still suppressed when quiet.
+func (w *Writer) Warn(format string, args ...any) {
+	if w.quiet {
+		return
+	}
+	prefix := "warning: "
+	if w.color {
+		prefix = "\033[33mwarning:\033[0m "
+	}
+	fmt.Fprintf(w.err, prefix+format+"\n", args...)
+}
+
+func (w *Writer) renderTable(t Table) error {
+	tw := tabwriter.NewWriter(w.out, 0, 4, 2, ' ', 0)
+	if len(t.Headers) > 0 && !w.quiet {
+		header := strings.Join(t.Headers, "\t")
+		if w.color {
+			header = "\033[1m" + header + "\033[0m"
+		}
+		if _, err := fmt.Fprintln(tw, header); err != nil {
+			return err
+		}
+	}
+	for _, row := range t.Rows {
+		if _, err := fmt.Fprintln(tw, strings.Join(row, "\t")); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+func (w *Writer) renderCSV(t Table) error {
+	cw := csv.NewWriter(w.out)
+	if len(t.Headers) > 0 {
+		if err := cw.Write(t.Headers); err != nil {
+			return err
+		}
+	}
+	for _, row := range t.Rows {
+		if err := cw.Write(row); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+func (w *Writer) renderJSON(t Table) error {
+	if t.Items != nil {
+		return w.encodeJSON(t.Items)
+	}
+	// No structured value was supplied: build objects from the display strings
+	// so that --output json still produces something usable.
+	objs := make([]map[string]string, 0, len(t.Rows))
+	for _, row := range t.Rows {
+		obj := make(map[string]string, len(row))
+		for i, cell := range row {
+			key := fmt.Sprintf("column%d", i)
+			if i < len(t.Headers) {
+				key = t.Headers[i]
+			}
+			obj[key] = cell
+		}
+		objs = append(objs, obj)
+	}
+	return w.encodeJSON(objs)
+}
+
+func (w *Writer) encodeJSON(v any) error {
+	enc := json.NewEncoder(w.out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// ── formatting helpers ───────────────────────────────────────────────────────
+
+const (
+	_ = 1 << (10 * iota)
+	kib
+	mib
+	gib
+	tib
+	pib
+)
+
+// HumanSize renders a byte count the way ls -h does.
+func HumanSize(n int64) string {
+	switch {
+	case n < kib:
+		return fmt.Sprintf("%dB", n)
+	case n < mib:
+		return fmt.Sprintf("%.1fK", float64(n)/kib)
+	case n < gib:
+		return fmt.Sprintf("%.1fM", float64(n)/mib)
+	case n < tib:
+		return fmt.Sprintf("%.1fG", float64(n)/gib)
+	case n < pib:
+		return fmt.Sprintf("%.1fT", float64(n)/tib)
+	default:
+		return fmt.Sprintf("%.1fP", float64(n)/pib)
+	}
+}
+
+// HumanTime renders a timestamp the way ls -l does: time of day for the last
+// six months, year otherwise. The reference time is a parameter so the
+// behaviour is testable.
+func HumanTime(t, now time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	if now.Sub(t) < 180*24*time.Hour && t.Before(now.Add(24*time.Hour)) {
+		return t.Format("Jan _2 15:04")
+	}
+	return t.Format("Jan _2  2006")
+}
+
+// IsTerminal reports whether f is attached to a character device. It is used to
+// decide on colour and progress bars without pulling in a terminal library.
+func IsTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
