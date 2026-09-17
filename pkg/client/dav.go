@@ -49,6 +49,9 @@ type ResourceInfo struct {
 	Permissions string `json:"permissions,omitempty"`
 	// Checksums holds the server-side checksums, keyed by algorithm.
 	Checksums map[string]string `json:"checksums,omitempty"`
+	// WebURL is the link that opens this resource in the web interface, when
+	// the server reports one.
+	WebURL string `json:"web_url,omitempty"`
 }
 
 // multistatus is the PROPFIND response envelope.
@@ -77,6 +80,7 @@ type propsRaw struct {
 	OCID         string        `xml:"http://owncloud.org/ns fileid"`
 	OCPerms      string        `xml:"http://owncloud.org/ns permissions"`
 	OCSize       string        `xml:"http://owncloud.org/ns size"`
+	OCLink       string        `xml:"http://owncloud.org/ns privatelink"`
 	OCChecksums  *checksumsRaw `xml:"http://owncloud.org/ns checksums"`
 
 	// Trash-bin properties, present only in a trash listing.
@@ -109,6 +113,7 @@ const propfindBody = `<?xml version="1.0" encoding="UTF-8"?>
     <oc:fileid/>
     <oc:permissions/>
     <oc:size/>
+    <oc:privatelink/>
     <oc:checksums/>
   </d:prop>
 </d:propfind>`
@@ -254,6 +259,7 @@ func entryToInfo(entry multistatusEntry) (ResourceInfo, bool) {
 		ID:          props.OCID,
 		MimeType:    props.GetType,
 		Permissions: props.OCPerms,
+		WebURL:      props.OCLink,
 	}
 	if info.Name == "" {
 		info.Name = path.Base(p)

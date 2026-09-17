@@ -341,3 +341,71 @@ func TestSyncDryRunReportsWithoutActing(t *testing.T) {
 		t.Error("a dry run uploaded the file")
 	}
 }
+
+// ── open ─────────────────────────────────────────────────────────────────────
+
+func TestOpenPrintsApplicationLink(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.odt", "doc")
+
+	stdout, _, err := run(t, box, "open", "/eos/user/e/einstein/report.odt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The URL goes to stdout so it can be piped into a clipboard tool.
+	if strings.TrimSpace(stdout) != "https://office.test/edit?wopi=abc" {
+		t.Errorf("stdout = %q, want just the URL", stdout)
+	}
+}
+
+func TestOpenWebPrintsTheInterfaceLink(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.odt", "doc")
+
+	stdout, _, err := run(t, box, "open", "--web", "/eos/user/e/einstein/report.odt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "/files/spaces/") {
+		t.Errorf("stdout = %q, want the web interface link", stdout)
+	}
+}
+
+// TestOpenWarnsAboutPostSessions: a POST session cannot be opened by pasting
+// the link, and printing one without saying so sends the user in circles.
+func TestOpenWarnsAboutPostSessions(t *testing.T) {
+	box := newTestBox(t)
+	box.appMethod = "POST"
+	box.putFile("/eos/user/e/einstein/report.odt", "doc")
+
+	_, stderr, err := run(t, box, "open", "/eos/user/e/einstein/report.odt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "cannot be opened directly") {
+		t.Errorf("stderr should explain the POST session:\n%s", stderr)
+	}
+}
+
+func TestOpenRejectsUnknownViewMode(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.odt", "doc")
+
+	_, _, err := run(t, box, "open", "--view-mode", "sideways", "/eos/user/e/einstein/report.odt")
+	if cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Errorf("got %v, want a usage error", err)
+	}
+}
+
+func TestAppsCommand(t *testing.T) {
+	box := newTestBox(t)
+	stdout, _, err := run(t, box, "apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"odt", "Collabora"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("apps output is missing %q:\n%s", want, stdout)
+		}
+	}
+}

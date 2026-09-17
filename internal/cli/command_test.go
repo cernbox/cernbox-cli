@@ -26,6 +26,9 @@ type testBox struct {
 	versions map[string][]versionEntry
 	restored string
 
+	// appMethod is the HTTP method the fake application session advertises.
+	appMethod string
+
 	requests []string
 }
 
@@ -75,6 +78,19 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[
 		  {"id":"c1","name":"laptop","description":"cernbox-sync","created_at":"2026-01-02T10:00:00Z","last_seen_at":"2026-09-01T08:00:00Z"}
 		]}}`)
+
+	case r.URL.Path == "/app/open":
+		method := b.appMethod
+		if method == "" {
+			method = "GET"
+		}
+		fmt.Fprintf(w, `{"app_url":"https://office.test/edit?wopi=abc","method":%q,`+
+			`"form_parameters":{"access_token":"secret"}}`, method)
+
+	case r.URL.Path == "/app/list":
+		fmt.Fprint(w, `{"mime-types":[{"mime_type":"application/vnd.oasis.opendocument.text",`+
+			`"ext":"odt","default_application":{"name":"Collabora"},`+
+			`"app_providers":[{"name":"Collabora"}]}]}`)
 
 	case r.URL.Path == "/graph/v1.0/me":
 		fmt.Fprint(w, `{"id":"u1","displayName":"Albert Einstein","mail":"einstein@cern.ch","onPremisesSamAccountName":"einstein"}`)
@@ -222,9 +238,10 @@ func davXML(p string, isDir bool, size int) string {
 		`<d:getcontentlength>%d</d:getcontentlength><oc:size>%d</oc:size>`+
 		`<d:getetag>&quot;etag-1&quot;</d:getetag>`+
 		`<oc:fileid>s1$ABC!%s</oc:fileid>`+
+		`<oc:privatelink>https://cernbox.test/files/spaces/s1%s</oc:privatelink>`+
 		`<d:getlastmodified>Mon, 02 Jan 2026 15:04:05 GMT</d:getlastmodified>`+
 		`</d:prop></d:propstat></d:response>`,
-		href, path.Base(p), rt, size, size, strings.ReplaceAll(p, "/", "_"))
+		href, path.Base(p), rt, size, size, strings.ReplaceAll(p, "/", "_"), p)
 }
 
 // serveTrash implements the trash-bin endpoints: a PROPFIND listing, MOVE to
