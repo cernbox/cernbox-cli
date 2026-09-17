@@ -19,7 +19,6 @@ const (
 	ocmFindAccepted   = "/sciencemesh/find-accepted-users"
 	ocmDeleteAccepted = "/sciencemesh/delete-accepted-user"
 	ocmListProviders  = "/sciencemesh/list-providers"
-	ocsRemoteShares   = "/ocs/v1.php/apps/files_sharing/api/v1/shares/remote_shares"
 )
 
 // RecipientRemote is the recipient type for a user at another OCM provider.
@@ -158,115 +157,59 @@ func (c *Client) ListProviders(ctx context.Context) ([]OCMProvider, error) {
 	return providers, nil
 }
 
+// OCMReceivedPrefix marks a received federated share. reva encodes the id of
+// an OCM share this way, and it is the only reliable way to tell a federated
+// received share from a local one in a listing that holds both.
+const OCMReceivedPrefix = "ocm-received$"
+
 // FederatedShare is a share received from another provider.
 type FederatedShare struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Path        string `json:"path,omitempty"`
-	Owner       string `json:"owner,omitempty"`
-	Provider    string `json:"provider,omitempty"`
-	Permissions string `json:"permissions,omitempty"`
-	Accepted    bool   `json:"accepted"`
-	MountPoint  string `json:"mount_point,omitempty"`
-}
-
-type rawFederatedShare struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Path         string `json:"path"`
-	OwnerDisplay string `json:"displayname_owner"`
-	Owner        string `json:"uid_owner"`
-	Permissions  any    `json:"permissions"`
-	State        any    `json:"state"`
-	MountPoint   string `json:"mountpoint"`
-	ShareWith    string `json:"share_with"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Owner is who shared it, as "user@provider".
+	Owner string `json:"owner,omitempty"`
+	// Provider is the domain it came from.
+	Provider string `json:"provider,omitempty"`
+	// Role is the role held on the shared resource.
+	Role string `json:"role,omitempty"`
+	// Accepted reports whether the share has been accepted locally.
+	Accepted bool `json:"accepted"`
 }
 
 // ReceivedFederatedShares lists shares other providers have made with the
 // caller.
+//
+// This reads the graph sharedWithMe endpoint, not the OCS remote_shares one.
+// OCS has a route for it, but reva's handler is an empty stub that writes
+// nothing, so a client built on it would report "no federated shares" however
+// many there were. The graph endpoint returns them for real, provided the
+// server has ocm_enabled set on its graph service.
 func (c *Client) ReceivedFederatedShares(ctx context.Context) ([]FederatedShare, error) {
-	var env ocsEnvelope[[]rawFederatedShare]
-	if err := c.getOCSJSON(ctx, c.URL(ocsRemoteShares), "list federated shares", &env); err != nil {
+	items, err := c.SharedWithMe(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	out := make([]FederatedShare, 0, len(env.OCS.Data))
-	for _, r := range env.OCS.Data {
-		share := FederatedShare{
-			ID:         r.ID,
-			Name:       r.Name,
-			Path:       r.Path,
-			Owner:      firstNonEmptyString(r.OwnerDisplay, r.Owner),
-			MountPoint: r.MountPoint,
-			// OCS encodes the accepted state as 0; anything else means the
-			// share is pending or rejected.
-			Accepted: numericState(r.State) == 0,
+	out := make([]FederatedShare, 0)
+	for _, item := range items {
+		if !item.Federated {
+			continue
 		}
-		if p := numericState(r.Permissions); p > 0 {
-			share.Permissions = ocsPermissionString(int(p))
+		share := FederatedShare{
+			ID:       item.ID,
+			Name:     item.Name,
+			Role:     item.Role,
+			Accepted: item.Accepted,
+		}
+		if item.SharedBy != nil {
+			share.Owner = firstNonEmptyString(item.SharedBy.ID, item.SharedBy.DisplayName)
+			if _, domain, ok := strings.Cut(share.Owner, "@"); ok {
+				share.Provider = domain
+			}
 		}
 		out = append(out, share)
 	}
 	return out, nil
-}
-
-// numericState reads a field OCS may encode as a number or a string.
-func numericState(v any) int64 {
-	switch t := v.(type) {
-	case float64:
-		return int64(t)
-	case string:
-		var n int64
-		for _, r := range t {
-			if r < '0' || r > '9' {
-				return -1
-			}
-			n = n*10 + int64(r-'0')
-		}
-		return n
-	default:
-		return -1
-	}
-}
-
-// ocsPermissionString renders the OCS permission bitmask in the terms the CLI
-// uses elsewhere.
-func ocsPermissionString(mask int) string {
-	const (
-		permRead   = 1
-		permUpdate = 2
-		permCreate = 4
-		permDelete = 8
-		permShare  = 16
-	)
-	switch {
-	case mask&permShare != 0 && mask&permUpdate != 0:
-		return "collab"
-	case mask&(permUpdate|permCreate|permDelete) != 0:
-		return "editor"
-	case mask&permRead != 0:
-		return "viewer"
-	default:
-		return ""
-	}
-}
-
-// getOCSJSON fetches an OCS endpoint and checks the envelope's status.
-func (c *Client) getOCSJSON(ctx context.Context, u, op string, out any) error {
-	resp, err := c.do(ctx, request{
-		method: http.MethodGet,
-		url:    u + "?format=json",
-		header: http.Header{
-			"OCS-APIREQUEST": []string{"true"},
-			"Accept":         []string{"application/json"},
-		},
-		op: op,
-	})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return decodeJSON(resp.Body, out, op, "")
 }
 
 // ocmUnavailable turns a 404 into an explanation. The sciencemesh service is

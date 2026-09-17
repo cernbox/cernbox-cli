@@ -56,3 +56,15 @@ User-facing errors are sentences, not Go error chains. Map them through `pkg/cli
 - Always build and run the tests after a change and before declaring a task complete.
 - Integration tests use the dev environment (`make dev-up`). Check revad logs with `make dev-logs` when they fail.
 - After writing or modifying Go code, run `go fix` on the affected packages and apply modernizations within the regions you touched.
+
+### Testing against a real server
+
+Fakes agree with whatever the client does, so they miss protocol mistakes. The Content-Length bug — the transport ignoring a hand-set header and falling back to chunked, which reva's PUT rejects — passed every unit test and failed on the first real request. When adding anything that talks to the server, run it against `make dev-up` before believing it works.
+
+Several reva endpoints exist but are stubs (search, WebDAV locking, OCS remote_shares). Check the handler before building on one.
+
+### Dev environment choices that are not arbitrary
+
+- The share managers use the `sql` driver on sqlite. The gateway probes the share manager with `GetShare(id=0)` and insists on an error reading "not found: 0"; the `memory` and `json` drivers answer with the protobuf form of the whole reference, fail the probe, and every share then returns 500.
+- `ocm_enabled = true` on both graph services, or `sharedWithMe` silently omits federated shares.
+- The federation partner is a second reva. OCM needs two providers that trust each other; with one, only the error path is testable.

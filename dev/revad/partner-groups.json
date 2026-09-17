@@ -1,14 +1,20 @@
 [
 	{
 		"id": {
-			"opaque_id": "6b2f1d3e-7c4a-4b5d-8e9f-0a1b2c3d4e5f",
-			"idp": "revad-partner",
-			"type": 1
+			"opaque_id": "partner-users",
+			"idp": "revad-partner"
 		},
 		"group_name": "partner-users",
 		"mail": "partner-users@partner.example.org",
 		"display_name": "Partner users",
 		"gid_number": 20000,
-		"members": ["alice"]
+		"members": [
+			{
+				"id": {
+					"opaque_id": "9c6e1f0a-3f8a-4a0e-9f1a-1d2c3b4a5e6f",
+					"idp": "revad-partner"
+				}
+			}
+		]
 	}
 ]

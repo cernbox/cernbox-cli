@@ -113,7 +113,7 @@ func TestUploadChunk(t *testing.T) {
 	})
 
 	up := &Upload{URL: f.ts.URL + "/data/token", Path: "/eos/user/e/einstein/big.bin"}
-	offset, err := f.client().UploadChunk(context.Background(), up, 1024, bodyFromString(strings.Repeat("x", 1024)), 1024)
+	offset, err := f.client().UploadChunk(context.Background(), up, 1024, openerOf(strings.Repeat("x", 1024)), 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestUploadChunkTrustsServerOffset(t *testing.T) {
 	})
 
 	up := &Upload{URL: f.ts.URL + "/data/token"}
-	offset, err := f.client().UploadChunk(context.Background(), up, 1024, bodyFromString(strings.Repeat("x", 1024)), 1024)
+	offset, err := f.client().UploadChunk(context.Background(), up, 1024, openerOf(strings.Repeat("x", 1024)), 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestUploadChunkFallsBackToComputedOffset(t *testing.T) {
 	})
 
 	up := &Upload{URL: f.ts.URL + "/data/token"}
-	offset, err := f.client().UploadChunk(context.Background(), up, 1024, bodyFromString("xxxx"), 4)
+	offset, err := f.client().UploadChunk(context.Background(), up, 1024, openerOf("xxxx"), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,4 +210,28 @@ func parseTusMetadata(t *testing.T, header string) map[string]string {
 		out[key] = string(decoded)
 	}
 	return out
+}
+
+func TestUploadChunkSendsContentLength(t *testing.T) {
+	f := newFakeServer(t)
+	var gotLength int64 = -1
+	var chunked bool
+	f.on(http.MethodPatch, "/data/", func(w http.ResponseWriter, r *http.Request) {
+		gotLength = r.ContentLength
+		chunked = len(r.TransferEncoding) > 0 && r.TransferEncoding[0] == "chunked"
+		w.Header().Set(hdrUploadOffset, "1024")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	up := &Upload{URL: f.ts.URL + "/data/token"}
+	body := strings.Repeat("x", 1024)
+	if _, err := f.client().UploadChunk(context.Background(), up, 0, openerOf(body), 1024); err != nil {
+		t.Fatal(err)
+	}
+	if chunked {
+		t.Error("the chunk was sent with chunked transfer encoding")
+	}
+	if gotLength != 1024 {
+		t.Errorf("server saw ContentLength %d, want 1024", gotLength)
+	}
 }

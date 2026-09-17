@@ -120,6 +120,28 @@ func TestLsStreamingJSON(t *testing.T) {
 	}
 }
 
+// TestFindFallsBackToWalking: reva's search-files REPORT handler is a stub that
+// answers 501, so the client-side walk is the path that actually runs here.
+func TestFindFallsBackToWalking(t *testing.T) {
+	e := setup(t)
+	e.mustRun("mkdir", e.remotePath("deep"))
+	e.mustRun("put", e.writeLocal("needle.txt", []byte("x")), e.remotePath("deep/needle.txt"))
+	e.mustRun("put", e.writeLocal("other.txt", []byte("y")), e.remotePath("deep/other.txt"))
+
+	var results []entry
+	e.runJSON(&results, "find", e.remote, "--name", "needle")
+
+	for _, r := range results {
+		if strings.Contains(r.Name, "needle") {
+			if len(results) != 1 {
+				t.Errorf("find returned %d results, want only the match: %+v", len(results), results)
+			}
+			return
+		}
+	}
+	t.Errorf("find did not return the matching file: %+v", results)
+}
+
 func TestDu(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", e.remotePath("sub"))
@@ -342,16 +364,23 @@ func TestLinkPasswordNeedsATerminal(t *testing.T) {
 
 // ── applications ─────────────────────────────────────────────────────────────
 
-// requireApps skips when the deployment has no application provider. The dev
-// environment runs the demo one, so this should not skip there.
+// requireApps skips when no application can actually open anything.
+//
+// The dev environment runs reva's demo app provider, which advertises an empty
+// mime type list; the provider then intersects that with the configured one and
+// ends up handling nothing, and the catalogue is filtered down to nothing
+// because reva drops any mime type with no apps. So these skip against the dev
+// environment and run against a deployment with a real provider such as
+// Collabora. The provider is configured all the same: the moment one is added,
+// these start exercising it.
 func requireApps(t *testing.T, e *env) {
 	t.Helper()
 	stdout, stderr, code := e.run("apps")
 	if code != 0 {
 		t.Skipf("no application provider on this deployment: %s", stderr)
 	}
-	if strings.TrimSpace(stdout) == "" {
-		t.Skip("the application provider advertises no mime types")
+	if strings.TrimSpace(stdout) == "" || !strings.Contains(stdout, "\n") {
+		t.Skip("no application can open anything here; reva's demo provider advertises no mime types")
 	}
 }
 

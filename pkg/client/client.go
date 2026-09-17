@@ -5,6 +5,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -164,9 +165,9 @@ type request struct {
 	method  string
 	url     string
 	header  http.Header
-	body    func() (io.ReadCloser, error) // nil for bodyless requests; called once per attempt
-	op      string                        // verb used in error messages
-	path    string                        // resource used in error messages
+	body    *requestBody // nil for bodyless requests
+	op      string       // verb used in error messages
+	path    string       // resource used in error messages
 	noAuth  bool
 	expects []int // acceptable status codes; empty means any 2xx
 
@@ -175,6 +176,44 @@ type request struct {
 	// from a pipe or a non-seekable source cannot produce the bytes twice and
 	// sets this.
 	noRetry bool
+}
+
+// requestBody is a body together with its length.
+//
+// The two travel together because they must not be separated. The transport
+// ignores a Content-Length header set by hand and uses http.Request.
+// ContentLength, falling back to chunked encoding for any body it cannot size
+// itself — which is every body read from a file. reva's PUT handler reads the
+// Content-Length header and rejects a request that has none, so a body without
+// a length turns every upload into a 400. Making the length part of the body
+// means a caller cannot supply one without the other.
+type requestBody struct {
+	// open returns a fresh reader. It is called once per attempt, which is what
+	// makes a request replayable.
+	open func() (io.ReadCloser, error)
+	// length is the number of bytes open will produce, or -1 when unknown.
+	length int64
+}
+
+// stringBody returns a body holding a string.
+func stringBody(s string) *requestBody {
+	return &requestBody{
+		open:   func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(s)), nil },
+		length: int64(len(s)),
+	}
+}
+
+// bytesBody returns a body holding a byte slice.
+func bytesBody(b []byte) *requestBody {
+	return &requestBody{
+		open:   func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil },
+		length: int64(len(b)),
+	}
+}
+
+// readerBody returns a body of known length produced by open.
+func readerBody(open func() (io.ReadCloser, error), length int64) *requestBody {
+	return &requestBody{open: open, length: length}
 }
 
 // do issues a request, attaching credentials and retrying transient failures.
@@ -223,7 +262,7 @@ func (c *Client) do(ctx context.Context, r request) (*http.Response, error) {
 func (c *Client) attempt(ctx context.Context, r request) (*http.Response, error) {
 	var body io.ReadCloser
 	if r.body != nil {
-		b, err := r.body()
+		b, err := r.body.open()
 		if err != nil {
 			return nil, cberr.Wrap(cberr.KindOther, r.op, r.path, err)
 		}
@@ -233,6 +272,15 @@ func (c *Client) attempt(ctx context.Context, r request) (*http.Response, error)
 	req, err := http.NewRequestWithContext(ctx, r.method, r.url, body)
 	if err != nil {
 		return nil, cberr.Wrap(cberr.KindOther, r.op, r.path, err)
+	}
+	if r.body != nil && r.body.length >= 0 {
+		req.ContentLength = r.body.length
+		if r.body.length == 0 {
+			// A zero ContentLength with a non-nil body means "unknown" to the
+			// transport, which then sends it chunked. http.NoBody is how an
+			// empty body is stated explicitly.
+			req.Body = http.NoBody
+		}
 	}
 	for k, vs := range r.header {
 		for _, v := range vs {

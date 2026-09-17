@@ -509,8 +509,15 @@ func TestOCMReceived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "shared-data") || !strings.Contains(stdout, "Alice") {
-		t.Errorf("received shares output:\n%s", stdout)
+	if !strings.Contains(stdout, "shared-data") {
+		t.Errorf("the federated share is missing:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "other-lab.org") {
+		t.Errorf("the provider column is missing:\n%s", stdout)
+	}
+	// The local share in the same listing must not be reported as federated.
+	if strings.Contains(stdout, "Marie") {
+		t.Errorf("a local share leaked into the federated listing:\n%s", stdout)
 	}
 }
 

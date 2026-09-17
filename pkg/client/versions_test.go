@@ -190,3 +190,46 @@ func TestDownloadVersionNotFound(t *testing.T) {
 		t.Errorf("exit code = %d, want %d", cberr.ExitCode(err), cberr.ExitNotFound)
 	}
 }
+
+// TestEpochToTime: storage drivers disagree about the unit, and reading
+// milliseconds as seconds puts a file fifty thousand years in the future.
+func TestEpochToTime(t *testing.T) {
+	const seconds int64 = 1767225600 // 2026-01-01
+	const millis = seconds * 1000
+
+	if got := epochToTime(seconds); got.Year() != 2026 {
+		t.Errorf("epochToTime(%d) = %v, want a 2026 date", seconds, got)
+	}
+	if got := epochToTime(millis); got.Year() != 2026 {
+		t.Errorf("epochToTime(%d) = %v, want the same 2026 date from milliseconds", millis, got)
+	}
+	if got := epochToTime(0); !got.IsZero() {
+		t.Errorf("epochToTime(0) = %v, want the zero time", got)
+	}
+	if got := epochToTime(-1); !got.IsZero() {
+		t.Errorf("epochToTime(-1) = %v, want the zero time", got)
+	}
+}
+
+func TestListVersionsWithMillisecondKeys(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(MethodPropfind, davMetaPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		// No getlastmodified, and a key in milliseconds — which is what the
+		// local storage driver produces.
+		fmt.Fprint(w, versionsMultistatus(testResourceID,
+			versionFixture{Key: "1767225600000", Size: 10, ETag: "v1"},
+		))
+	})
+
+	versions, err := f.client().ListVersions(context.Background(), testResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("got %d versions", len(versions))
+	}
+	if year := versions[0].Modified.Year(); year != 2026 {
+		t.Errorf("version year = %d, want 2026: the millisecond key was read as seconds", year)
+	}
+}

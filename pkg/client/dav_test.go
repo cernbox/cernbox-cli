@@ -264,7 +264,7 @@ func TestUploadSendsChecksum(t *testing.T) {
 	})
 
 	err := f.client().Upload(context.Background(), "/eos/user/e/einstein/a.txt",
-		bodyFromString("hello"), 5, "MD5:5d41402abc4b2a76b9719d911017c592")
+		openerOf("hello"), 5, "MD5:5d41402abc4b2a76b9719d911017c592")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,5 +559,93 @@ func TestMalformedMultistatusIsReported(t *testing.T) {
 	_, err := f.client().Stat(context.Background(), "/eos/user/e/einstein")
 	if err == nil || !strings.Contains(err.Error(), "malformed PROPFIND response") {
 		t.Errorf("got %v, want a clear parse error", err)
+	}
+}
+
+// TestUploadSendsContentLength guards a bug that no fake caught and a real
+// server did: the transport ignores a Content-Length header set by hand and
+// uses http.Request.ContentLength, falling back to chunked encoding for any
+// body it cannot size — which is every body read from a file. reva's PUT
+// handler reads the header and rejects a request that has none, so every
+// upload came back 400.
+func TestUploadSendsContentLength(t *testing.T) {
+	f := newFakeServer(t)
+	var gotLength int64 = -1
+	var chunked bool
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		gotLength = r.ContentLength
+		chunked = len(r.TransferEncoding) > 0 && r.TransferEncoding[0] == "chunked"
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	body := strings.Repeat("x", 1234)
+	err := f.client().Upload(context.Background(), "/eos/user/e/einstein/a.txt", openerOf(body), int64(len(body)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chunked {
+		t.Error("the upload was sent chunked; reva's PUT handler rejects a request with no Content-Length")
+	}
+	if gotLength != 1234 {
+		t.Errorf("server saw ContentLength %d, want 1234", gotLength)
+	}
+}
+
+// TestUploadOfEmptyFileIsNotChunked: a zero ContentLength with a non-nil body
+// means "unknown" to the transport, so the obvious code sends an empty file
+// chunked and the server rejects it.
+func TestUploadOfEmptyFileIsNotChunked(t *testing.T) {
+	f := newFakeServer(t)
+	var chunked bool
+	var gotLength int64 = -1
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		chunked = len(r.TransferEncoding) > 0 && r.TransferEncoding[0] == "chunked"
+		gotLength = r.ContentLength
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	if err := f.client().Upload(context.Background(), "/eos/user/e/einstein/empty.txt", openerOf(""), 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if chunked {
+		t.Error("an empty upload was sent chunked")
+	}
+	if gotLength != 0 {
+		t.Errorf("server saw ContentLength %d, want 0", gotLength)
+	}
+}
+
+func TestTouchSendsContentLengthZero(t *testing.T) {
+	f := newFakeServer(t)
+	var chunked bool
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		chunked = len(r.TransferEncoding) > 0 && r.TransferEncoding[0] == "chunked"
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	if err := f.client().Touch(context.Background(), "/eos/user/e/einstein/new.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if chunked {
+		t.Error("touch sent a chunked body")
+	}
+}
+
+// TestPropfindSendsContentLength: the XML body is small, but a server that
+// checks the header would reject it just the same.
+func TestPropfindSendsContentLength(t *testing.T) {
+	f := newFakeServer(t)
+	var gotLength int64 = -1
+	f.on(MethodPropfind, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		gotLength = r.ContentLength
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, multistatusXML("einstein", davEntry{Path: "/eos/user/e/einstein", IsDir: true}))
+	})
+
+	if _, err := f.client().Stat(context.Background(), "/eos/user/e/einstein"); err != nil {
+		t.Fatal(err)
+	}
+	if gotLength != int64(len(propfindBody)) {
+		t.Errorf("server saw ContentLength %d, want %d", gotLength, len(propfindBody))
 	}
 }

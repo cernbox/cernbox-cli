@@ -75,7 +75,7 @@ func (c *Client) ListTrash(ctx context.Context, basePath string) ([]TrashItem, e
 			"Depth":        []string{"1"},
 			"Content-Type": []string{"application/xml"},
 		},
-		body:    bodyFromString(trashPropfindBody),
+		body:    stringBody(trashPropfindBody),
 		op:      "list the trash bin",
 		path:    basePath,
 		expects: []int{http.StatusMultiStatus, http.StatusOK},
@@ -128,8 +128,8 @@ func trashEntryToItem(entry multistatusEntry) (TrashItem, bool) {
 	} else if n, err := strconv.ParseInt(props.GetLength, 10, 64); err == nil {
 		item.Size = n
 	}
-	if secs, err := strconv.ParseInt(props.TrashTimestamp, 10, 64); err == nil && secs > 0 {
-		item.DeletedAt = time.Unix(secs, 0)
+	if n, err := strconv.ParseInt(props.TrashTimestamp, 10, 64); err == nil && n > 0 {
+		item.DeletedAt = epochToTime(n)
 	} else if t, err := http.ParseTime(props.TrashDatetime); err == nil {
 		item.DeletedAt = t
 	}

@@ -73,7 +73,7 @@ func (c *Client) OpenInApp(ctx context.Context, resourceID, appName, viewMode st
 			"Content-Type": []string{"application/x-www-form-urlencoded"},
 			"Accept":       []string{"application/json"},
 		},
-		body: bodyFromString(form.Encode()),
+		body: stringBody(form.Encode()),
 		op:   "open in an application",
 		path: resourceID,
 	})

@@ -48,7 +48,7 @@ func (c *Client) ListVersions(ctx context.Context, resourceID string) ([]Version
 			"Depth":        []string{"1"},
 			"Content-Type": []string{"application/xml"},
 		},
-		body:    bodyFromString(propfindBody),
+		body:    stringBody(propfindBody),
 		op:      "list versions",
 		path:    resourceID,
 		expects: []int{http.StatusMultiStatus, http.StatusOK},
@@ -88,10 +88,10 @@ func (c *Client) ListVersions(ctx context.Context, resourceID string) ([]Version
 		}
 		if t, err := http.ParseTime(props.GetLastMod); err == nil {
 			v.Modified = t
-		} else if secs, err := strconv.ParseInt(key, 10, 64); err == nil {
+		} else if n, err := strconv.ParseInt(key, 10, 64); err == nil {
 			// reva keys versions by the modification time, so the key itself is
 			// a usable fallback when the property is absent.
-			v.Modified = time.Unix(secs, 0)
+			v.Modified = epochToTime(n)
 		}
 		versions = append(versions, v)
 	}
@@ -157,4 +157,23 @@ func (c *Client) DownloadVersion(ctx context.Context, resourceID, key string) (i
 		return nil, 0, err
 	}
 	return resp.Body, resp.ContentLength, nil
+}
+
+// msThreshold is where a plausible epoch in seconds stops. Seconds past this
+// would be the year 5138, so a larger number is milliseconds.
+const msThreshold = 1e11
+
+// epochToTime converts an epoch that may be in seconds or in milliseconds.
+//
+// Storage drivers disagree: reva's trash keys and some version keys are in
+// milliseconds while the CS3 timestamps are in seconds, and reading one as the
+// other puts the file fifty thousand years in the future.
+func epochToTime(n int64) time.Time {
+	if n <= 0 {
+		return time.Time{}
+	}
+	if n >= msThreshold {
+		return time.UnixMilli(n)
+	}
+	return time.Unix(n, 0)
 }
