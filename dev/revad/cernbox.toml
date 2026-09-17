@@ -383,11 +383,6 @@ insecure = true
 max_num_files = 10000
 max_size = 1073741824
 
-# Where a client exchanges a Kerberos ticket for a reva token.
-[http.services.authtoken]
-address = ":80"
-prefix = "auth"
-
 [http.services.appprovider]
 address = ":80"
 prefix = "app"

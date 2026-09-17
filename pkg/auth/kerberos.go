@@ -248,11 +248,17 @@ func (p *KerberosProvider) Refresh(ctx context.Context, tok *Token) (*Token, err
 	return refreshed, nil
 }
 
+// spnegoPath is the endpoint the ticket is presented to. Any authenticated
+// endpoint would do — reva's token writer puts the issued token in
+// x-access-token on every one of them — so rather than have the server grow an
+// endpoint whose only job is to return a header it already sends, the ticket
+// goes to one the client was going to call anyway. /graph/v1.0/me is the
+// cheapest of those and returns the user's identity into the bargain.
 func (p *KerberosProvider) spnegoPath() string {
 	if p.SPNEGOPath != "" {
 		return p.SPNEGOPath
 	}
-	return "/auth/kerberos"
+	return "/graph/v1.0/me"
 }
 
 // spn derives the service principal name from the endpoint host.

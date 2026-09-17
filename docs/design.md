@@ -139,7 +139,7 @@ max_clock_skew_seconds = 300
 credential_chain = ["spnego", "basic", "bearer", "publicshares"]
 ```
 
-**4. CLI provider** — the Kerberos chain entry gains a second mode: `GET https://cernbox.cern.ch/auth/kerberos` with `Authorization: Negotiate <AP-REQ>`, reading the Reva JWT back from the `x-access-token` response header written by the existing token writer. Which mode is used is a config toggle (`auth.kerberos.mode = sso|spnego|auto`).
+**4. CLI provider** — the Kerberos chain entry gains a second mode: `GET https://cernbox.cern.ch/graph/v1.0/me` with `Authorization: Negotiate <AP-REQ>`, reading the Reva JWT back from the `x-access-token` response header written by the existing token writer. An endpoint dedicated to the exchange was built first and then removed: the token writer runs on every authenticated response, so such an endpoint returns a header the server already sends, and `/graph/v1.0/me` yields the identity in the same round trip. Which mode is used is a config toggle (`auth.kerberos.mode = sso|spnego|auto`).
 
 **This is what shipped, and `spnego` is the default.** The original plan was to default to `auto` and treat SSO as the safe fallback, on the reasoning that the server side did not exist yet. It does now — all four pieces above are implemented and tested against a real KDC — and with them in place the argument reverses: `auto` makes a successful login depend on either CERNBox or auth.cern.ch being reachable, which is two things that can be down instead of one. Native Kerberos keeps the identity path as short as it can be, so `spnego` is the default and `sso` is what a deployment without the auth provider selects explicitly.
 

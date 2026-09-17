@@ -72,7 +72,9 @@ Kerberos works in three modes, selected by `auth.kerberos.mode`:
 - `sso` — the ticket authenticates you to CERN SSO, which issues an OIDC token that CERNBox accepts. For a deployment whose reva has no Kerberos auth provider.
 - `auto` — try `spnego`, fall back to `sso`.
 
-Native Kerberos needs the server side that ships with this work: the `kerberos` auth manager, the `spnego` credential strategy, and the `authtoken` HTTP service, all in reva. `dev/revad/cernbox.toml` is a working configuration of all three, against the realm the `kdc` container serves.
+Native Kerberos needs the server side that ships with this work: the `kerberos` auth manager and the `spnego` credential strategy, both in reva. `dev/revad/cernbox.toml` is a working configuration of the pair, against the realm the `kdc` container serves.
+
+The ticket is presented to `/graph/v1.0/me` rather than to an endpoint built for the purpose. Every authenticated reva response already carries the issued token in `x-access-token`, so a dedicated one would only return a header the server already sends — and this one returns the user's identity too, so the login costs a single request.
 
 If the endpoint is a DNS alias, the client may ask the KDC for a ticket under the node's name rather than the alias, and the KDC will refuse it. `--kerberos-spn` names the service principal explicitly; `rdns = false` in your `krb5.conf` fixes it for every Kerberos client on the machine.
 

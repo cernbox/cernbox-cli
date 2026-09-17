@@ -15,7 +15,9 @@ auth:
     #         For a deployment whose reva has no Kerberos auth provider.
     # auto  — try spnego, fall back to sso.
     mode: spnego
-    path: /auth/kerberos
+    # Any authenticated endpoint returns a token; this one also returns the
+    # user's identity, so the login costs a single request.
+    path: /graph/v1.0/me
 
   sso:
     issuer: https://auth.cern.ch/auth/realms/cern
