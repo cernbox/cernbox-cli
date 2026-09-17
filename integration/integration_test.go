@@ -355,7 +355,7 @@ func TestPublicLinkLifecycle(t *testing.T) {
 			URL string `json:"url"`
 		} `json:"link"`
 	}
-	e.runJSON(&created, "link", "create", target, "--role", "viewer")
+	e.runJSONOne(&created, "link", "create", target, "--role", "viewer")
 	if created.ID == "" {
 		t.Fatal("link create returned no id")
 	}

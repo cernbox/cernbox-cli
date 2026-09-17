@@ -70,9 +70,15 @@ inject_mgm_config "http.exthandler EosMgmHttp /usr/lib64/libEosMgmHttp.so eos::m
 inject_mgm_config "http.cadir /etc/grid-security/certificates/"
 inject_mgm_config "http.cert /etc/grid-security/eos.crt"
 inject_mgm_config "http.key /etc/grid-security/eos.key"
-# inject_mgm_sysconfig "EOS_MGM_GRPC_SSL_CERT=/etc/grid-security/eos.crt"
-# inject_mgm_sysconfig "EOS_MGM_GRPC_SSL_KEY=/etc/grid-security/eos.key"
-# inject_mgm_sysconfig "EOS_MGM_GRPC_SSL_CA=/etc/grid-security/certificates/ca.crt"
+# The MGM refuses to serve gRPC without TLS unless it is on loopback, and reva
+# reaches it from another container, so the certs are not optional here.
+inject_mgm_sysconfig "EOS_MGM_GRPC_SSL_CERT=/etc/grid-security/eos.crt"
+inject_mgm_sysconfig "EOS_MGM_GRPC_SSL_KEY=/etc/grid-security/eos.key"
+inject_mgm_sysconfig "EOS_MGM_GRPC_SSL_CA=/etc/grid-security/certificates/ca.crt"
+# Setting the CA above makes the MGM demand a client certificate. reva
+# authenticates to EOS with grpc_auth_key, not a certificate, so asking for one
+# just drops the connection before the gRPC preface.
+inject_mgm_sysconfig "EOS_MGM_GRPC_DONT_REQUEST_CLIENT_CERTIFICATE=1"
 
 inject_fst_config "xrd.protocol XrdHttp:8001 libXrdHttp.so"
 inject_fst_config "http.exthandler EosFstHttp /usr/lib64/libEosFstHttp.so none"
@@ -123,7 +129,9 @@ for entry in "einstein:10000" "marie:10001" "richard:10002"; do
   adduser "$user" -u "$uid"
   eospath="/eos/user/${user:0:1}/${user}"
   eos mkdir -p "$eospath"
-  eos chown -R "${uid}" "$eospath"
+  # -r, not -R: this eos build rejects the uppercase form with a usage error,
+  # and the script would carry on with a root-owned home nobody can write to.
+  eos chown -r "${uid}" "$eospath"
   # Set 100GB "project" quota
   eos quota set -g 99 -v 100000000000 -p "$eospath"
 done

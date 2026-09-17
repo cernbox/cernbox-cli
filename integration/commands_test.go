@@ -315,7 +315,7 @@ func TestLinkWithExpiryAndName(t *testing.T) {
 			Type string `json:"type"`
 		} `json:"link"`
 	}
-	e.runJSON(&created, "link", "create", target,
+	e.runJSONOne(&created, "link", "create", target,
 		"--role", "viewer", "--name", "review copy", "--expiry", "2030-12-31")
 
 	if created.Link == nil || created.Link.URL == "" {
@@ -351,7 +351,7 @@ func TestLinkPasswordNeedsATerminal(t *testing.T) {
 	var created struct {
 		ID string `json:"id"`
 	}
-	e.runJSON(&created, "link", "create", target)
+	e.runJSONOne(&created, "link", "create", target)
 
 	_, _, code := e.run("link", "password", target, created.ID)
 	if code == 0 {

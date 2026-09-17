@@ -239,6 +239,33 @@ func (e *env) runJSONAs(a account, v any, args ...string) {
 	}
 }
 
+// runJSONOne decodes a command that produced exactly one item.
+//
+// --output json always emits the item list, even for a command that creates a
+// single thing, so that a script can treat every command's output the same way.
+// A test that wants the one item it just made would otherwise have to declare a
+// slice and index it.
+func (e *env) runJSONOne(v any, args ...string) {
+	e.t.Helper()
+	e.runJSONOneAs(e.self(), v, args...)
+}
+
+func (e *env) runJSONOneAs(a account, v any, args ...string) {
+	e.t.Helper()
+	out := e.mustRunAs(a, append([]string{"--output", "json"}, args...)...)
+
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(out), &items); err != nil {
+		e.t.Fatalf("cernbox %v produced invalid JSON: %v\n%s", args, err, out)
+	}
+	if len(items) != 1 {
+		e.t.Fatalf("cernbox %v produced %d items, want exactly 1\n%s", args, len(items), out)
+	}
+	if err := json.Unmarshal(items[0], v); err != nil {
+		e.t.Fatalf("cernbox %v item did not decode: %v\n%s", args, err, out)
+	}
+}
+
 // ── local helpers ────────────────────────────────────────────────────────────
 
 func (e *env) writeLocal(name string, body []byte) string {

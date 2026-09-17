@@ -10,6 +10,8 @@ REALM="${KRB5_REALM:-TEST.CERN.CH}"
 SHARE=/krb5-share
 KEYTAB="$SHARE/service.keytab"
 SERVICE_PRINCIPAL="${KRB5_SERVICE_PRINCIPAL:-HTTP/revad}"
+# Other names the same service answers to; see below.
+SERVICE_ALIASES="${KRB5_SERVICE_ALIASES:-HTTP/localhost}"
 
 mkdir -p "$SHARE"
 
@@ -47,8 +49,18 @@ if [ ! -f /var/lib/krb5kdc/principal ]; then
     kadmin.local -q "addprinc -pw radioactivity marie@$REALM"
 
     kadmin.local -q "addprinc -randkey $SERVICE_PRINCIPAL@$REALM"
+    # The same revad is reached as "revad" from inside the compose network and
+    # as "localhost" from the host running the tests. A client asks the KDC for
+    # a ticket named after the host it dialled, so both names need a principal
+    # and both need to be in the one keytab revad loads.
+    for alias in $SERVICE_ALIASES; do
+        kadmin.local -q "addprinc -randkey $alias@$REALM"
+    done
     rm -f "$KEYTAB"
     kadmin.local -q "ktadd -k $KEYTAB $SERVICE_PRINCIPAL@$REALM"
+    for alias in $SERVICE_ALIASES; do
+        kadmin.local -q "ktadd -k $KEYTAB $alias@$REALM"
+    done
     # revad runs as a different user in its own container and only reads it.
     chmod 0644 "$KEYTAB"
 fi

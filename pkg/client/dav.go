@@ -427,32 +427,55 @@ func (c *Client) mkcol(ctx context.Context, p string) error {
 	return nil
 }
 
-// mkdirAll creates every missing ancestor. It walks downwards and tolerates
-// "already exists" at each level, which also makes it safe to run concurrently
-// with another client creating the same tree.
+// mkdirAll creates a directory and any missing ancestor.
+//
+// It works downwards from the target rather than upwards from the root: it
+// tries to create the directory, and only if that fails for want of a parent
+// does it go up a level. Walking from the root instead would mean creating
+// every prefix of the path, and the leading segments of a CERNBox path are not
+// real directories — "/eos" is the namespace root, which cannot be created and
+// cannot be stat'ed, so "mkdir -p /eos/user/g/gdelmont/x" failed at the very
+// first step even though everything above the leaf already existed.
+//
+// "Already exists" is tolerated at every level, which also makes this safe to
+// run concurrently with another client creating the same tree.
 func (c *Client) mkdirAll(ctx context.Context, p string) error {
 	p = cleanPath(p)
 	if p == "/" {
 		return nil
 	}
-	segs := strings.Split(strings.TrimPrefix(p, "/"), "/")
-	cur := ""
-	for _, seg := range segs {
-		cur += "/" + seg
-		err := c.mkcol(ctx, cur)
-		if err == nil {
-			continue
-		}
-		// 405 means it is already there; anything else is real.
-		if cberr.KindOf(err) == cberr.KindConflict {
-			info, statErr := c.Stat(ctx, cur)
-			if statErr == nil && info.IsDir {
-				continue
-			}
+
+	err := c.mkcol(ctx, p)
+	if err == nil {
+		return nil
+	}
+	if c.isExistingDir(ctx, p) {
+		return nil
+	}
+
+	// The parent may simply not be there yet. Create it, then try once more;
+	// any other failure is the caller's to see.
+	parent := cleanPath(path.Dir(p))
+	if parent == p || parent == "/" {
+		return err
+	}
+	if parentErr := c.mkdirAll(ctx, parent); parentErr != nil {
+		return parentErr
+	}
+	if err := c.mkcol(ctx, p); err != nil {
+		if c.isExistingDir(ctx, p) {
+			return nil
 		}
 		return err
 	}
 	return nil
+}
+
+// isExistingDir reports whether p is already a directory, which is the one case
+// where failing to create it is not a failure at all.
+func (c *Client) isExistingDir(ctx context.Context, p string) bool {
+	info, err := c.Stat(ctx, p)
+	return err == nil && info.IsDir
 }
 
 // Remove deletes a file or directory. WebDAV DELETE on a collection is always
