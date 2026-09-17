@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"strings"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
@@ -199,11 +200,22 @@ func newOCMContactsCmd(app *App) *cobra.Command {
 			defer cancel()
 
 			if remove != "" {
-				user, idp, ok := strings.Cut(remove, "@")
-				if !ok {
+				if _, _, ok := strings.Cut(remove, "@"); !ok {
 					return cberr.Usagef("--remove takes an address like user@their-provider.org")
 				}
-				if err := app.client.RemoveAcceptedUser(ctx, idp, user); err != nil {
+				// The address is how a person refers to the contact, but the
+				// server identifies it by an id the remote provider assigned,
+				// which is often not the name in the address at all. So find
+				// the contact first and remove the one that was actually found.
+				contacts, err := app.client.AcceptedUsers(ctx)
+				if err != nil {
+					return err
+				}
+				match, err := findContact(contacts, remove)
+				if err != nil {
+					return err
+				}
+				if err := app.client.RemoveAcceptedUser(ctx, match.IDP, match.UserID); err != nil {
 					return err
 				}
 				app.out.Msg("Removed %s.", remove)
@@ -284,4 +296,24 @@ func newOCMReceivedCmd(app *App) *cobra.Command {
 			return app.out.Render(table)
 		},
 	}
+}
+
+// findContact locates a federated contact by the address a person would type.
+//
+// A contact's user id is assigned by the remote provider and need not be the
+// name in its address, so matching has to consider the address the contact
+// renders as, its mail, and the raw id.
+func findContact(contacts []client.RemoteUser, address string) (client.RemoteUser, error) {
+	name, idp, _ := strings.Cut(address, "@")
+	for _, c := range contacts {
+		switch {
+		case strings.EqualFold(c.Address(), address),
+			strings.EqualFold(c.Mail, address),
+			strings.EqualFold(c.UserID, name) && strings.EqualFold(c.IDP, idp),
+			strings.EqualFold(c.IDP, idp) && strings.HasPrefix(strings.ToLower(c.Mail), strings.ToLower(name)+"@"):
+			return c, nil
+		}
+	}
+	return client.RemoteUser{}, cberr.New(cberr.KindNotFound, "remove a federated contact", address,
+		"no federated contact with this address; 'cernbox ocm contacts' lists them")
 }
