@@ -89,7 +89,7 @@ func DefaultConfig() *Config {
 				// CERNBox, with no identity provider in between and nothing to
 				// be unavailable but CERNBox itself.
 				Mode: "spnego",
-				Path: "/auth/kerberos",
+				Path: "/graph/v1.0/me",
 			},
 			SSO: SSOConfig{
 				Issuer:   "https://auth.cern.ch/auth/realms/cern",
