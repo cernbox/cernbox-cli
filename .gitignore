@@ -1,0 +1,18 @@
+# Built binary
+/cernbox
+/dist/
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Editors / agents
+.claude
+.idea/
+*.swp
