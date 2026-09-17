@@ -585,6 +585,10 @@ type graphDriveItem struct {
 		ID   *string `json:"id"`
 		Name *string `json:"name"`
 		Size *int64  `json:"size"`
+		// The grant lives here for a received share: the top-level item is the
+		// entry in the caller's own virtual drive, and the permission belongs
+		// to the resource it points at.
+		Permissions []graphPermission `json:"permissions"`
 	} `json:"remoteItem"`
 	UIHidden          *bool             `json:"@UI.Hidden"`
 	ClientSynchronize *bool             `json:"@client.synchronize"`
@@ -626,8 +630,14 @@ func (d graphDriveItem) toDriveItem() DriveItem {
 	if d.CreatedBy != nil && d.CreatedBy.User != nil {
 		out.SharedBy = identityOf(d.CreatedBy.User, "user")
 	}
-	if len(d.Permissions) > 0 && len(d.Permissions[0].Roles) > 0 {
-		out.Role = RoleName(d.Permissions[0].Roles[0])
+	// Prefer the top-level permissions, and fall back to the remote item's,
+	// which is where a received share actually carries its grant.
+	perms := d.Permissions
+	if len(perms) == 0 && d.RemoteItem != nil {
+		perms = d.RemoteItem.Permissions
+	}
+	if len(perms) > 0 && len(perms[0].Roles) > 0 {
+		out.Role = RoleName(perms[0].Roles[0])
 	}
 	// A received share that has been accepted is synchronised and not hidden.
 	out.Accepted = d.ClientSynchronize != nil && *d.ClientSynchronize
