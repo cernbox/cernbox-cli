@@ -1,0 +1,192 @@
+package client
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cernbox/cernbox-cli/pkg/cberr"
+)
+
+const testResourceID = "localhome$ABC!fileid-1"
+
+// versionsMultistatus renders a version listing the way reva does: the file
+// itself as the first entry, then one entry per revision under /v/<key>.
+func versionsMultistatus(resourceID string, keys ...versionFixture) string {
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="utf-8"?>`)
+	sb.WriteString(`<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">`)
+
+	// The "." entry: the current file, which is not a revision.
+	sb.WriteString(`<d:response><d:href>` + davMetaPrefix + "/" + resourceID + `/v</d:href>`)
+	sb.WriteString(`<d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop>`)
+	sb.WriteString(`<d:resourcetype><d:collection/></d:resourcetype>`)
+	sb.WriteString(`</d:prop></d:propstat></d:response>`)
+
+	for _, k := range keys {
+		sb.WriteString(`<d:response><d:href>` + davMetaPrefix + "/" + resourceID + `/v/` + k.Key + `</d:href>`)
+		sb.WriteString(`<d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop>`)
+		sb.WriteString(`<d:resourcetype></d:resourcetype>`)
+		fmt.Fprintf(&sb, "<d:getcontentlength>%d</d:getcontentlength>", k.Size)
+		if k.Modified != "" {
+			sb.WriteString(`<d:getlastmodified>` + k.Modified + `</d:getlastmodified>`)
+		}
+		sb.WriteString(`<d:getetag>&quot;` + k.ETag + `&quot;</d:getetag>`)
+		sb.WriteString(`</d:prop></d:propstat></d:response>`)
+	}
+	sb.WriteString(`</d:multistatus>`)
+	return sb.String()
+}
+
+type versionFixture struct {
+	Key      string
+	Size     int64
+	Modified string
+	ETag     string
+}
+
+func TestListVersions(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(MethodPropfind, davMetaPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, versionsMultistatus(testResourceID,
+			versionFixture{Key: "1767139200", Size: 100, Modified: "Wed, 31 Dec 2025 00:00:00 GMT", ETag: "v1"},
+			versionFixture{Key: "1767225600", Size: 200, Modified: "Thu, 01 Jan 2026 00:00:00 GMT", ETag: "v2"},
+		))
+	})
+
+	versions, err := f.client().ListVersions(context.Background(), testResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The file itself is in the listing but is not a revision.
+	if len(versions) != 2 {
+		t.Fatalf("got %d versions, want 2: %+v", len(versions), versions)
+	}
+	// Newest first, which is the order someone scanning for "this morning's
+	// copy" expects.
+	if versions[0].Key != "1767225600" {
+		t.Errorf("first version = %q, want the newest", versions[0].Key)
+	}
+	if versions[0].Size != 200 || versions[0].ETag != "v2" {
+		t.Errorf("version = %+v", versions[0])
+	}
+	if versions[0].Modified.Before(versions[1].Modified) {
+		t.Error("versions are not sorted newest first")
+	}
+}
+
+// TestListVersionsFallsBackToTheKeyForTime: reva keys versions by modification
+// time, so a server that omits the property still yields a usable timestamp.
+func TestListVersionsFallsBackToTheKeyForTime(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(MethodPropfind, davMetaPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, versionsMultistatus(testResourceID,
+			versionFixture{Key: "1767225600", Size: 200, ETag: "v2"},
+		))
+	})
+
+	versions, err := f.client().ListVersions(context.Background(), testResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("got %d versions", len(versions))
+	}
+	if !versions[0].Modified.Equal(time.Unix(1767225600, 0)) {
+		t.Errorf("Modified = %v, want it derived from the key", versions[0].Modified)
+	}
+}
+
+func TestListVersionsEmpty(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(MethodPropfind, davMetaPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, versionsMultistatus(testResourceID))
+	})
+
+	versions, err := f.client().ListVersions(context.Background(), testResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 0 {
+		t.Errorf("got %d versions for a file with no history", len(versions))
+	}
+}
+
+func TestVersionKeyFromHref(t *testing.T) {
+	tests := []struct {
+		href string
+		want string
+	}{
+		{davMetaPrefix + "/id/v/1767225600", "1767225600"},
+		{davMetaPrefix + "/id/v/1767225600/", "1767225600"},
+		{davMetaPrefix + "/id/v", ""},
+		{"/somewhere/else", ""},
+	}
+	for _, tt := range tests {
+		if got := versionKeyFromHref(tt.href); got != tt.want {
+			t.Errorf("versionKeyFromHref(%q) = %q, want %q", tt.href, got, tt.want)
+		}
+	}
+}
+
+// TestRestoreVersionUsesCopy pins the protocol choice: reva restores a version
+// with COPY on the version URL, not with a PUT of its bytes.
+func TestRestoreVersionUsesCopy(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(MethodCopy, davMetaPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := f.client().RestoreVersion(context.Background(), testResourceID, "1767225600"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(f.lastRequest(MethodCopy).Path, "/v/1767225600") {
+		t.Errorf("restore path = %q", f.lastRequest(MethodCopy).Path)
+	}
+}
+
+func TestRestoreVersionRequiresAKey(t *testing.T) {
+	f := newFakeServer(t)
+	err := f.client().RestoreVersion(context.Background(), testResourceID, "")
+	if cberr.KindOf(err) != cberr.KindUsage {
+		t.Errorf("got %v, want a usage error", err)
+	}
+}
+
+func TestDownloadVersion(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodGet, davMetaPrefix, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "the old contents")
+	})
+
+	body, _, err := f.client().DownloadVersion(context.Background(), testResourceID, "1767225600")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+
+	got, _ := io.ReadAll(body)
+	if string(got) != "the old contents" {
+		t.Errorf("downloaded %q", got)
+	}
+}
+
+func TestDownloadVersionNotFound(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodGet, davMetaPrefix, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no such version", http.StatusNotFound)
+	})
+
+	_, _, err := f.client().DownloadVersion(context.Background(), testResourceID, "nope")
+	if cberr.ExitCode(err) != cberr.ExitNotFound {
+		t.Errorf("exit code = %d, want %d", cberr.ExitCode(err), cberr.ExitNotFound)
+	}
+}

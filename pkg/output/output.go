@@ -18,6 +18,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // Format selects the rendering style.
@@ -287,15 +289,17 @@ func HumanTime(t, now time.Time) string {
 	return t.Format("Jan _2  2006")
 }
 
-// IsTerminal reports whether f is attached to a character device. It is used to
-// decide on colour and progress bars without pulling in a terminal library.
+// IsTerminal reports whether f is an interactive terminal. It decides colour,
+// progress rendering, and whether there is anyone to answer a confirmation
+// prompt.
+//
+// This asks the terminal driver rather than checking for a character device.
+// /dev/null is a character device, so the cheaper test would call a cron job
+// with redirected stdin "interactive" — and then block it forever on a prompt
+// nobody can answer.
 func IsTerminal(f *os.File) bool {
 	if f == nil {
 		return false
 	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
