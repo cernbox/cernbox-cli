@@ -1,0 +1,479 @@
+package cli
+
+import (
+	"context"
+	"time"
+
+	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
+	"github.com/cernbox/cernbox-cli/pkg/output"
+	"github.com/spf13/cobra"
+)
+
+const expiryLayout = "2006-01-02"
+
+func parseExpiry(s string) (*time.Time, error) {
+	if s == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(expiryLayout, s)
+	if err != nil {
+		return nil, cberr.Usagef("invalid expiry %q: want a date like 2026-12-31", s)
+	}
+	// End of the given day, so "--expiry 2026-12-31" keeps the share usable
+	// throughout that date rather than expiring it at midnight.
+	t = t.Add(24*time.Hour - time.Second)
+	return &t, nil
+}
+
+func newShareCmd(app *App) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "share",
+		Short: "Share files with users and groups",
+	}
+	cmd.AddCommand(
+		newShareCreateCmd(app),
+		newShareListCmd(app),
+		newShareUpdateCmd(app),
+		newShareRemoveCmd(app),
+		newShareReceivedCmd(app),
+	)
+	return cmd
+}
+
+func newShareCreateCmd(app *App) *cobra.Command {
+	var with []string
+	var groups []string
+	var role, expiry string
+
+	cmd := &cobra.Command{
+		Use:     "create PATH",
+		Short:   "Share a file or directory",
+		Example: "  cernbox share create /eos/user/g/gdelmont/Documents --with marie --role editor",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			if len(with) == 0 && len(groups) == 0 {
+				return cberr.Usagef("pass --with USER or --with-group GROUP")
+			}
+			roleID, err := client.RoleID(role)
+			if err != nil {
+				return err
+			}
+			exp, err := parseExpiry(expiry)
+			if err != nil {
+				return err
+			}
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+
+			recipients := make([]client.Recipient, 0, len(with)+len(groups))
+			for _, u := range with {
+				recipients = append(recipients, client.Recipient{ID: u, Type: "user"})
+			}
+			for _, g := range groups {
+				recipients = append(recipients, client.Recipient{ID: g, Type: "group"})
+			}
+
+			perms, err := app.client.Share(ctx, info.ID, recipients, roleID, exp)
+			if err != nil {
+				return err
+			}
+			return app.renderPermissions(perms)
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&with, "with", nil, "username to share with (repeatable)")
+	cmd.Flags().StringSliceVar(&groups, "with-group", nil, "group to share with (repeatable)")
+	cmd.Flags().StringVar(&role, "role", "viewer", "viewer, editor, collab, or denied")
+	cmd.Flags().StringVar(&expiry, "expiry", "", "expiry date, YYYY-MM-DD")
+	return cmd
+}
+
+func newShareListCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list [PATH]",
+		Short: "List shares on a path, or everything you have shared",
+		Args:  cobra.RangeArgs(0, 1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			if len(args) == 0 {
+				items, err := app.client.SharedByMe(ctx)
+				if err != nil {
+					return err
+				}
+				return app.renderDriveItems(items, "SHARED WITH")
+			}
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			perms, err := app.client.ListPermissions(ctx, info.ID)
+			if err != nil {
+				return err
+			}
+			return app.renderPermissions(perms)
+		},
+	}
+}
+
+func newShareUpdateCmd(app *App) *cobra.Command {
+	var role, expiry string
+
+	cmd := &cobra.Command{
+		Use:   "update PATH SHARE_ID",
+		Short: "Change the role or expiry of a share",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			roleID := ""
+			if role != "" {
+				var err error
+				roleID, err = client.RoleID(role)
+				if err != nil {
+					return err
+				}
+			}
+			exp, err := parseExpiry(expiry)
+			if err != nil {
+				return err
+			}
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			perm, err := app.client.UpdatePermission(ctx, info.ID, args[1], roleID, exp)
+			if err != nil {
+				return err
+			}
+			return app.renderPermissions([]client.Permission{*perm})
+		},
+	}
+
+	cmd.Flags().StringVar(&role, "role", "", "new role: viewer, editor, collab, or denied")
+	cmd.Flags().StringVar(&expiry, "expiry", "", "new expiry date, YYYY-MM-DD")
+	return cmd
+}
+
+func newShareRemoveCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove PATH SHARE_ID",
+		Short: "Remove a share",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			if err := app.client.RemovePermission(ctx, info.ID, args[1]); err != nil {
+				return err
+			}
+			app.out.Msg("Removed share %s", args[1])
+			return nil
+		},
+	}
+}
+
+func newShareReceivedCmd(app *App) *cobra.Command {
+	var accept, decline string
+
+	cmd := &cobra.Command{
+		Use:   "received",
+		Short: "List, accept or decline shares other people made with you",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			switch {
+			case accept != "" && decline != "":
+				return cberr.Usagef("pass either --accept or --decline, not both")
+			case accept != "":
+				if err := app.client.SetReceivedShareState(ctx, accept, true); err != nil {
+					return err
+				}
+				app.out.Msg("Accepted share %s", accept)
+				return nil
+			case decline != "":
+				if err := app.client.SetReceivedShareState(ctx, decline, false); err != nil {
+					return err
+				}
+				app.out.Msg("Declined share %s", decline)
+				return nil
+			}
+
+			items, err := app.client.SharedWithMe(ctx)
+			if err != nil {
+				return err
+			}
+			return app.renderDriveItems(items, "SHARED BY")
+		},
+	}
+
+	cmd.Flags().StringVar(&accept, "accept", "", "accept the share with this id")
+	cmd.Flags().StringVar(&decline, "decline", "", "decline the share with this id")
+	return cmd
+}
+
+// ── links ────────────────────────────────────────────────────────────────────
+
+func newLinkCmd(app *App) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "link",
+		Short: "Create and manage public links",
+	}
+	cmd.AddCommand(
+		newLinkCreateCmd(app),
+		newLinkListCmd(app),
+		newLinkRemoveCmd(app),
+		newLinkPasswordCmd(app),
+	)
+	return cmd
+}
+
+func newLinkCreateCmd(app *App) *cobra.Command {
+	var role, name, expiry string
+	var withPassword bool
+
+	cmd := &cobra.Command{
+		Use:     "create PATH",
+		Short:   "Create a public link",
+		Example: "  cernbox link create /eos/user/g/gdelmont/report.pdf --role viewer --expiry 2026-12-31",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			linkType := "view"
+			switch role {
+			case "viewer", "view", "read":
+				linkType = "view"
+			case "editor", "edit", "write":
+				linkType = "edit"
+			default:
+				return cberr.Usagef("unknown link role %q: want viewer or editor", role)
+			}
+
+			exp, err := parseExpiry(expiry)
+			if err != nil {
+				return err
+			}
+
+			password := ""
+			if withPassword {
+				// Read the password rather than accepting it as a flag: a
+				// flag value ends up in the shell history and in ps output.
+				password, err = promptPassword("the link")
+				if err != nil {
+					return cberr.Usagef("reading the password: %v", err)
+				}
+			}
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			perm, err := app.client.CreateLink(ctx, info.ID, client.LinkOptions{
+				Type: linkType, DisplayName: name, Password: password, Expiry: exp,
+			})
+			if err != nil {
+				return err
+			}
+
+			if perm.Link != nil && perm.Link.URL != "" && !app.out.IsQuiet() {
+				app.out.Msg("%s", perm.Link.URL)
+			}
+			return app.renderPermissions([]client.Permission{*perm})
+		},
+	}
+
+	cmd.Flags().StringVar(&role, "role", "viewer", "viewer or editor")
+	cmd.Flags().StringVar(&name, "name", "", "label shown next to the link")
+	cmd.Flags().StringVar(&expiry, "expiry", "", "expiry date, YYYY-MM-DD")
+	cmd.Flags().BoolVar(&withPassword, "password", false, "protect the link with a password, prompted for")
+	return cmd
+}
+
+func newLinkListCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list PATH",
+		Short: "List the public links on a path",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			perms, err := app.client.ListPermissions(ctx, info.ID)
+			if err != nil {
+				return err
+			}
+
+			links := make([]client.Permission, 0, len(perms))
+			for _, p := range perms {
+				if p.Link != nil {
+					links = append(links, p)
+				}
+			}
+
+			table := output.Table{Headers: []string{"ID", "TYPE", "PASSWORD", "EXPIRES", "URL"}, Items: links}
+			for _, p := range links {
+				table.Rows = append(table.Rows, []string{
+					p.ID, p.Link.Type, yesNo(p.Link.HasPassword), expiresColumn(p.ExpiresAt), p.Link.URL,
+				})
+			}
+			return app.out.Render(table)
+		},
+	}
+}
+
+func newLinkRemoveCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove PATH LINK_ID",
+		Short: "Remove a public link",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			if err := app.client.RemovePermission(ctx, info.ID, args[1]); err != nil {
+				return err
+			}
+			app.out.Msg("Removed link %s", args[1])
+			return nil
+		},
+	}
+}
+
+func newLinkPasswordCmd(app *App) *cobra.Command {
+	var clear bool
+
+	cmd := &cobra.Command{
+		Use:   "password PATH LINK_ID",
+		Short: "Set or clear the password on a public link",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			password := ""
+			if !clear {
+				var err error
+				password, err = promptPassword("the link")
+				if err != nil {
+					return cberr.Usagef("reading the password: %v", err)
+				}
+			}
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			if err := app.client.SetLinkPassword(ctx, info.ID, args[1], password); err != nil {
+				return err
+			}
+			if clear {
+				app.out.Msg("Removed the password from link %s", args[1])
+			} else {
+				app.out.Msg("Set the password on link %s", args[1])
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&clear, "clear", false, "remove the password instead of setting one")
+	return cmd
+}
+
+// ── shared rendering ─────────────────────────────────────────────────────────
+
+// statResolved resolves a path argument and stats it, which is how the CLI
+// obtains the resource id every sharing call needs.
+func (a *App) statResolved(ctx context.Context, arg string) (*client.ResourceInfo, error) {
+	p, err := a.resolve(ctx, arg)
+	if err != nil {
+		return nil, err
+	}
+	info, err := a.client.Stat(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if info.ID == "" {
+		return nil, cberr.New(cberr.KindOther, "share", p,
+			"the server did not report a resource id for this path")
+	}
+	return info, nil
+}
+
+func (a *App) renderPermissions(perms []client.Permission) error {
+	table := output.Table{Headers: []string{"ID", "ROLE", "GRANTED TO", "TYPE", "EXPIRES"}, Items: perms}
+	for _, p := range perms {
+		grantee, kind := "-", "-"
+		switch {
+		case p.GrantedTo != nil:
+			grantee = firstNonEmpty(p.GrantedTo.DisplayName, p.GrantedTo.ID)
+			kind = p.GrantedTo.Type
+		case p.Link != nil:
+			grantee = p.Link.URL
+			kind = "link"
+		}
+		table.Rows = append(table.Rows, []string{p.ID, orDash(p.Role), grantee, kind, expiresColumn(p.ExpiresAt)})
+	}
+	return a.out.Render(table)
+}
+
+func (a *App) renderDriveItems(items []client.DriveItem, peerHeader string) error {
+	table := output.Table{Headers: []string{"ID", "NAME", "ROLE", peerHeader, "ACCEPTED"}, Items: items}
+	for _, it := range items {
+		peer := "-"
+		if it.SharedBy != nil {
+			peer = firstNonEmpty(it.SharedBy.DisplayName, it.SharedBy.ID)
+		}
+		table.Rows = append(table.Rows, []string{it.ID, it.Name, orDash(it.Role), peer, yesNo(it.Accepted)})
+	}
+	return a.out.Render(table)
+}
+
+func expiresColumn(t *time.Time) string {
+	if t == nil {
+		return "never"
+	}
+	return t.Local().Format(expiryLayout)
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return "-"
+}
