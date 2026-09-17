@@ -22,16 +22,37 @@ type testBox struct {
 	files map[string]string
 	dirs  map[string]bool
 
+	trash    map[string]trashEntry
+	versions map[string][]versionEntry
+	restored string
+
 	requests []string
 }
 
-const testDavPrefix = "/remote.php/dav/files/einstein"
+type trashEntry struct {
+	name     string
+	location string
+	body     string
+}
+
+type versionEntry struct {
+	key  string
+	body string
+}
+
+const (
+	testDavPrefix   = "/remote.php/dav/files/einstein"
+	testTrashPrefix = "/remote.php/dav/trash-bin/einstein"
+	testMetaPrefix  = "/remote.php/dav/meta"
+)
 
 func newTestBox(t *testing.T) *testBox {
 	t.Helper()
 	b := &testBox{
-		files: map[string]string{},
-		dirs:  map[string]bool{"/": true},
+		files:    map[string]string{},
+		dirs:     map[string]bool{"/": true},
+		trash:    map[string]trashEntry{},
+		versions: map[string][]versionEntry{},
 	}
 	b.ts = httptest.NewServer(http.HandlerFunc(b.route))
 	t.Cleanup(b.ts.Close)
@@ -72,6 +93,12 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/drives/"):
 		b.serveGraphItem(w, r)
+
+	case strings.HasPrefix(r.URL.Path, testTrashPrefix):
+		b.serveTrash(w, r)
+
+	case strings.HasPrefix(r.URL.Path, testMetaPrefix):
+		b.serveVersions(w, r)
 
 	case strings.HasPrefix(r.URL.Path, testDavPrefix):
 		b.serveDav(w, r)
@@ -198,6 +225,106 @@ func davXML(p string, isDir bool, size int) string {
 		`<d:getlastmodified>Mon, 02 Jan 2026 15:04:05 GMT</d:getlastmodified>`+
 		`</d:prop></d:propstat></d:response>`,
 		href, path.Base(p), rt, size, size, strings.ReplaceAll(p, "/", "_"))
+}
+
+// serveTrash implements the trash-bin endpoints: a PROPFIND listing, MOVE to
+// restore, DELETE to purge.
+func (b *testBox) serveTrash(w http.ResponseWriter, r *http.Request) {
+	key := strings.Trim(strings.TrimPrefix(r.URL.Path, testTrashPrefix), "/")
+
+	switch r.Method {
+	case "PROPFIND":
+		var entries []string
+		entries = append(entries, fmt.Sprintf(
+			`<d:response><d:href>%s/</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status>`+
+				`<d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>`+
+				`</d:propstat></d:response>`, testTrashPrefix))
+		for k, item := range b.trash {
+			entries = append(entries, fmt.Sprintf(
+				`<d:response><d:href>%s/%s</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop>`+
+					`<d:displayname>%s</d:displayname><d:resourcetype></d:resourcetype>`+
+					`<d:getcontentlength>%d</d:getcontentlength><oc:size>%d</oc:size>`+
+					`<oc:trashbin-original-filename>%s</oc:trashbin-original-filename>`+
+					`<oc:trashbin-original-location>%s</oc:trashbin-original-location>`+
+					`<oc:trashbin-delete-timestamp>1767225600</oc:trashbin-delete-timestamp>`+
+					`</d:prop></d:propstat></d:response>`,
+				testTrashPrefix, k, item.name, len(item.body), len(item.body), item.name, item.location))
+		}
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">`+
+			strings.Join(entries, "")+`</d:multistatus>`)
+
+	case "MOVE":
+		item, ok := b.trash[key]
+		if !ok {
+			http.Error(w, "no such trash item", http.StatusNotFound)
+			return
+		}
+		dst := "/" + item.location
+		if h := r.Header.Get("Destination"); h != "" {
+			if i := strings.Index(h, testDavPrefix); i >= 0 {
+				dst = path.Clean(h[i+len(testDavPrefix):])
+			}
+		}
+		b.files[dst] = item.body
+		delete(b.trash, key)
+		w.WriteHeader(http.StatusCreated)
+
+	case http.MethodDelete:
+		if key == "" {
+			b.trash = map[string]trashEntry{}
+		} else {
+			delete(b.trash, key)
+		}
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// serveVersions implements the meta endpoints for version history.
+func (b *testBox) serveVersions(w http.ResponseWriter, r *http.Request) {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, testMetaPrefix), "/")
+	resourceID, after, _ := strings.Cut(rest, "/")
+	key := strings.TrimPrefix(after, "v/")
+	if key == "v" {
+		key = ""
+	}
+
+	switch r.Method {
+	case "PROPFIND":
+		entries := []string{fmt.Sprintf(
+			`<d:response><d:href>%s/%s/v</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status>`+
+				`<d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>`+
+				`</d:propstat></d:response>`, testMetaPrefix, resourceID)}
+		for _, v := range b.versions[resourceID] {
+			entries = append(entries, fmt.Sprintf(
+				`<d:response><d:href>%s/%s/v/%s</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop>`+
+					`<d:resourcetype></d:resourcetype><d:getcontentlength>%d</d:getcontentlength>`+
+					`<d:getetag>&quot;etag-%s&quot;</d:getetag></d:prop></d:propstat></d:response>`,
+				testMetaPrefix, resourceID, v.key, len(v.body), v.key))
+		}
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">`+
+			strings.Join(entries, "")+`</d:multistatus>`)
+
+	case http.MethodGet:
+		for _, v := range b.versions[resourceID] {
+			if v.key == key {
+				fmt.Fprint(w, v.body)
+				return
+			}
+		}
+		http.Error(w, "no such version", http.StatusNotFound)
+
+	case "COPY":
+		b.restored = key
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (b *testBox) mkdir(p string) {

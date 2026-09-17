@@ -78,6 +78,12 @@ type propsRaw struct {
 	OCPerms      string        `xml:"http://owncloud.org/ns permissions"`
 	OCSize       string        `xml:"http://owncloud.org/ns size"`
 	OCChecksums  *checksumsRaw `xml:"http://owncloud.org/ns checksums"`
+
+	// Trash-bin properties, present only in a trash listing.
+	TrashFilename  string `xml:"http://owncloud.org/ns trashbin-original-filename"`
+	TrashLocation  string `xml:"http://owncloud.org/ns trashbin-original-location"`
+	TrashTimestamp string `xml:"http://owncloud.org/ns trashbin-delete-timestamp"`
+	TrashDatetime  string `xml:"http://owncloud.org/ns trashbin-delete-datetime"`
 }
 
 type resourceType struct {
@@ -193,10 +199,19 @@ func (c *Client) propfind(ctx context.Context, p string, depth int, op string) (
 	return parseMultistatus(resp.Body, op, p)
 }
 
+// decodeXML parses an XML response body, reporting a malformed one in terms a
+// user can act on rather than as a raw parse error.
+func decodeXML(r io.Reader, v any, op, p string) error {
+	if err := xml.NewDecoder(r).Decode(v); err != nil {
+		return cberr.Wrap(cberr.KindOther, op, p, fmt.Errorf("malformed PROPFIND response: %w", err))
+	}
+	return nil
+}
+
 func parseMultistatus(r io.Reader, op, p string) ([]ResourceInfo, error) {
 	var ms multistatus
-	if err := xml.NewDecoder(r).Decode(&ms); err != nil {
-		return nil, cberr.Wrap(cberr.KindOther, op, p, fmt.Errorf("malformed PROPFIND response: %w", err))
+	if err := decodeXML(r, &ms, op, p); err != nil {
+		return nil, err
 	}
 
 	out := make([]ResourceInfo, 0, len(ms.Responses))
@@ -216,18 +231,9 @@ func entryToInfo(entry multistatusEntry) (ResourceInfo, bool) {
 		href = entry.Href
 	}
 
-	var props propsRaw
-	found := false
-	for _, ps := range entry.Propstat {
-		// A propstat block carries its own status; the 404 block lists
-		// properties the server does not have and must not be merged in.
-		if !strings.Contains(ps.Status, " 200 ") {
-			continue
-		}
-		props = ps.Prop
-		found = true
-		break
-	}
+	// A propstat block carries its own status; the 404 block lists properties
+	// the server does not have and must not be merged in.
+	props, found := okProps(entry)
 	if !found {
 		return ResourceInfo{}, false
 	}

@@ -291,7 +291,7 @@ func TestColorOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestIsTerminalOnRegularFile(t *testing.T) {
+func TestIsTerminal(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "out-*")
 	if err != nil {
 		t.Fatal(err)
@@ -303,5 +303,17 @@ func TestIsTerminalOnRegularFile(t *testing.T) {
 	}
 	if IsTerminal(nil) {
 		t.Error("nil should not be reported as a terminal")
+	}
+
+	// /dev/null is a character device. A check based on os.ModeCharDevice would
+	// call it a terminal, and a cron job with stdin redirected there would then
+	// block forever on a confirmation prompt.
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skipf("cannot open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+	if IsTerminal(devNull) {
+		t.Errorf("%s must not be reported as a terminal", os.DevNull)
 	}
 }
