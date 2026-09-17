@@ -1,0 +1,281 @@
+package client
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/cernbox/cernbox-cli/pkg/cberr"
+)
+
+// Sciencemesh endpoints. These are the user-facing side of OCM: the
+// provider-to-provider protocol lives at /ocm and is not something a person
+// calls.
+const (
+	ocmGenerateInvite = "/sciencemesh/generate-invite"
+	ocmListInvite     = "/sciencemesh/list-invite"
+	ocmAcceptInvite   = "/sciencemesh/accept-invite"
+	ocmFindAccepted   = "/sciencemesh/find-accepted-users"
+	ocmDeleteAccepted = "/sciencemesh/delete-accepted-user"
+	ocmListProviders  = "/sciencemesh/list-providers"
+	ocsRemoteShares   = "/ocs/v1.php/apps/files_sharing/api/v1/shares/remote_shares"
+)
+
+// RecipientRemote is the recipient type for a user at another OCM provider.
+// The object id is "user@provider.example.org".
+const RecipientRemote = "remote"
+
+// Invite is a federated sharing invitation.
+type Invite struct {
+	Token       string     `json:"token"`
+	Description string     `json:"description,omitempty"`
+	Expiration  *time.Time `json:"expiration,omitempty"`
+	// Link is what you send to the other person. It carries the token and the
+	// provider, so they do not have to assemble either by hand.
+	Link string `json:"link,omitempty"`
+}
+
+type rawInvite struct {
+	Token       string `json:"token"`
+	Description string `json:"description"`
+	Expiration  uint64 `json:"expiration"`
+	InviteLink  string `json:"invite_link"`
+}
+
+func (r rawInvite) toInvite() Invite {
+	inv := Invite{Token: r.Token, Description: r.Description, Link: r.InviteLink}
+	if r.Expiration > 0 {
+		t := time.Unix(int64(r.Expiration), 0)
+		inv.Expiration = &t
+	}
+	return inv
+}
+
+// RemoteUser is a user at another OCM provider who has accepted an invitation.
+type RemoteUser struct {
+	DisplayName string `json:"display_name,omitempty"`
+	// IDP is the remote provider's identity provider.
+	IDP string `json:"idp"`
+	// UserID identifies the user at that provider.
+	UserID string `json:"user_id"`
+	Mail   string `json:"mail,omitempty"`
+}
+
+// Address renders the user in the "user@provider" form that share recipients
+// take.
+func (u RemoteUser) Address() string {
+	if u.UserID == "" || u.IDP == "" {
+		return u.UserID
+	}
+	return u.UserID + "@" + strings.TrimPrefix(strings.TrimPrefix(u.IDP, "https://"), "http://")
+}
+
+// GenerateInvite creates an invitation token. When recipient is a mail address
+// and the server is configured to send mail, it is also mailed to them.
+func (c *Client) GenerateInvite(ctx context.Context, description, recipient string) (*Invite, error) {
+	body := map[string]string{}
+	if description != "" {
+		body["description"] = description
+	}
+	if recipient != "" {
+		body["recipient"] = recipient
+	}
+
+	var raw rawInvite
+	if err := c.postJSON(ctx, c.URL(ocmGenerateInvite), "generate an invitation", "", body, &raw); err != nil {
+		return nil, ocmUnavailable(err, "generate an invitation")
+	}
+	if raw.Token == "" {
+		return nil, cberr.New(cberr.KindOther, "generate an invitation", "",
+			"the server returned no invitation token")
+	}
+	inv := raw.toInvite()
+	return &inv, nil
+}
+
+// ListInvites returns the invitations the caller has created.
+func (c *Client) ListInvites(ctx context.Context) ([]Invite, error) {
+	var raws []rawInvite
+	if err := c.getJSON(ctx, c.URL(ocmListInvite), "list invitations", "", &raws); err != nil {
+		return nil, ocmUnavailable(err, "list invitations")
+	}
+	out := make([]Invite, 0, len(raws))
+	for _, r := range raws {
+		out = append(out, r.toInvite())
+	}
+	return out, nil
+}
+
+// AcceptInvite accepts an invitation issued by another provider.
+func (c *Client) AcceptInvite(ctx context.Context, token, providerDomain string) error {
+	if token == "" || providerDomain == "" {
+		return cberr.Usagef("accepting an invitation needs both the token and the provider it came from")
+	}
+	body := map[string]string{"token": token, "providerDomain": providerDomain}
+	if err := c.postJSON(ctx, c.URL(ocmAcceptInvite), "accept an invitation", token, body, nil); err != nil {
+		return ocmUnavailable(err, "accept an invitation")
+	}
+	return nil
+}
+
+// AcceptedUsers returns the remote users who can be shared with.
+func (c *Client) AcceptedUsers(ctx context.Context) ([]RemoteUser, error) {
+	var users []RemoteUser
+	if err := c.getJSON(ctx, c.URL(ocmFindAccepted), "list federated contacts", "", &users); err != nil {
+		return nil, ocmUnavailable(err, "list federated contacts")
+	}
+	return users, nil
+}
+
+// RemoveAcceptedUser drops a remote user from the accepted list.
+func (c *Client) RemoveAcceptedUser(ctx context.Context, idp, userID string) error {
+	if idp == "" || userID == "" {
+		return cberr.Usagef("removing a federated contact needs both the provider and the user id")
+	}
+	body := map[string]string{"idp": idp, "user_id": userID}
+	if err := c.sendJSON(ctx, http.MethodDelete, c.URL(ocmDeleteAccepted),
+		"remove a federated contact", userID, body, nil); err != nil {
+		return ocmUnavailable(err, "remove a federated contact")
+	}
+	return nil
+}
+
+// OCMProvider is a federation partner.
+type OCMProvider struct {
+	Name     string `json:"name,omitempty"`
+	FullName string `json:"full_name,omitempty"`
+	Domain   string `json:"domain,omitempty"`
+	Homepage string `json:"homepage,omitempty"`
+}
+
+// ListProviders returns the OCM providers this instance federates with.
+func (c *Client) ListProviders(ctx context.Context) ([]OCMProvider, error) {
+	var providers []OCMProvider
+	if err := c.getJSON(ctx, c.URL(ocmListProviders), "list federation partners", "", &providers); err != nil {
+		return nil, ocmUnavailable(err, "list federation partners")
+	}
+	return providers, nil
+}
+
+// FederatedShare is a share received from another provider.
+type FederatedShare struct {
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Owner       string `json:"owner,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	Permissions string `json:"permissions,omitempty"`
+	Accepted    bool   `json:"accepted"`
+	MountPoint  string `json:"mount_point,omitempty"`
+}
+
+type rawFederatedShare struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	OwnerDisplay string `json:"displayname_owner"`
+	Owner        string `json:"uid_owner"`
+	Permissions  any    `json:"permissions"`
+	State        any    `json:"state"`
+	MountPoint   string `json:"mountpoint"`
+	ShareWith    string `json:"share_with"`
+}
+
+// ReceivedFederatedShares lists shares other providers have made with the
+// caller.
+func (c *Client) ReceivedFederatedShares(ctx context.Context) ([]FederatedShare, error) {
+	var env ocsEnvelope[[]rawFederatedShare]
+	if err := c.getOCSJSON(ctx, c.URL(ocsRemoteShares), "list federated shares", &env); err != nil {
+		return nil, err
+	}
+
+	out := make([]FederatedShare, 0, len(env.OCS.Data))
+	for _, r := range env.OCS.Data {
+		share := FederatedShare{
+			ID:         r.ID,
+			Name:       r.Name,
+			Path:       r.Path,
+			Owner:      firstNonEmptyString(r.OwnerDisplay, r.Owner),
+			MountPoint: r.MountPoint,
+			// OCS encodes the accepted state as 0; anything else means the
+			// share is pending or rejected.
+			Accepted: numericState(r.State) == 0,
+		}
+		if p := numericState(r.Permissions); p > 0 {
+			share.Permissions = ocsPermissionString(int(p))
+		}
+		out = append(out, share)
+	}
+	return out, nil
+}
+
+// numericState reads a field OCS may encode as a number or a string.
+func numericState(v any) int64 {
+	switch t := v.(type) {
+	case float64:
+		return int64(t)
+	case string:
+		var n int64
+		for _, r := range t {
+			if r < '0' || r > '9' {
+				return -1
+			}
+			n = n*10 + int64(r-'0')
+		}
+		return n
+	default:
+		return -1
+	}
+}
+
+// ocsPermissionString renders the OCS permission bitmask in the terms the CLI
+// uses elsewhere.
+func ocsPermissionString(mask int) string {
+	const (
+		permRead   = 1
+		permUpdate = 2
+		permCreate = 4
+		permDelete = 8
+		permShare  = 16
+	)
+	switch {
+	case mask&permShare != 0 && mask&permUpdate != 0:
+		return "collab"
+	case mask&(permUpdate|permCreate|permDelete) != 0:
+		return "editor"
+	case mask&permRead != 0:
+		return "viewer"
+	default:
+		return ""
+	}
+}
+
+// getOCSJSON fetches an OCS endpoint and checks the envelope's status.
+func (c *Client) getOCSJSON(ctx context.Context, u, op string, out any) error {
+	resp, err := c.do(ctx, request{
+		method: http.MethodGet,
+		url:    u + "?format=json",
+		header: http.Header{
+			"OCS-APIREQUEST": []string{"true"},
+			"Accept":         []string{"application/json"},
+		},
+		op: op,
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return decodeJSON(resp.Body, out, op, "")
+}
+
+// ocmUnavailable turns a 404 into an explanation. The sciencemesh service is
+// optional, and a bare "not found" would read as "no invitations" rather than
+// "this deployment does not do federated sharing".
+func ocmUnavailable(err error, op string) error {
+	if cberr.KindOf(err) != cberr.KindNotFound {
+		return err
+	}
+	return cberr.New(cberr.KindOther, op, "",
+		"this CERNBox deployment does not expose federated sharing (OCM)")
+}
