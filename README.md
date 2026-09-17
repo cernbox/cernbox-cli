@@ -27,14 +27,23 @@ RPM and deb packages are built by the release pipeline and attached to each rele
 | Identity | `login` `logout` `status` `whoami` |
 | Browse | `ls` `stat` `find` `du` `cat` |
 | Namespace | `mkdir` `touch` `rm` `mv` |
-| Transfer | `cp` `get` `put` |
+| Transfer | `cp` `get` `put` `sync` |
 | Sharing | `share create/list/update/remove/received` |
 | Links | `link create/list/remove/password` |
+| Federated | `ocm invite/contacts/providers/received` |
+| History | `trash list/restore/purge`, `versions list/restore/download` |
 | Spaces | `space list/info` |
+| Apps | `open` `apps` |
 | Tokens | `token list/revoke` |
 | Shell | `version` `completion` |
 
-Still in [the design](docs/design.md) but not yet built: `sync`, `trash`, `versions`, `lock`/`unlock`, `open`, and OCM. `token create` reports how to create one instead: CERNBox exposes listing and revocation of app tokens over its public API, but not creation.
+### Two things the CLI deliberately does not do
+
+**Locking.** There is no `cernbox lock`. Reva's WebDAV `LOCK` handler is a placeholder: it returns the same hardcoded token (`opaquelocktoken:0000…`) to every caller and records nothing, and `UNLOCK` returns 501. A lock command built on it would report success and lock nothing, which is worse than not having one. It can be added once reva implements locking for real.
+
+**Two-way sync.** `sync` is a one-way mirror. Genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there"; without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
+
+`token create` reports how to create one instead of failing with a 404: CERNBox exposes listing and revocation of app tokens over its public API, but creation goes through the browser enrolment flow.
 
 ## Authentication
 
@@ -85,6 +94,22 @@ cernbox cp -r cb:/eos/project/c/cernbox/data ./data
 ```bash
 cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
 cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
+```
+
+## Sharing
+
+```bash
+cernbox share create /eos/user/g/gdelmont/Documents --with marie --role editor
+cernbox link create /eos/user/g/gdelmont/report.pdf --expiry 2026-12-31
+cernbox share received
+```
+
+To share with someone at another institution, exchange an invitation first, then share as usual:
+
+```bash
+cernbox ocm invite create --recipient alice@other-lab.org
+cernbox ocm contacts
+cernbox share create /eos/user/g/gdelmont/data --with-remote alice@other-lab.org
 ```
 
 ## Scripting
