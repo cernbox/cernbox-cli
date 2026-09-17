@@ -10,6 +10,12 @@
 machine_api_key = "machine-api-key"
 
 [http]
+# TLS, because OCM requires it between providers: reva's discovery client
+# forces https for any peer that is not localhost, so a plain-http dev instance
+# can never receive a federated share. The certs are signed by the dev CA that
+# both containers already trust.
+certfile = "/etc/pki/revad-partner.crt"
+keyfile = "/etc/pki/revad-partner.key"
 
 [log]
 level = "debug"
@@ -34,7 +40,7 @@ ocminvitemanagersvc = "{{ grpc.services.ocminvitemanager.address }}"
 ocmproviderauthorizersvc = "{{ grpc.services.ocmproviderauthorizer.address }}"
 ocmshareprovidersvc = "{{ grpc.services.ocmshareprovider.address }}"
 spacessvc = "{{ grpc.services.spacesregistry.address }}"
-datagateway = "http://{{ http.services.datagateway.address }}/data"
+datagateway = "https://{{ http.services.datagateway.address }}/data"
 
 # With the localhome driver the home is the mount path itself: the driver maps
 # it to the caller's own directory. Templating a username in here as well would
@@ -92,7 +98,7 @@ driver = "localhome"
 mount_path = "/home"
 mount_id = "partnerhome"
 expose_data_server = true
-data_server_url = "http://localhost/data"
+data_server_url = "https://localhost/data"
 enable_home_creation = true
 
 [grpc.services.storageprovider.drivers.localhome]
@@ -106,7 +112,7 @@ mount_path = "/ocm"
 mount_id = "ocm"
 space_depth = 2
 expose_data_server = true
-data_server_url = "http://localhost/data"
+data_server_url = "https://localhost/data"
 
 [grpc.services.storageprovider.drivers.ocmoutcoming]
 machine_secret = "{{ vars.machine_api_key }}"
@@ -136,8 +142,8 @@ providers = "/etc/revad/ocm-providers.json"
 [grpc.services.ocmshareprovider]
 driver = "json"
 provider_domain = "revad-partner"
-webdav_endpoint = "http://revad-partner"
-webapp_endpoint = "http://revad-partner/external/sciencemesh"
+webdav_endpoint = "https://revad-partner"
+webapp_endpoint = "https://revad-partner/external/sciencemesh"
 
 [grpc.services.ocmshareprovider.drivers.json]
 file = "/var/tmp/reva/partner-ocm-shares.json"
@@ -186,7 +192,7 @@ providers = "/etc/revad/ocm-providers.json"
 allowed_origins = ["*"]
 
 [http.services.datagateway]
-address = ":80"
+address = ":443"
 
 [[http.services.dataprovider]]
 driver = "localhome"
@@ -206,39 +212,39 @@ machine_secret = "{{ vars.machine_api_key }}"
 
 # The machine-to-machine OCM API the other provider calls.
 [http.services.ocm]
-address = ":80"
+address = ":443"
 
 # The user-facing side, which the CLI talks to.
 [http.services.sciencemesh]
-address = ":80"
+address = ":443"
 provider_domain = "revad-partner"
-mesh_directory_url = "http://revad-partner/meshdir"
+mesh_directory_url = "https://revad-partner/meshdir"
 smtp_credentials = {}
 
 [http.services.wellknown]
-address = ":80"
+address = ":443"
 
 [http.services.wellknown.ocmprovider]
 ocm_prefix = "ocm"
 provider = "Partner Lab (dev)"
-endpoint = "http://revad-partner"
+endpoint = "https://revad-partner"
 enable_webapp = true
 
 [http.services.ocdav]
-address = ":80"
+address = ":443"
 insecure = true
-public_url = "http://revad-partner"
+public_url = "https://revad-partner"
 files_namespace = "/home"
 
 # The graph API, which is how the CLI learns who it is authenticated as.
 [http.services.ocgraph]
-address = ":80"
-base_url = "http://revad-partner"
+address = ":443"
+base_url = "https://revad-partner"
 # Without this, sharedWithMe silently leaves federated shares out.
 ocm_enabled = true
 
 [http.services.ocs]
-address = ":80"
+address = ":443"
 prefix = "ocs"
 share_prefix = "/"
 home_namespace = "/home"
@@ -246,7 +252,7 @@ home_namespace = "/home"
 [http.services.ocs.config]
 version = "1.8"
 website = "reva"
-host = "http://revad-partner"
+host = "https://revad-partner"
 contact = "partner@example.org"
 ssl = "false"
 

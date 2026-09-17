@@ -6,6 +6,12 @@ provider_domain = "revad"
 machine_api_key = "machine-api-key"
 
 [http]
+# TLS, because OCM requires it between providers: reva's discovery client
+# forces https for any peer that is not localhost, so a plain-http dev instance
+# can never receive a federated share. The certs are signed by the dev CA that
+# both containers already trust.
+certfile = "/etc/pki/revad.crt"
+keyfile = "/etc/pki/revad.key"
 
 [log]
 level = "debug"
@@ -28,7 +34,7 @@ usershareprovidersvc = "{{ grpc.services.usershareprovider.address }}"
 publicshareprovidersvc = "{{ grpc.services.publicshareprovider.address }}"
 groupprovidersvc = "{{ grpc.services.groupprovider.address }}"
 spacessvc = "{{ grpc.services.spacesregistry.address }}"
-datagateway = "http://{{ http.services.datagateway.address }}/data"
+datagateway = "https://{{ http.services.datagateway.address }}/data"
 
 transfer_expires = 6     # give it a moment
 commit_share_to_storage_grant = true
@@ -104,7 +110,7 @@ driver = "eos"
 mount_path = "/"
 mount_id = "localhome"
 expose_data_server = true
-data_server_url = "http://localhost:{{ http.services.dataprovider[0].address.port }}/data"
+data_server_url = "https://localhost:{{ http.services.dataprovider[0].address.port }}/data"
 enable_home_creation = true
 space_depth = 4
 
@@ -127,7 +133,7 @@ mount_path = "/ocm"
 mount_id = "ocm"
 space_depth = 2
 expose_data_server = true
-data_server_url = "http://localhost/data"
+data_server_url = "https://localhost/data"
 
 [grpc.services.storageprovider.drivers.ocmoutcoming]
 machine_secret = "{{ vars.machine_api_key }}"
@@ -145,7 +151,34 @@ machine_secret = "{{ vars.machine_api_key }}"
 # The catalogue: how a mime type is presented and which app opens it. The
 # providers themselves are discovered in the service registry, which the
 # in-process memory driver shares across every service in this container.
+# The app registry discovers providers through the service registry, but the
+# mime type catalogue is deployment policy and stays here: without it nothing is
+# advertised as openable, however many providers are running.
 [grpc.services.appregistry]
+
+[[grpc.services.appregistry.mime_types]]
+mime_type = "text/plain"
+extension = "txt"
+name = "Text file"
+description = "Plain text"
+default_app = "Demo"
+allow_creation = true
+
+[[grpc.services.appregistry.mime_types]]
+mime_type = "text/markdown"
+extension = "md"
+name = "Markdown file"
+description = "Markdown document"
+default_app = "Demo"
+allow_creation = true
+
+[[grpc.services.appregistry.mime_types]]
+mime_type = "application/vnd.oasis.opendocument.text"
+extension = "odt"
+name = "OpenDocument text"
+description = "OpenDocument text document"
+default_app = "Demo"
+allow_creation = true
 
 [[grpc.services.appregistry.mime_types]]
 mime_type = "text/plain"
@@ -177,7 +210,7 @@ mime_types = ["text/plain", "text/markdown", "application/vnd.oasis.opendocument
 language = "en"
 
 [grpc.services.appprovider.drivers.demo]
-iframe_ui_provider = "http://localhost/demo-app"
+iframe_ui_provider = "https://localhost/demo-app"
 
 ### OPEN CLOUD MESH ###
 
@@ -199,8 +232,8 @@ providers = "/etc/revad/ocm-providers.json"
 [grpc.services.ocmshareprovider]
 driver = "json"
 provider_domain = "revad"
-webdav_endpoint = "http://revad"
-webapp_endpoint = "http://revad/external/sciencemesh"
+webdav_endpoint = "https://revad"
+webapp_endpoint = "https://revad/external/sciencemesh"
 
 [grpc.services.ocmshareprovider.drivers.json]
 file = "/var/tmp/reva/ocm-shares.json"
@@ -263,7 +296,7 @@ token_strategy_chain = ["bearer", "header"]
 "mirall" = "basic"
 
 [http.services.datagateway]
-address = ":80"
+address = ":443"
 
 [[http.services.dataprovider]]
 driver = "eos"
@@ -288,7 +321,7 @@ http_client_cafiles = "/etc/pki/ca.crt"
 
 # OCS
 [http.services.ocs]
-address = ":80"
+address = ":443"
 prefix = "ocs"
 share_prefix = "/"
 home_namespace = "/"
@@ -300,7 +333,7 @@ resource_info_cache_type = "memory"
 [http.services.ocs.config]
 version = "1.8"
 website = "reva"
-host = "http://localhost"
+host = "https://localhost"
 contact = "cernbox@cernbox.org"
 ssl = "false"
 
@@ -378,9 +411,9 @@ micro = 11
 string = "10.0.11"
 
 [http.services.ocdav]
-address = ":80"
+address = ":443"
 insecure = true
-public_url = "http://localhost"
+public_url = "https://localhost"
 # A literal prefix, not a template: ocdav's applyLayout returns the namespace
 # unchanged, so a {{.Username}} in here reaches the storage provider verbatim.
 # "/" means a WebDAV path is the canonical CERNBox path, which is what the CLI
@@ -388,7 +421,7 @@ public_url = "http://localhost"
 files_namespace = "/"
 
 [http.services.archiver]
-address = ":80"
+address = ":443"
 prefix = "archiver"
 timeout = 300
 insecure = true
@@ -396,17 +429,17 @@ max_num_files = 10000
 max_size = 1073741824
 
 [http.services.appprovider]
-address = ":80"
+address = ":443"
 prefix = "app"
 insecure = true
 
 [http.services.ocm]
-address = ":80"
+address = ":443"
 
 [http.services.sciencemesh]
-address = ":80"
+address = ":443"
 provider_domain = "revad"
-mesh_directory_url = "http://revad/meshdir"
+mesh_directory_url = "https://revad/meshdir"
 smtp_credentials = {}
 
 [[http.services.dataprovider]]
@@ -418,12 +451,12 @@ insecure = true
 machine_secret = "{{ vars.machine_api_key }}"
 
 [http.services.wellknown]
-address = ":80"
+address = ":443"
 
 [http.services.wellknown.ocmprovider]
 ocm_prefix = "ocm"
 provider = "Reva for CERNBox (dev)"
-endpoint = "http://revad"
+endpoint = "https://revad"
 enable_webapp = true
 
 [http.middlewares.providerauthorizer]
@@ -433,11 +466,11 @@ driver = "json"
 providers = "/etc/revad/ocm-providers.json"
 
 [http.services.ocapi]
-address = ":80"
+address = ":443"
 
 [http.services.ocgraph]
-address = ":80"
-base_url = "http://localhost"
+address = ":443"
+base_url = "https://localhost"
 # Without this, sharedWithMe silently leaves federated shares out.
 ocm_enabled = true
 
