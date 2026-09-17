@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/client"
 )
@@ -31,6 +32,7 @@ type fakeBox struct {
 	mu      sync.Mutex
 	files   map[string][]byte
 	dirs    map[string]bool
+	mtimes  map[string]time.Time
 	uploads map[string]*fakeUpload
 
 	// Behaviour switches.
@@ -63,6 +65,7 @@ func newFakeBox(t *testing.T) *fakeBox {
 		t:               t,
 		files:           map[string][]byte{},
 		dirs:            map[string]bool{"/": true},
+		mtimes:          map[string]time.Time{},
 		uploads:         map[string]*fakeUpload{},
 		tusEnabled:      true,
 		archiverEnabled: true,
@@ -186,7 +189,7 @@ func (b *fakeBox) servePropfind(w http.ResponseWriter, r *http.Request, p string
 			entries = append(entries, b.childrenLocked(p)...)
 		}
 	case b.files[p] != nil:
-		entries = append(entries, davEntry{Path: p, Size: int64(len(b.files[p])), Body: b.files[p]})
+		entries = append(entries, davEntry{Path: p, Size: int64(len(b.files[p])), Body: b.files[p], Modified: b.mtimes[p]})
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -202,7 +205,7 @@ func (b *fakeBox) childrenLocked(dir string) []davEntry {
 	seen := map[string]bool{}
 	for p, body := range b.files {
 		if path.Dir(p) == dir {
-			out = append(out, davEntry{Path: p, Size: int64(len(body)), Body: body})
+			out = append(out, davEntry{Path: p, Size: int64(len(body)), Body: body, Modified: b.mtimes[p]})
 		}
 	}
 	for p := range b.dirs {
@@ -255,6 +258,7 @@ func (b *fakeBox) servePut(w http.ResponseWriter, r *http.Request, p string) {
 	body, _ := io.ReadAll(r.Body)
 	b.mu.Lock()
 	b.files[p] = body
+	b.mtimes[p] = time.Now()
 	b.putCount++
 	b.mu.Unlock()
 	w.WriteHeader(http.StatusCreated)
@@ -334,6 +338,7 @@ func (b *fakeBox) serveTus(w http.ResponseWriter, r *http.Request) {
 		offset := len(up.buf)
 		if int64(offset) >= up.size {
 			b.files[up.path] = up.buf
+			b.mtimes[up.path] = time.Now()
 		}
 		b.mu.Unlock()
 
@@ -397,10 +402,11 @@ func relTo(base, p string) string {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 type davEntry struct {
-	Path  string
-	IsDir bool
-	Size  int64
-	Body  []byte
+	Path     string
+	IsDir    bool
+	Size     int64
+	Body     []byte
+	Modified time.Time
 }
 
 func multistatus(entries []davEntry) string {
@@ -425,6 +431,9 @@ func multistatus(entries []davEntry) string {
 			}
 		}
 		fmt.Fprintf(&sb, "<oc:size>%d</oc:size>", e.Size)
+		if !e.Modified.IsZero() {
+			sb.WriteString("<d:getlastmodified>" + e.Modified.UTC().Format(http.TimeFormat) + "</d:getlastmodified>")
+		}
 		sb.WriteString("<oc:fileid>localhome$ABC!" + xmlEscape(e.Path) + "</oc:fileid>")
 		sb.WriteString("</d:prop></d:propstat></d:response>")
 	}
@@ -459,6 +468,7 @@ func (b *fakeBox) putFile(p string, body []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.files[p] = body
+	b.mtimes[p] = time.Now()
 	for dir := path.Dir(p); dir != "/" && dir != "."; dir = path.Dir(dir) {
 		b.dirs[dir] = true
 	}

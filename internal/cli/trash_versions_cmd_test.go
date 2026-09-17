@@ -270,3 +270,74 @@ func TestVersionsDownloadMissingVersion(t *testing.T) {
 		t.Errorf("exit code = %d, want %d", cberr.ExitCode(err), cberr.ExitNotFound)
 	}
 }
+
+// ── sync ─────────────────────────────────────────────────────────────────────
+
+func TestSyncPushCommand(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir("/eos/user/e/einstein")
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := run(t, box, "sync", dir, "cb:/eos/user/e/einstein/data"); err != nil {
+		t.Fatal(err)
+	}
+	if got := box.files["/eos/user/e/einstein/data/a.txt"]; got != "alpha" {
+		t.Errorf("sync did not upload the file: %+v", box.files)
+	}
+}
+
+func TestSyncRequiresOneRemoteSide(t *testing.T) {
+	box := newTestBox(t)
+
+	// Two local paths: the cb: prefix is missing, which is the same trap cp has.
+	_, _, err := run(t, box, "sync", t.TempDir(), t.TempDir())
+	if cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Errorf("got %v, want a usage error", err)
+	}
+
+	// Two remote paths: sync mirrors between local and CERNBox, not within it.
+	_, _, err = run(t, box, "sync", "cb:/eos/user/e/einstein/a", "cb:/eos/user/e/einstein/b")
+	if cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Errorf("got %v, want a usage error", err)
+	}
+}
+
+// TestSyncDeleteAnnouncesItself: --delete can remove a lot of data on the
+// strength of one mistyped path, so it must say what it is about to do.
+func TestSyncDeleteAnnouncesItself(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir("/eos/user/e/einstein/data")
+
+	_, stderr, err := run(t, box, "sync", t.TempDir(), "cb:/eos/user/e/einstein/data", "--delete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "removed from the destination") {
+		t.Errorf("--delete should warn before acting:\n%s", stderr)
+	}
+}
+
+func TestSyncDryRunReportsWithoutActing(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir("/eos/user/e/einstein")
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, err := run(t, box, "sync", "--dry-run", dir, "cb:/eos/user/e/einstein/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "Would mirror") {
+		t.Errorf("a dry run should say it is a plan:\n%s", stderr)
+	}
+	if _, uploaded := box.files["/eos/user/e/einstein/data/a.txt"]; uploaded {
+		t.Error("a dry run uploaded the file")
+	}
+}
