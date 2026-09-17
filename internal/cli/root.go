@@ -174,6 +174,8 @@ func newRootCmd(app *App) *cobra.Command {
 		newTokenCmd(app),
 		newTrashCmd(app),
 		newVersionsCmd(app),
+		newOpenCmd(app),
+		newAppsCmd(app),
 
 		newVersionCmd(app),
 		newCompletionCmd(),
