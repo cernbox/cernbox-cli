@@ -484,3 +484,37 @@ func TestMalformedJSONIsReported(t *testing.T) {
 		t.Errorf("got %v, want a clear parse error", err)
 	}
 }
+
+// TestSharedWithMeReadsTheRoleFromTheRemoteItem: a received share carries its
+// grant on the remote item, not on the entry in the caller's virtual drive, so
+// reading only the top level leaves every received share with no role at all.
+func TestSharedWithMeReadsTheRoleFromTheRemoteItem(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodGet, graphBeta+"/me/drive/sharedWithMe", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"value":[{
+			"name":"notes.txt",
+			"createdBy":{"user":{"displayName":"Albert Einstein","id":"einstein"}},
+			"@client.synchronize":true,
+			"remoteItem":{
+				"id":"localhome$SPACE!174",
+				"name":"notes.txt",
+				"permissions":[{"roles":[%q]}]
+			}
+		}]}`, RoleViewer)
+	})
+
+	items, err := f.client().SharedWithMe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if items[0].Role != "viewer" {
+		t.Errorf("Role = %q, want viewer", items[0].Role)
+	}
+	if items[0].SharedBy.DisplayName != "Albert Einstein" {
+		t.Errorf("SharedBy = %+v", items[0].SharedBy)
+	}
+}
