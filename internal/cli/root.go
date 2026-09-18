@@ -41,7 +41,6 @@ type globalFlags struct {
 	method       string
 	user         string
 	appTokenFile string
-	kerberosMode string
 	kerberosSPN  string
 
 	insecure   bool
@@ -142,7 +141,6 @@ func newRootCmd(app *App) *cobra.Command {
 	pf.StringVar(&f.method, "method", "", "authentication method: kerberos, device, app-token, basic, token")
 	pf.StringVar(&f.user, "user", "", "username, for app-token and basic authentication")
 	pf.StringVar(&f.appTokenFile, "app-token-file", "", "file holding a CERNBox app token")
-	pf.StringVar(&f.kerberosMode, "kerberos-mode", "", "how Kerberos is used: spnego, sso, or auto")
 	pf.StringVar(&f.kerberosSPN, "kerberos-spn", "",
 		"service principal to request a ticket for, when it differs from HTTP/<endpoint host>")
 
@@ -225,9 +223,6 @@ func (a *App) setup(cmd *cobra.Command) error {
 	if f.method != "" {
 		cfg.Auth.Method = f.method
 	}
-	if f.kerberosMode != "" {
-		cfg.Auth.Kerberos.Mode = f.kerberosMode
-	}
 	if f.kerberosSPN != "" {
 		cfg.Auth.Kerberos.ServicePrincipal = f.kerberosSPN
 	}
@@ -278,18 +273,11 @@ func (a *App) warnInsecure(endpoint string) {
 }
 
 func (a *App) buildChain(cfg *Config, hc *http.Client) (*auth.Chain, error) {
-	mode, err := auth.ParseKerberosMode(cfg.Auth.Kerberos.Mode)
-	if err != nil {
-		return nil, err
-	}
-
 	sso := &auth.SSOConfig{
-		Issuer:           cfg.Auth.SSO.Issuer,
-		ClientID:         cfg.Auth.SSO.ClientID,
-		Audience:         cfg.Auth.SSO.Audience,
-		Scopes:           cfg.Auth.SSO.Scopes,
-		RedirectURI:      cfg.Auth.SSO.RedirectURI,
-		ServicePrincipal: cfg.Auth.SSO.ServicePrincipal,
+		Issuer:   cfg.Auth.SSO.Issuer,
+		ClientID: cfg.Auth.SSO.ClientID,
+		Audience: cfg.Auth.SSO.Audience,
+		Scopes:   cfg.Auth.SSO.Scopes,
 	}
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
@@ -297,12 +285,10 @@ func (a *App) buildChain(cfg *Config, hc *http.Client) (*auth.Chain, error) {
 	providers := []auth.Provider{
 		&auth.TokenProvider{Value: a.flags.token},
 		&auth.KerberosProvider{
-			Mode:             mode,
 			Endpoint:         cfg.Endpoint,
 			SPNEGOPath:       cfg.Auth.Kerberos.Path,
 			ServicePrincipal: cfg.Auth.Kerberos.ServicePrincipal,
 			CCachePath:       cfg.Auth.Kerberos.CCache,
-			SSO:              sso,
 			HTTPClient:       hc,
 		},
 		&auth.AppTokenProvider{Username: a.flags.user, TokenFile: a.flags.appTokenFile},

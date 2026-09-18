@@ -18,38 +18,6 @@ import (
 	"github.com/jcmturner/gokrb5/v8/spnego"
 )
 
-// KerberosMode selects how a Kerberos ticket becomes a CERNBox credential.
-type KerberosMode string
-
-const (
-	// KerberosSSO uses the ticket to authenticate to CERN SSO, which issues an
-	// OIDC token that CERNBox already accepts. This needs no server-side
-	// change, which is why it is the default.
-	KerberosSSO KerberosMode = "sso"
-	// KerberosSPNEGO presents the ticket directly to CERNBox. It requires the
-	// Kerberos auth provider to be enabled server side, and removes the
-	// dependency on the SSO service being reachable.
-	KerberosSPNEGO KerberosMode = "spnego"
-	// KerberosAuto tries SPNEGO and falls back to SSO. This is what makes the
-	// CLI survive an SSO outage once the server side exists, while still
-	// working against a server that has no Kerberos provider.
-	KerberosAuto KerberosMode = "auto"
-)
-
-// ParseKerberosMode validates a configured mode.
-func ParseKerberosMode(s string) (KerberosMode, error) {
-	switch KerberosMode(strings.ToLower(strings.TrimSpace(s))) {
-	case "", KerberosSSO:
-		return KerberosSSO, nil
-	case KerberosSPNEGO:
-		return KerberosSPNEGO, nil
-	case KerberosAuto:
-		return KerberosAuto, nil
-	default:
-		return "", cberr.Usagef("unknown kerberos mode %q: want sso, spnego, or auto", s)
-	}
-}
-
 // SPNEGOFunc sets a SPNEGO Authorization header on a request for the given
 // service principal.
 //
@@ -78,8 +46,6 @@ func (t Ticket) Username() string {
 
 // KerberosProvider turns a Kerberos ticket into a CERNBox credential.
 type KerberosProvider struct {
-	// Mode selects SSO, direct SPNEGO, or automatic fallback.
-	Mode KerberosMode
 	// Endpoint is the CERNBox base URL, used by SPNEGO mode.
 	Endpoint string
 	// SPNEGOPath is the endpoint that accepts a SPNEGO token and returns a
@@ -88,8 +54,6 @@ type KerberosProvider struct {
 	// ServicePrincipal is the SPN to request a ticket for. When empty it is
 	// derived from the endpoint host as HTTP/<host>.
 	ServicePrincipal string
-	// SSO configures the CERN SSO leg used by KerberosSSO.
-	SSO *SSOConfig
 	// HTTPClient is used for both legs.
 	HTTPClient *http.Client
 	// CCachePath overrides the credential cache location. Empty means
@@ -141,24 +105,7 @@ func (p *KerberosProvider) Token(ctx context.Context) (*Token, error) {
 		return nil, err
 	}
 
-	switch p.Mode {
-	case KerberosSPNEGO:
-		return p.spnegoToken(ctx, ticket)
-	case KerberosAuto:
-		tok, spnegoErr := p.spnegoToken(ctx, ticket)
-		if spnegoErr == nil {
-			return tok, nil
-		}
-		tok, ssoErr := p.ssoToken(ctx, ticket)
-		if ssoErr == nil {
-			return tok, nil
-		}
-		// Report both, because in auto mode the user has no way to know which
-		// leg they should be looking at.
-		return nil, cberr.Authf("kerberos authentication failed\n  spnego: %v\n  sso: %v", spnegoErr, ssoErr)
-	default:
-		return p.ssoToken(ctx, ticket)
-	}
+	return p.spnegoToken(ctx, ticket)
 }
 
 // spnegoToken presents the ticket to CERNBox and reads back a reva token.
@@ -210,50 +157,6 @@ func (p *KerberosProvider) spnegoToken(ctx context.Context, ticket *Ticket) (*To
 	}, nil
 }
 
-// ssoToken uses the ticket to obtain an OIDC access token from CERN SSO.
-func (p *KerberosProvider) ssoToken(ctx context.Context, ticket *Ticket) (*Token, error) {
-	if p.SSO == nil || p.SSO.Issuer == "" {
-		return nil, fmt.Errorf("no SSO issuer configured")
-	}
-	setHeader := p.SPNEGO
-	if setHeader == nil {
-		setHeader = p.defaultSPNEGO
-	}
-
-	flow := &ssoFlow{
-		cfg:        p.SSO,
-		httpClient: p.httpClient(),
-		spnego:     setHeader,
-	}
-	tok, err := flow.authenticate(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tok.Subject = ticket.Username()
-	tok.Provider = MethodKerberos
-	return tok, nil
-}
-
-// Refresh implements Refresher by renewing an SSO access token.
-func (p *KerberosProvider) Refresh(ctx context.Context, tok *Token) (*Token, error) {
-	if p.SSO == nil || tok.RefreshToken == "" {
-		return nil, fmt.Errorf("nothing to refresh")
-	}
-	flow := &ssoFlow{cfg: p.SSO, httpClient: p.httpClient()}
-	refreshed, err := flow.refresh(ctx, tok.RefreshToken)
-	if err != nil {
-		return nil, err
-	}
-	refreshed.Subject = tok.Subject
-	return refreshed, nil
-}
-
-// spnegoPath is the endpoint the ticket is presented to. Any authenticated
-// endpoint would do — reva's token writer puts the issued token in
-// x-access-token on every one of them — so rather than have the server grow an
-// endpoint whose only job is to return a header it already sends, the ticket
-// goes to one the client was going to call anyway. /graph/v1.0/me is the
-// cheapest of those and returns the user's identity into the bargain.
 func (p *KerberosProvider) spnegoPath() string {
 	if p.SPNEGOPath != "" {
 		return p.SPNEGOPath
