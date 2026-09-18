@@ -78,8 +78,14 @@ func TestAuthAndPermissionStayDistinct(t *testing.T) {
 	if ExitCode(unauth) == ExitCode(forbidden) {
 		t.Fatal("401 and 403 must not collapse to the same exit code")
 	}
-	if !strings.Contains(unauth.Error(), "kinit") {
-		t.Errorf("the 401 message should tell the user what to do, got %q", unauth)
+	// A 401 means a credential was sent and refused — having none fails
+	// earlier, with its own message. So the advice must not be "log in again",
+	// which is a loop, but where to look: which credential was used, and why.
+	if strings.Contains(unauth.Error(), "kinit") {
+		t.Errorf("the 401 message should not advise re-authenticating, got %q", unauth)
+	}
+	if !strings.Contains(unauth.Error(), "status") || !strings.Contains(unauth.Error(), "debug") {
+		t.Errorf("the 401 message should point at status and --debug, got %q", unauth)
 	}
 }
 
