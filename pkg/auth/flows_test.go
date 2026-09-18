@@ -170,7 +170,6 @@ func ssoConfig(idp *fakeIDP) *SSOConfig {
 	return &SSOConfig{
 		Issuer:   idp.ts.URL,
 		ClientID: "cernbox-cli",
-		Audience: "cernbox",
 	}
 }
 

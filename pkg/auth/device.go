@@ -102,10 +102,6 @@ func (p *DeviceProvider) startDeviceAuth(ctx context.Context, hc *http.Client, m
 		"client_id": {p.SSO.ClientID},
 		"scope":     {joinScopes(p.SSO.scopes())},
 	}
-	if p.SSO.Audience != "" {
-		form.Set("audience", p.SSO.Audience)
-	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		meta.DeviceAuthorizationEndpoint, stringReader(form.Encode()))
 	if err != nil {
