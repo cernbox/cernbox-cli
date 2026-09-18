@@ -170,7 +170,13 @@ func FromStatus(status int, op, path, msg string) *Error {
 func defaultMessage(status int) string {
 	switch status {
 	case http.StatusUnauthorized:
-		return "not authenticated — try 'kinit' or 'cernbox login'"
+		// Deliberately not "log in again". Having no credential at all fails
+		// earlier, with its own message; by the time a request comes back 401
+		// the CLI did send one and the server refused it. Telling the user to
+		// authenticate again sends them round a loop that cannot help — and a
+		// token the server rejects can be perfectly valid, with the deployment
+		// unable to map it to an account.
+		return "the server rejected the credentials — 'cernbox status' shows which one was used; --debug shows the detail"
 	case http.StatusForbidden:
 		return "permission denied"
 	case http.StatusNotFound, http.StatusGone:
