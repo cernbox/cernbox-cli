@@ -276,7 +276,6 @@ func (a *App) buildChain(cfg *Config, hc *http.Client) (*auth.Chain, error) {
 	sso := &auth.SSOConfig{
 		Issuer:   cfg.Auth.SSO.Issuer,
 		ClientID: cfg.Auth.SSO.ClientID,
-		Audience: cfg.Auth.SSO.Audience,
 		Scopes:   cfg.Auth.SSO.Scopes,
 	}
 

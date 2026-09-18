@@ -56,7 +56,6 @@ type KerberosConfig struct {
 type SSOConfig struct {
 	Issuer   string   `yaml:"issuer"`
 	ClientID string   `yaml:"client_id"`
-	Audience string   `yaml:"audience"`
 	Scopes   []string `yaml:"scopes"`
 }
 
@@ -88,7 +87,6 @@ func DefaultConfig() *Config {
 			SSO: SSOConfig{
 				Issuer:   "https://auth.cern.ch/auth/realms/cern",
 				ClientID: "cernbox-cli",
-				Audience: "cernbox",
 			},
 		},
 		Transfer: TransferConfig{

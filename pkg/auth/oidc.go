@@ -19,10 +19,6 @@ type SSOConfig struct {
 	Issuer string
 	// ClientID is the public client registered for the CLI.
 	ClientID string
-	// Audience is the application the token should be valid for. CERN SSO
-	// issues tokens scoped to a target application, and a token minted for the
-	// CLI itself would not be accepted by CERNBox.
-	Audience string
 	// Scopes requested. offline_access is what yields a refresh token, which is
 	// what lets a shell loop avoid a round trip to the SSO server on every
 	// command.

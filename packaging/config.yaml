@@ -16,7 +16,6 @@ auth:
   sso:
     issuer: https://auth.cern.ch/auth/realms/cern
     client_id: cernbox-cli
-    audience: cernbox
 
 transfer:
   # Recursive downloads are served by the archiver as one stream when the
