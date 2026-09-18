@@ -66,11 +66,7 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 
 Basic authentication is never reached automatically. Against a server that expects Kerberos, falling through to a password prompt would be the wrong thing to do, so it joins the chain only when asked for by name.
 
-Kerberos works in three modes, selected by `auth.kerberos.mode`:
-
-- `spnego` (default) — the ticket is presented directly to CERNBox, which verifies it against its own keytab. This is native Kerberos: nothing stands between the ticket and the service, so a login depends on nothing being up but CERNBox itself.
-- `sso` — the ticket authenticates you to CERN SSO, which issues an OIDC token that CERNBox accepts. For a deployment whose reva has no Kerberos auth provider.
-- `auto` — try `spnego`, fall back to `sso`.
+Kerberos is native: the ticket is presented straight to CERNBox, which verifies it against its own keytab. Nothing stands between the ticket and the service, so a login depends on nothing being up but CERNBox itself.
 
 Native Kerberos needs the server side that ships with this work: the `kerberos` auth manager and the `spnego` credential strategy, both in reva. `dev/revad/cernbox.toml` is a working configuration of the pair, against the realm the `kdc` container serves.
 

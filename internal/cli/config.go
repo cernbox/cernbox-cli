@@ -43,8 +43,6 @@ type AuthConfig struct {
 
 // KerberosConfig configures the Kerberos provider.
 type KerberosConfig struct {
-	// Mode is sso, spnego, or auto.
-	Mode string `yaml:"mode"`
 	// ServicePrincipal overrides the SPN derived from the endpoint host. It is
 	// needed when the endpoint is a DNS alias whose keytab entry differs.
 	ServicePrincipal string `yaml:"service_principal"`
@@ -56,13 +54,10 @@ type KerberosConfig struct {
 
 // SSOConfig configures the OIDC client used against CERN SSO.
 type SSOConfig struct {
-	Issuer      string   `yaml:"issuer"`
-	ClientID    string   `yaml:"client_id"`
-	Audience    string   `yaml:"audience"`
-	Scopes      []string `yaml:"scopes"`
-	RedirectURI string   `yaml:"redirect_uri"`
-	// ServicePrincipal overrides the SPN of the SSO server.
-	ServicePrincipal string `yaml:"service_principal"`
+	Issuer   string   `yaml:"issuer"`
+	ClientID string   `yaml:"client_id"`
+	Audience string   `yaml:"audience"`
+	Scopes   []string `yaml:"scopes"`
 }
 
 // TransferConfig configures the transfer engine.
@@ -85,10 +80,9 @@ func DefaultConfig() *Config {
 		Endpoint: "https://cernbox.cern.ch",
 		Auth: AuthConfig{
 			Kerberos: KerberosConfig{
-				// Native Kerberos by default: the ticket goes straight to
-				// CERNBox, with no identity provider in between and nothing to
-				// be unavailable but CERNBox itself.
-				Mode: "spnego",
+				// The ticket goes straight to CERNBox, which verifies it
+				// against its own keytab: no identity provider in between, and
+				// nothing to be unavailable but CERNBox itself.
 				Path: "/graph/v1.0/me",
 			},
 			SSO: SSOConfig{
@@ -161,9 +155,6 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("CERNBOX_AUTH_METHOD"); v != "" {
 		cfg.Auth.Method = v
-	}
-	if v := os.Getenv("CERNBOX_KERBEROS_MODE"); v != "" {
-		cfg.Auth.Kerberos.Mode = v
 	}
 	if v := os.Getenv("CERNBOX_TOKEN_CACHE"); v != "" {
 		cfg.Auth.TokenCache = v

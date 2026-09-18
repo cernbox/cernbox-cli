@@ -26,9 +26,6 @@ func TestDefaultConfigTargetsProduction(t *testing.T) {
 	}
 	// Native Kerberos: the ticket goes straight to CERNBox, so a login depends
 	// on nothing but CERNBox being reachable.
-	if cfg.Auth.Kerberos.Mode != "spnego" {
-		t.Errorf("Kerberos mode = %q, want spnego", cfg.Auth.Kerberos.Mode)
-	}
 	if cfg.Auth.Kerberos.Path == "" {
 		t.Error("no path configured for the Kerberos token exchange")
 	}
@@ -47,7 +44,6 @@ endpoint: https://cernbox-test.cern.ch
 auth:
   method: device
   kerberos:
-    mode: auto
     service_principal: HTTP/real.cern.ch
   sso:
     client_id: my-client
@@ -65,9 +61,6 @@ transfer:
 	}
 	if cfg.Auth.Method != "device" {
 		t.Errorf("Method = %q", cfg.Auth.Method)
-	}
-	if cfg.Auth.Kerberos.Mode != "auto" {
-		t.Errorf("Kerberos mode = %q", cfg.Auth.Kerberos.Mode)
 	}
 	if cfg.Auth.Kerberos.ServicePrincipal != "HTTP/real.cern.ch" {
 		t.Errorf("SPN = %q", cfg.Auth.Kerberos.ServicePrincipal)
@@ -109,7 +102,6 @@ func TestEnvironmentOverridesFile(t *testing.T) {
 	path := writeConfig(t, dir, "config.yaml", "endpoint: https://from-file.cern.ch\n")
 
 	t.Setenv("CERNBOX_ENDPOINT", "https://from-env.cern.ch")
-	t.Setenv("CERNBOX_KERBEROS_MODE", "spnego")
 
 	cfg, err := LoadConfig(path)
 	if err != nil {
@@ -117,9 +109,6 @@ func TestEnvironmentOverridesFile(t *testing.T) {
 	}
 	if cfg.Endpoint != "https://from-env.cern.ch" {
 		t.Errorf("Endpoint = %q, want the environment to win over the file", cfg.Endpoint)
-	}
-	if cfg.Auth.Kerberos.Mode != "spnego" {
-		t.Errorf("Kerberos mode = %q", cfg.Auth.Kerberos.Mode)
 	}
 }
 

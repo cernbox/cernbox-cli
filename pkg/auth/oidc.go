@@ -2,8 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -29,11 +27,6 @@ type SSOConfig struct {
 	// what lets a shell loop avoid a round trip to the SSO server on every
 	// command.
 	Scopes []string
-	// RedirectURI registered for the authorization code flow.
-	RedirectURI string
-	// ServicePrincipal is the SPN of the SSO server, used for the Kerberos leg.
-	// Empty derives HTTP/<issuer host>.
-	ServicePrincipal string
 }
 
 // scopes returns the scopes to request, with sensible defaults.
@@ -42,27 +35,6 @@ func (c *SSOConfig) scopes() []string {
 		return c.Scopes
 	}
 	return []string{"openid", "profile", "offline_access"}
-}
-
-func (c *SSOConfig) redirectURI() string {
-	if c.RedirectURI != "" {
-		return c.RedirectURI
-	}
-	// An out-of-band redirect keeps the CLI from having to run a local HTTP
-	// server: the Kerberos leg never renders a page, so nothing needs to
-	// receive a browser redirect.
-	return "urn:ietf:wg:oauth:2.0:oob"
-}
-
-func (c *SSOConfig) spn() string {
-	if c.ServicePrincipal != "" {
-		return c.ServicePrincipal
-	}
-	u, err := url.Parse(c.Issuer)
-	if err != nil || u.Hostname() == "" {
-		return ""
-	}
-	return "HTTP/" + u.Hostname()
 }
 
 // providerMetadata is the subset of the OIDC discovery document the CLI uses.
@@ -175,43 +147,6 @@ func oauthErrorMessage(tr *tokenResponse) string {
 		return tr.Error + ": " + tr.ErrorDescription
 	}
 	return tr.Error
-}
-
-// pkce holds a PKCE verifier and its challenge.
-type pkce struct {
-	Verifier  string
-	Challenge string
-}
-
-func newPKCE() (*pkce, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return nil, err
-	}
-	return newPKCEFrom(base64.RawURLEncoding.EncodeToString(b))
-}
-
-// newPKCEFrom derives the challenge for a given verifier. Splitting it out lets
-// a test recompute the challenge and check that the pair actually matches:
-// sending an unrelated pair passes a lax server and fails a strict one, which
-// is the worst way to discover the bug.
-func newPKCEFrom(verifier string) (*pkce, error) {
-	if verifier == "" {
-		return nil, fmt.Errorf("empty PKCE verifier")
-	}
-	sum := sha256.Sum256([]byte(verifier))
-	return &pkce{
-		Verifier:  verifier,
-		Challenge: base64.RawURLEncoding.EncodeToString(sum[:]),
-	}, nil
-}
-
-func randomState() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // jwtExpiry reads the exp claim from a JWT without verifying it.

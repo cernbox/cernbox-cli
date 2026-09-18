@@ -117,7 +117,6 @@ func (e *env) runKerberos(k *krb5Env, args ...string) (stdout, stderr string, co
 	full := append([]string{
 		"--endpoint", endpoint,
 		"--method", "kerberos",
-		"--kerberos-mode", "spnego",
 	}, args...)
 
 	c := exec.Command(binary, full...)
@@ -232,7 +231,6 @@ func TestKerberosWrongServicePrincipal(t *testing.T) {
 	c := exec.Command(binary,
 		"--endpoint", endpoint,
 		"--method", "kerberos",
-		"--kerberos-mode", "spnego",
 		"--kerberos-spn", "HTTP/not-in-the-keytab.invalid",
 		"whoami")
 	c.Env = append(os.Environ(),

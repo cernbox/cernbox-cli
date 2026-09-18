@@ -12,8 +12,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/cernbox/cernbox-cli/pkg/cberr"
 )
 
 // fakeIDP is a stand-in CERN SSO: a discovery document, an authorization
@@ -168,170 +166,17 @@ func stubSPNEGO(token string) SPNEGOFunc {
 	}
 }
 
-func failingSPNEGO(msg string) SPNEGOFunc {
-	return func(*http.Request, string) error { return fmt.Errorf("%s", msg) }
-}
-
 func ssoConfig(idp *fakeIDP) *SSOConfig {
 	return &SSOConfig{
-		Issuer:           idp.ts.URL,
-		ClientID:         "cernbox-cli",
-		Audience:         "cernbox",
-		ServicePrincipal: "HTTP/auth.cern.ch",
-	}
-}
-
-// ── SSO flow ─────────────────────────────────────────────────────────────────
-
-func TestSSOFlow(t *testing.T) {
-	idp := newFakeIDP(t)
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client(), spnego: stubSPNEGO("ticket")}
-
-	tok, err := flow.authenticate(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if tok.Value != "Bearer access-token-1" {
-		t.Errorf("token = %q", tok.Value)
-	}
-	if tok.RefreshToken != "refresh-me" {
-		t.Errorf("refresh token = %q, want one so a shell loop can renew cheaply", tok.RefreshToken)
-	}
-	if tok.Expiry.IsZero() {
-		t.Error("expiry was not set from expires_in")
-	}
-	if !strings.HasPrefix(idp.gotNegotiate, "Negotiate ") {
-		t.Errorf("the authorization request carried %q, want a Negotiate header", idp.gotNegotiate)
-	}
-	if idp.gotChallenge == "" || idp.gotVerifier == "" {
-		t.Error("PKCE was not used")
-	}
-	if idp.gotAudience != "cernbox" {
-		t.Errorf("audience = %q, want the token scoped to CERNBox", idp.gotAudience)
-	}
-	if !strings.Contains(idp.gotScope, "offline_access") {
-		t.Errorf("scope = %q, want offline_access so a refresh token is issued", idp.gotScope)
-	}
-}
-
-// TestSSOFlowPKCEMatches verifies the challenge really is the SHA-256 of the
-// verifier: sending an unrelated pair would pass a lax server and fail a strict
-// one, which is the worst way to find out.
-func TestSSOFlowPKCEMatches(t *testing.T) {
-	idp := newFakeIDP(t)
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client(), spnego: stubSPNEGO("ticket")}
-	if _, err := flow.authenticate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-
-	p := &pkce{Verifier: idp.gotVerifier}
-	recomputed, err := newPKCEFrom(p.Verifier)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recomputed.Challenge != idp.gotChallenge {
-		t.Errorf("challenge %q is not S256(verifier %q)", idp.gotChallenge, idp.gotVerifier)
-	}
-}
-
-func TestSSOFlowRejectedTicket(t *testing.T) {
-	idp := newFakeIDP(t)
-	idp.rejectNegotiate = true
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client(), spnego: stubSPNEGO("ticket")}
-
-	_, err := flow.authenticate(context.Background())
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	if !strings.Contains(err.Error(), "kinit") {
-		t.Errorf("a 401 from the IdP should suggest kinit, got %q", err)
-	}
-}
-
-func TestSSOFlowNoRedirect(t *testing.T) {
-	idp := newFakeIDP(t)
-	idp.noRedirect = true
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client(), spnego: stubSPNEGO("ticket")}
-
-	_, err := flow.authenticate(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "Kerberos authentication may not be enabled") {
-		t.Errorf("got %v, want a hint that the client is not Kerberos-enabled", err)
-	}
-}
-
-// TestSSOFlowRejectsMismatchedState closes the door on a redirect that did not
-// come from the request just made.
-func TestSSOFlowRejectsMismatchedState(t *testing.T) {
-	idp := newFakeIDP(t)
-	idp.mismatchedState = true
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client(), spnego: stubSPNEGO("ticket")}
-
-	_, err := flow.authenticate(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "mismatched state") {
-		t.Errorf("got %v, want the state mismatch to be rejected", err)
-	}
-}
-
-func TestSSOFlowAuthorizationError(t *testing.T) {
-	idp := newFakeIDP(t)
-	idp.authError = "unauthorized_client"
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client(), spnego: stubSPNEGO("ticket")}
-
-	_, err := flow.authenticate(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "unauthorized_client") {
-		t.Errorf("got %v, want the IdP's error surfaced", err)
-	}
-}
-
-func TestSSOFlowSPNEGOFailureIsExplained(t *testing.T) {
-	idp := newFakeIDP(t)
-	flow := &ssoFlow{
-		cfg: ssoConfig(idp), httpClient: idp.ts.Client(),
-		spnego: failingSPNEGO("KDC_ERR_S_PRINCIPAL_UNKNOWN: server not found"),
-	}
-
-	_, err := flow.authenticate(context.Background())
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	if !strings.Contains(err.Error(), "rdns = false") {
-		t.Errorf("an unknown SPN should point at the DNS alias problem, got %q", err)
-	}
-}
-
-func TestSSORefresh(t *testing.T) {
-	idp := newFakeIDP(t)
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client()}
-
-	tok, err := flow.refresh(context.Background(), "refresh-me")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tok.Value == "" {
-		t.Error("refresh produced no token")
-	}
-	if idp.gotGrantType != "refresh_token" {
-		t.Errorf("grant type = %q", idp.gotGrantType)
-	}
-	if idp.gotRefreshWith != "refresh-me" {
-		t.Errorf("refresh token sent = %q", idp.gotRefreshWith)
-	}
-}
-
-func TestSSORefreshRejected(t *testing.T) {
-	idp := newFakeIDP(t)
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client()}
-
-	_, err := flow.refresh(context.Background(), "stale")
-	if err == nil || !strings.Contains(err.Error(), "invalid_grant") {
-		t.Errorf("got %v, want the OAuth error surfaced", err)
+		Issuer:   idp.ts.URL,
+		ClientID: "cernbox-cli",
+		Audience: "cernbox",
 	}
 }
 
 // ── Kerberos provider ────────────────────────────────────────────────────────
 
-// fakeCERNBox serves the direct SPNEGO endpoint.
+// fakeCERNBox serves the SPNEGO endpoint.
 func fakeCERNBox(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(handler)
@@ -348,7 +193,7 @@ func TestKerberosSPNEGOMode(t *testing.T) {
 	})
 
 	p := &KerberosProvider{
-		Mode: KerberosSPNEGO, Endpoint: box.URL,
+		Endpoint:   box.URL,
 		HTTPClient: box.Client(), SPNEGO: stubSPNEGO("ticket"),
 	}
 	tok, err := p.Token(withStubTicket(t, p))
@@ -369,7 +214,7 @@ func TestKerberosSPNEGOModeNotSupportedByServer(t *testing.T) {
 	})
 
 	p := &KerberosProvider{
-		Mode: KerberosSPNEGO, Endpoint: box.URL,
+		Endpoint:   box.URL,
 		HTTPClient: box.Client(), SPNEGO: stubSPNEGO("ticket"),
 	}
 	_, err := p.Token(withStubTicket(t, p))
@@ -384,149 +229,12 @@ func TestKerberosSPNEGOModeWithoutToken(t *testing.T) {
 	})
 
 	p := &KerberosProvider{
-		Mode: KerberosSPNEGO, Endpoint: box.URL,
+		Endpoint:   box.URL,
 		HTTPClient: box.Client(), SPNEGO: stubSPNEGO("ticket"),
 	}
 	_, err := p.Token(withStubTicket(t, p))
 	if err == nil || !strings.Contains(err.Error(), "issued no token") {
 		t.Errorf("got %v", err)
-	}
-}
-
-// TestKerberosAutoFallsBackToSSO is the resilience property the two-mode design
-// exists for: a server without the Kerberos auth provider still works.
-func TestKerberosAutoFallsBackToSSO(t *testing.T) {
-	idp := newFakeIDP(t)
-	box := fakeCERNBox(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "no kerberos here", http.StatusNotFound)
-	})
-
-	p := &KerberosProvider{
-		Mode: KerberosAuto, Endpoint: box.URL,
-		SSO: ssoConfig(idp), HTTPClient: box.Client(), SPNEGO: stubSPNEGO("ticket"),
-	}
-	tok, err := p.Token(withStubTicket(t, p))
-	if err != nil {
-		t.Fatalf("auto mode should have fallen back to SSO: %v", err)
-	}
-	if tok.Value != "Bearer access-token-1" {
-		t.Errorf("token = %q, want the SSO-issued one", tok.Value)
-	}
-}
-
-func TestKerberosAutoPrefersSPNEGO(t *testing.T) {
-	idp := newFakeIDP(t)
-	box := fakeCERNBox(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("x-access-token", "reva-jwt-value")
-		w.WriteHeader(http.StatusOK)
-	})
-
-	p := &KerberosProvider{
-		Mode: KerberosAuto, Endpoint: box.URL,
-		SSO: ssoConfig(idp), HTTPClient: box.Client(), SPNEGO: stubSPNEGO("ticket"),
-	}
-	tok, err := p.Token(withStubTicket(t, p))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tok.Value != "Bearer reva-jwt-value" {
-		t.Errorf("token = %q, want the direct SPNEGO result", tok.Value)
-	}
-	if idp.issued.Load() != 0 {
-		t.Error("the SSO server was contacted even though SPNEGO succeeded")
-	}
-}
-
-func TestKerberosAutoReportsBothFailures(t *testing.T) {
-	idp := newFakeIDP(t)
-	idp.rejectNegotiate = true
-	box := fakeCERNBox(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "no kerberos here", http.StatusNotFound)
-	})
-
-	p := &KerberosProvider{
-		Mode: KerberosAuto, Endpoint: box.URL,
-		SSO: ssoConfig(idp), HTTPClient: box.Client(), SPNEGO: stubSPNEGO("ticket"),
-	}
-	_, err := p.Token(withStubTicket(t, p))
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	// In auto mode the user cannot tell which leg to investigate unless both
-	// are reported.
-	if !strings.Contains(err.Error(), "spnego:") || !strings.Contains(err.Error(), "sso:") {
-		t.Errorf("got %q, want both legs reported", err)
-	}
-}
-
-func TestKerberosSSOMode(t *testing.T) {
-	idp := newFakeIDP(t)
-	p := &KerberosProvider{
-		Mode: KerberosSSO, Endpoint: "https://cernbox.test",
-		SSO: ssoConfig(idp), HTTPClient: idp.ts.Client(), SPNEGO: stubSPNEGO("ticket"),
-	}
-	tok, err := p.Token(withStubTicket(t, p))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tok.Provider != MethodKerberos {
-		t.Errorf("provider = %q", tok.Provider)
-	}
-	if tok.Subject != "einstein" {
-		t.Errorf("subject = %q, want the principal without its realm", tok.Subject)
-	}
-}
-
-func TestKerberosRefresh(t *testing.T) {
-	idp := newFakeIDP(t)
-	p := &KerberosProvider{
-		Mode: KerberosSSO, Endpoint: "https://cernbox.test",
-		SSO: ssoConfig(idp), HTTPClient: idp.ts.Client(),
-	}
-
-	tok, err := p.Refresh(context.Background(), &Token{RefreshToken: "refresh-me", Subject: "einstein"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tok.Subject != "einstein" {
-		t.Errorf("subject = %q, want it carried across the refresh", tok.Subject)
-	}
-}
-
-// TestKerberosRefreshKeepsRefreshToken: not every provider rotates them, and
-// dropping it would break the next refresh.
-func TestKerberosRefreshKeepsRefreshToken(t *testing.T) {
-	idp := newFakeIDP(t)
-	flow := &ssoFlow{cfg: ssoConfig(idp), httpClient: idp.ts.Client()}
-
-	tok, err := flow.refresh(context.Background(), "refresh-me")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tok.RefreshToken == "" {
-		t.Error("the refresh token was dropped")
-	}
-}
-
-func TestParseKerberosMode(t *testing.T) {
-	for in, want := range map[string]KerberosMode{
-		"":       KerberosSSO,
-		"sso":    KerberosSSO,
-		"SSO":    KerberosSSO,
-		"spnego": KerberosSPNEGO,
-		"auto":   KerberosAuto,
-	} {
-		got, err := ParseKerberosMode(in)
-		if err != nil {
-			t.Errorf("ParseKerberosMode(%q): %v", in, err)
-			continue
-		}
-		if got != want {
-			t.Errorf("ParseKerberosMode(%q) = %q, want %q", in, got, want)
-		}
-	}
-	if _, err := ParseKerberosMode("magic"); cberr.KindOf(err) != cberr.KindUsage {
-		t.Errorf("an unknown mode should be a usage error, got %v", err)
 	}
 }
 
