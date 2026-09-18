@@ -114,6 +114,18 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The EOS image alone is over 6GB, and a runner has around 14GB free, so
+      # the stack fills the disk and EOS then fails every write with "no space
+      # left on device" rather than anything that points at the real cause.
+      # None of what is removed here is used by this job.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune -af
+          df -h /
+
       # kinit and klist. The Kerberos tests drive the real client tools rather
       # than a Go-only approximation, because what has to work on lxplus is a
       # ticket that kinit put in the cache.
@@ -128,6 +140,9 @@ jobs:
       - name: Wait for revad
         run: ./dev/wait-for-revad.sh
 
+      - name: Report disk space
+        run: df -h /
+
       - name: Run integration tests
         # A missing realm makes the Kerberos tests skip, and a skip in CI reads
         # as a pass. Here the realm is always present, so demand it.
@@ -141,6 +156,8 @@ jobs:
       - name: Dump service logs
         if: failure()
         run: |
+          echo "=== disk ==="
+          df -h /
           echo "=== revad ==="
           docker compose -f dev/docker-compose.yaml logs --tail=200 revad
           echo "=== revad-partner ==="
