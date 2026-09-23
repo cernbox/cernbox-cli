@@ -633,10 +633,11 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 		return cberr.Usagef("%v", err)
 	}
 
-	root, err := a.pasteRoot(ctx, &opts)
+	in, err := a.pasteSource(ctx, &opts)
 	if err != nil {
 		return err
 	}
+	root := in.root
 	m, err := a.readSlot(ctx, root, opts.slot)
 	if err != nil {
 		return err
@@ -671,6 +672,21 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 		return a.streamPaste(ctx, root, m, dest, dest == "-", opts)
 	}
 
+	if err := a.pasteStored(ctx, m, dest, opts); err != nil {
+		return err
+	}
+
+	// Collected. A handover is the CLI's own plumbing and has no business in the
+	// recipient's share list now that it has served its purpose, so it goes out of
+	// sight — which grants and revokes nothing, and leaves it pastable again.
+	if opts.from != "" {
+		a.hideHandover(ctx, in)
+	}
+	return nil
+}
+
+// pasteStored writes a stored copy to wherever the user asked for it.
+func (a *App) pasteStored(ctx context.Context, m *clipboard.Manifest, dest string, opts pasteOptions) error {
 	if dest == "-" {
 		return a.pasteToStdout(ctx, m, opts.from)
 	}
@@ -1092,15 +1108,16 @@ func (a *App) clipboardClear(ctx context.Context, slots []string, all bool) erro
 
 // ── storage ──────────────────────────────────────────────────────────────────
 
-// pasteRoot is the clipboard a paste reads from, and sets the slot when that is
+// pasteSource is the clipboard a paste reads from, and sets the slot when that is
 // somebody else's.
-func (a *App) pasteRoot(ctx context.Context, opts *pasteOptions) (string, error) {
+func (a *App) pasteSource(ctx context.Context, opts *pasteOptions) (incoming, error) {
 	if opts.from == "" {
-		return a.clipboardRoot(ctx)
+		root, err := a.clipboardRoot(ctx)
+		return incoming{root: root}, err
 	}
 	me := a.username(ctx)
 	if me == "" {
-		return "", cberr.New(cberr.KindAuth, "paste", opts.from,
+		return incoming{}, cberr.New(cberr.KindAuth, "paste", opts.from,
 			"cannot tell who you are, so cannot tell which slot was staged for you")
 	}
 	opts.slot = clipboard.HandoverSlot(me)

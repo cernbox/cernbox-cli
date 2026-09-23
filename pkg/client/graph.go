@@ -677,6 +677,15 @@ type DriveItem struct {
 	Role string `json:"role,omitempty"`
 	// Accepted reports whether a received share has been accepted.
 	Accepted bool `json:"accepted"`
+	// ShareID identifies the caller's own copy of a received share, in the form
+	// the graph calls a share jail id. It is not the same as ID, which names the
+	// resource that was shared, and only this one can be used to update the
+	// share: reva's handler refuses anything else.
+	ShareID string `json:"share_id,omitempty"`
+	// Hidden reports whether the caller has taken this received share out of
+	// their own listings. It hides nothing else: the grant is untouched and the
+	// resource stays readable.
+	Hidden bool `json:"hidden,omitempty"`
 	// Federated reports whether the share came from another OCM provider.
 	Federated bool `json:"federated,omitempty"`
 }
@@ -709,6 +718,10 @@ func (d graphDriveItem) toDriveItem() DriveItem {
 	out := DriveItem{}
 	if d.ID != nil {
 		out.ID = *d.ID
+		// Kept before the remote item overwrites ID below. A received share has
+		// two ids and they are not interchangeable: this one addresses the
+		// caller's copy of the share, which is the only thing an update accepts.
+		out.ShareID = *d.ID
 	}
 	if d.Name != nil {
 		out.Name = *d.Name
@@ -748,6 +761,7 @@ func (d graphDriveItem) toDriveItem() DriveItem {
 	}
 	// A received share that has been accepted is synchronised and not hidden.
 	out.Accepted = d.ClientSynchronize != nil && *d.ClientSynchronize
+	out.Hidden = d.UIHidden != nil && *d.UIHidden
 	return out
 }
 
@@ -774,6 +788,25 @@ func (c *Client) driveItems(ctx context.Context, u, op string) ([]DriveItem, err
 }
 
 // SetReceivedShareState accepts or declines a received share.
+// HideReceivedShare takes a received share out of the caller's own listings,
+// and out of the web interface's.
+//
+// It hides and nothing more: the grant is untouched, so the resource stays
+// readable and stays in the sharedWithMe listing with the flag set — which is
+// what lets the clipboard keep finding a handover it has hidden.
+//
+// shareID must be DriveItem.ShareID rather than DriveItem.ID. reva's handler
+// insists on the share jail form and answers 404 for a resource id, which is the
+// same thing the listing reports as the item's id.
+func (c *Client) HideReceivedShare(ctx context.Context, shareID string) error {
+	u, err := c.itemURL(shareID, "")
+	if err != nil {
+		return err
+	}
+	return c.sendJSON(ctx, http.MethodPatch, u, "hide received share", shareID,
+		map[string]any{"@UI.Hidden": true}, nil)
+}
+
 func (c *Client) SetReceivedShareState(ctx context.Context, resourceID string, accept bool) error {
 	u, err := c.itemURL(resourceID, "")
 	if err != nil {

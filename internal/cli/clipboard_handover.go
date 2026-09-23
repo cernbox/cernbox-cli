@@ -140,10 +140,10 @@ func (a *App) revokeAccess(ctx context.Context, dir, user string) {
 // share carries no path, so the only way to a shared slot is the resource id,
 // and going through the share list also means the sender really did hand this
 // over — a guessed path would be an attempt to read their home directory.
-func (a *App) senderClipboard(ctx context.Context, sender, slot string) (string, error) {
+func (a *App) senderClipboard(ctx context.Context, sender, slot string) (incoming, error) {
 	items, err := a.client.SharedWithMe(ctx)
 	if err != nil {
-		return "", err
+		return incoming{}, err
 	}
 
 	var federated bool
@@ -159,19 +159,58 @@ func (a *App) senderClipboard(ctx context.Context, sender, slot string) (string,
 		}
 		root, ok := client.SpacePathOfID(it.ID)
 		if !ok {
-			return "", cberr.New(cberr.KindOther, "paste", sender,
+			return incoming{}, cberr.New(cberr.KindOther, "paste", sender,
 				"this server reports the shared slot in a form this client cannot turn into a path")
 		}
-		return path.Join(root, clipboard.Dir), nil
+		return incoming{
+			root:    path.Join(root, clipboard.Dir),
+			shareID: it.ShareID,
+			hidden:  it.Hidden,
+		}, nil
 	}
 
 	if federated {
-		return "", cberr.New(cberr.KindOther, "paste", sender,
+		return incoming{}, cberr.New(cberr.KindOther, "paste", sender,
 			"this handover came from another institution, which the clipboard does not cross yet")
 	}
-	return "", cberr.New(cberr.KindNotFound, "paste", sender,
+	return incoming{}, cberr.New(cberr.KindNotFound, "paste", sender,
 		"nothing has been handed over to you by this person. They copy it with "+
 			"'cernbox copy --to "+a.username(ctx)+" PATH'")
+}
+
+// incoming is a handover found in the caller's received shares.
+type incoming struct {
+	// root is the sender's clipboard root, which the manifest paths hang off.
+	root string
+	// shareID addresses the caller's own copy of the share, the only id an update
+	// to it is accepted under.
+	shareID string
+	// hidden reports whether it has already been taken out of the caller's
+	// listings, so it is not hidden twice.
+	hidden bool
+}
+
+// hide takes a collected handover out of the recipient's share listings, and out
+// of the web interface's.
+//
+// A handover is the CLI's own plumbing: a directory named after you, holding
+// something somebody sent, which they will clear when they are done. Left visible
+// it turns up in "cernbox share received" and in the web interface as a share to
+// accept or decline, neither of which means anything here — and it cannot be
+// created hidden, because the flag belongs to the recipient's copy of the share
+// and only the recipient can set it. So the moment the recipient has collected
+// it is the moment to set it.
+//
+// Hiding grants and revokes nothing. The slot stays readable, stays listed for
+// the clipboard's own purposes, and can be pasted again.
+func (a *App) hideHandover(ctx context.Context, in incoming) {
+	if in.shareID == "" || in.hidden {
+		return
+	}
+	if err := a.client.HideReceivedShare(ctx, in.shareID); err != nil {
+		// Not worth failing a paste that has already delivered the file.
+		a.out.Warn("could not take this handover out of your share list: %v", err)
+	}
 }
 
 // username is the caller's own username, for the messages that have to name it.

@@ -346,6 +346,8 @@ A CERNBox path handed over this way is *copied* into the shared slot rather than
 
 It stays on your quota until you run `cernbox clipboard clear to-marie`, which is what ends the handover — and which also takes back the share, so it does not linger in `cernbox share list` pointing at a directory that no longer exists.
 
+The share itself keeps out of the way. Collecting a handover marks it hidden, so it stops appearing in the recipient's share list and in the web interface as something to accept or decline — neither of which means anything for a directory the sender will clear. It cannot be created hidden: that flag belongs to the recipient's own copy of the share, so only they can set it, and collecting it is the first moment they can. Hiding grants and revokes nothing — the slot stays readable, stays in `cernbox clipboard list`, and can be pasted again.
+
 `--stream` works across accounts too, and then nothing is stored at all:
 
 ```bash

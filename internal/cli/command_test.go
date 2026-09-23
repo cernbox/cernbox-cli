@@ -62,6 +62,9 @@ type testBox struct {
 	// handoverSpace is the space path the handover's resource id encodes, which
 	// is how the recipient finds a shared slot: a received share carries no path.
 	handoverSpace string
+	// handoverHidden is what the handover's share reports for @UI.Hidden, so a
+	// test can start from one that has already been hidden.
+	handoverHidden bool
 
 	// archiver turns on the archiver service. It is off by default because the
 	// transfer engine prefers an archiver whenever one is advertised, and every
@@ -182,11 +185,17 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		// tells them apart, which is what ocm received filters on.
 		handover := ""
 		if b.handoverFrom != "" {
+			// Two ids, as the real server reports: the top-level one addresses the
+			// caller's own copy of the share and is the only id an update to it is
+			// accepted under, while the remote item carries the id of the resource
+			// that was shared. Conflating them is how hiding a share 404s.
 			handover = fmt.Sprintf(`,
-		  {"id":%q,"name":"to-einstein","@client.synchronize":true,
+		  {"id":%q,"name":"to-einstein","@client.synchronize":true,"@UI.Hidden":%t,
 		   "createdBy":{"user":{"id":%q,"displayName":%q}},
-		   "permissions":[{"id":"p3","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]}`,
-				spaceIDOf(b.handoverSpace), b.handoverFrom, b.handoverFrom)
+		   "remoteItem":{"id":%q,"name":"to-einstein","path":".cernbox/clipboard/to-einstein",
+		     "permissions":[{"id":"p3","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]}}`,
+				testShareJailID, b.handoverHidden, b.handoverFrom, b.handoverFrom,
+				spaceIDOf(b.handoverSpace))
 		}
 		fmt.Fprintf(w, `{"value":[
 		  {"id":"item-1","name":"Shared","@client.synchronize":true,
@@ -214,6 +223,11 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	}
 }
+
+// testShareJailID is the id the graph reports for the caller's own copy of a
+// received share. The shape is the server's: a share jail drive, repeated, then
+// the share's own id.
+const testShareJailID = "jail-space$jail-space!292"
 
 // spaceIDOf builds the resource id the graph reports for an item in the space
 // rooted at p. The space half is the base32 of the space path, which is what

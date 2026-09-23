@@ -44,7 +44,7 @@ var coveredCommands = map[string]string{
 
 	// The cross-machine clipboard.
 	"copy":            "TestClipboardRoundTrip, TestClipboardReferencesARemotePathWithoutUploading, TestClipboardCarriesADirectory, TestHandoverReachesTheOtherPerson, TestHandoverStreamsLiveToAnotherPerson",
-	"paste":           "TestClipboardRoundTrip, TestClipboardPasteInsideCERNBoxMovesNoData, TestClipboardRefusesToOverwriteWithoutForce, TestHandoverOfACERNBoxPathMovesNoData",
+	"paste":           "TestClipboardRoundTrip, TestClipboardPasteInsideCERNBoxMovesNoData, TestClipboardRefusesToOverwriteWithoutForce, TestHandoverOfACERNBoxPathMovesNoData, TestHandoverHidesItselfOnceCollected",
 	"clipboard list":  "TestClipboardListShowsTheSlot, TestHandoverReachesTheOtherPerson",
 	"clipboard clear": "TestClipboardClearReleasesStagedBytes, TestClipboardClearLeavesTheOriginalAlone, TestHandoverTakesBackItsSharesWhenItEnds",
 
