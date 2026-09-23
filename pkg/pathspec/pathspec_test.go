@@ -385,3 +385,38 @@ func TestKindString(t *testing.T) {
 		t.Errorf("Kind.String is wrong: %q %q", Remote, Local)
 	}
 }
+
+func TestSplitForCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		arg, dir, frag string
+	}{
+		{"", "", ""},
+		{"Doc", "", "Doc"},
+		{"Documents/re", "Documents/", "re"},
+		{"/eos/user/g/gdelmont/Doc", "/eos/user/g/gdelmont/", "Doc"},
+		{"/", "/", ""},
+		{"cb:", "cb:", ""},
+		{"cb:/eos/user/g/gdelmont/", "cb:/eos/user/g/gdelmont/", ""},
+		{"cb:/eos/user/g/gdelmont/Doc", "cb:/eos/user/g/gdelmont/", "Doc"},
+		{"home:", "home:", ""},
+		{"home:Doc", "home:", "Doc"},
+		{"home:notes/dr", "home:notes/", "dr"},
+		{"project/cernbox:data/ra", "project/cernbox:data/", "ra"},
+		{"cb:home:Doc", "cb:home:", "Doc"},
+		// Not an alias: the colon is part of a local-looking name, and the
+		// directory half still has to come back exactly as it was typed.
+		{"./odd:name", "./", "odd:name"},
+	} {
+		t.Run(tc.arg, func(t *testing.T) {
+			dir, frag := SplitForCompletion(tc.arg)
+			if dir != tc.dir || frag != tc.frag {
+				t.Errorf("SplitForCompletion(%q) = %q, %q; want %q, %q", tc.arg, dir, frag, tc.dir, tc.frag)
+			}
+			// The two halves must be exactly what the user typed, or a
+			// candidate built from them names a different path.
+			if dir+frag != tc.arg {
+				t.Errorf("the halves of %q do not rejoin: %q + %q", tc.arg, dir, frag)
+			}
+		})
+	}
+}

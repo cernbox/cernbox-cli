@@ -175,6 +175,27 @@ With no `--to` the archive lands in the working directory, named after what you 
 
 `get -r` already uses the archiver behind the scenes and unpacks as it goes. `archive` is for when you want the archive itself — to keep, to move, or to hand to another program.
 
+### Shell completion
+
+```bash
+source <(cernbox completion bash)     # or zsh, or fish
+```
+
+Completion reaches into CERNBox, not just into the command names:
+
+```console
+$ cernbox ls /eos/user/g/gdelmont/Doc<TAB>
+$ cernbox ls /eos/user/g/gdelmont/Documents/
+$ cernbox cp cb:notes/<TAB>
+cb:notes/draft.md      cb:notes/published/
+```
+
+Whatever you typed to name the directory comes back on the candidate, so `cb:` prefixes and space aliases survive completion. Directories complete without a trailing space, so the next keystroke carries on into them, and entries beginning with a dot stay hidden until you type one — the same rules your shell uses locally.
+
+It also completes the things nobody memorises: space aliases, clipboard slots, share and link ids, version keys, app token ids, and the fixed values of flags such as `--role` and `--format`. On a transfer command, only a side already marked with `cb:` or an alias is completed from the server; an unmarked path is local and left to the shell.
+
+A press of TAB is bounded at three seconds, never retries, and never prompts: with no configuration, no credentials or no network it offers nothing and exits quietly rather than printing an error into the middle of the line you are typing. Trash keys are deliberately not completed — the only way to learn them is to list the whole bin, which is far too much work to do behind a key press.
+
 ### Unix conventions
 
 The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.
