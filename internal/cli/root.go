@@ -35,7 +35,6 @@ type globalFlags struct {
 	outputFormat string
 	quiet        bool
 	debug        bool
-	stream       bool
 	noProgress   bool
 
 	token        string
@@ -138,7 +137,6 @@ func newRootCmd(app *App) *cobra.Command {
 	pf.StringVarP(&f.outputFormat, "output", "o", "table", "output format: table, json, or csv")
 	pf.BoolVarP(&f.quiet, "quiet", "q", false, "hide headers and progress messages")
 	pf.BoolVar(&f.debug, "debug", false, "show the underlying error and request details")
-	pf.BoolVar(&f.stream, "stream", false, "with --output json, emit newline-delimited JSON")
 	pf.BoolVar(&f.noProgress, "no-progress", false, "hide the progress bar")
 
 	pf.StringVar(&f.token, "token", "", "use this token instead of signing in")
@@ -211,7 +209,6 @@ func (a *App) setup(cmd *cobra.Command) error {
 	}
 	a.out = output.New(a.stdout, format,
 		output.Quiet(f.quiet),
-		output.Stream(f.stream),
 		output.Stderr(a.stderr),
 		output.Color(a.stdout == os.Stdout && output.IsTerminal(os.Stdout)),
 	)

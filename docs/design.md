@@ -312,7 +312,7 @@ The site-wide file is what makes the lxplus experience zero-config: the RPM ship
 
 ## 8. Output and scripting
 
-`--output json` emits one JSON document, or newline-delimited JSON under `--output json --stream` for large listings. Human table output is aligned and colourised only on a TTY.
+`--output json` emits one JSON document. Human table output is aligned and colourised only on a TTY.
 
 Exit codes: `0` success, `1` generic failure, `2` usage error, `3` authentication failure, `4` permission denied, `5` not found, `6` conflict (lock, etag mismatch, quota). Distinguishing 3 from 4 matters for scripts that should retry after `kinit` versus ones that should give up.
 

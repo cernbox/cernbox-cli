@@ -228,8 +228,8 @@ cernbox paste ./hugefile.root
 ```console
 $ cernbox copy --stream ./hugefile.root
 Waiting for 'cernbox paste' on another machine...
-Receiver connected, streaming hugefile.root...
-Streamed 200.0M to the receiver in 25 pieces, storing nothing
+Connected. Sending hugefile.root...
+Sent 200.0M. Nothing was stored in CERNBox.
 ```
 
 Nothing is uploaded until somebody pastes. Afterwards `cernbox clipboard list` is empty: no quota consumed, nothing to clear, nothing in your trash. The two halves overlap, so the wall-clock is roughly one transfer rather than two in sequence. `--wait` bounds how long either side will hang around, ten minutes by default, and a sender that gives up cleans its slot up on the way out.

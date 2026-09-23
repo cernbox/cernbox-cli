@@ -125,46 +125,6 @@ func TestRenderCSV(t *testing.T) {
 	}
 }
 
-func TestStreamingJSON(t *testing.T) {
-	var buf bytes.Buffer
-	w := New(&buf, FormatJSON, Stream(true))
-	if !w.Streaming() {
-		t.Fatal("Streaming() should be true for JSON + Stream")
-	}
-	for _, name := range []string{"a", "b", "c"} {
-		if err := w.Item(map[string]string{"name": name}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("got %d NDJSON lines, want 3:\n%s", len(lines), buf.String())
-	}
-	for _, line := range lines {
-		var obj map[string]string
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
-			t.Errorf("line %q is not valid JSON: %v", line, err)
-		}
-	}
-}
-
-func TestItemIsNoOpOutsideStreamingJSON(t *testing.T) {
-	for _, f := range []Format{FormatTable, FormatCSV} {
-		var buf bytes.Buffer
-		w := New(&buf, f)
-		if w.Streaming() {
-			t.Errorf("%s should not report streaming", f)
-		}
-		if err := w.Item(map[string]string{"name": "a"}); err != nil {
-			t.Fatal(err)
-		}
-		if buf.Len() != 0 {
-			t.Errorf("%s mode: Item wrote %q, want nothing", f, buf.String())
-		}
-	}
-}
-
 func TestObject(t *testing.T) {
 	type status struct {
 		Provider string `json:"provider"`
