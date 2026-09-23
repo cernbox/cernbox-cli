@@ -187,27 +187,6 @@ func TestLsCSV(t *testing.T) {
 	}
 }
 
-// TestLsStreamingJSON: each entry is its own line, so a very large listing can
-// be consumed without holding it all in memory.
-func TestLsStreamingJSON(t *testing.T) {
-	e := setup(t)
-	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
-		e.mustRun("put", e.writeLocal(name, []byte(name)), e.remotePath(name))
-	}
-
-	out := e.mustRun("--output", "json", "--stream", "ls", e.remote)
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("got %d NDJSON lines, want 3:\n%s", len(lines), out)
-	}
-	for _, line := range lines {
-		var entry map[string]any
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			t.Errorf("line %q is not valid JSON: %v", line, err)
-		}
-	}
-}
-
 // TestFindFallsBackToWalking: reva's search-files REPORT handler is a stub that
 // answers 501, so the client-side walk is the path that actually runs here.
 func TestFindFallsBackToWalking(t *testing.T) {

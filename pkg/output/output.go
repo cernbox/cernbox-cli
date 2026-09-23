@@ -67,10 +67,7 @@ type Writer struct {
 	err    io.Writer
 	format Format
 	quiet  bool
-	stream bool
 	color  bool
-
-	streamEnc *json.Encoder
 }
 
 // Option configures a Writer.
@@ -78,11 +75,6 @@ type Option func(*Writer)
 
 // Quiet suppresses headers and informational messages.
 func Quiet(q bool) Option { return func(w *Writer) { w.quiet = q } }
-
-// Stream makes JSON mode emit newline-delimited JSON, one object per item,
-// instead of buffering a single document. Listings of unknown size use it so
-// the CLI does not hold the whole result in memory.
-func Stream(s bool) Option { return func(w *Writer) { w.stream = s } }
 
 // Color enables ANSI styling. Callers should pass IsTerminal(os.Stdout).
 func Color(c bool) Option { return func(w *Writer) { w.color = c } }
@@ -143,21 +135,6 @@ type Field struct {
 	Value string
 }
 
-// Item writes one element of a streaming result. In streaming JSON mode it
-// emits a single NDJSON line; otherwise it is a no-op and the caller is
-// expected to accumulate rows and call Render.
-func (w *Writer) Item(v any) error {
-	if w.format != FormatJSON || !w.stream {
-		return nil
-	}
-	if w.streamEnc == nil {
-		w.streamEnc = json.NewEncoder(w.out)
-	}
-	return w.streamEnc.Encode(v)
-}
-
-// Streaming reports whether Item will actually write something, so callers can
-// skip building display rows they will not use.
 // Line writes one literal line of result output to stdout, for a command whose
 // natural rendering is not a table of labelled columns — ls, which has to look
 // like ls. It writes nothing in JSON or CSV mode, where the structured
@@ -168,8 +145,6 @@ func (w *Writer) Line(format string, args ...any) {
 	}
 	fmt.Fprintf(w.out, format+"\n", args...)
 }
-
-func (w *Writer) Streaming() bool { return w.format == FormatJSON && w.stream }
 
 // Msg writes an informational line to stderr. It is suppressed when quiet, and
 // in JSON mode, so that --output json produces a parseable stream and nothing

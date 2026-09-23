@@ -38,13 +38,13 @@ func newLsCmd(app *App) *cobra.Command {
 				args = []string{"home:"}
 			}
 			for i, arg := range args {
-				if len(args) > 1 && !app.out.Streaming() {
+				if len(args) > 1 {
 					app.out.Msg("%s:", arg)
 				}
 				if err := app.listOne(ctx, arg, opts); err != nil {
 					return err
 				}
-				if i < len(args)-1 && !app.out.Streaming() {
+				if i < len(args)-1 {
 					app.out.Msg("")
 				}
 			}
@@ -137,18 +137,6 @@ func (a *App) listOne(ctx context.Context, arg string, opts lsOptions) error {
 		entries = filtered
 	}
 	sortEntries(entries, opts)
-
-	// Streaming mode writes each entry as it goes, which is what keeps a
-	// listing of a very large directory from being held in memory by the
-	// consumer's pipe.
-	if a.out.Streaming() {
-		for _, e := range entries {
-			if err := a.out.Item(e); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 
 	// JSON and CSV keep the labelled, stable shape a script parses. Only the
 	// human rendering is made to look like ls.
