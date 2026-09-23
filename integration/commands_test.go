@@ -784,3 +784,57 @@ func TestRecursiveUppercaseAlias(t *testing.T) {
 		t.Error("rm -R did not delete the tree")
 	}
 }
+
+// TestLinkCreateUsesTheLinkTable: link create used to borrow the share table,
+// which has no column a link fits — the URL landed under "GRANTED TO", ROLE was
+// empty, and the URL was printed a second time to stderr.
+func TestLinkCreateUsesTheLinkTable(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("shared.txt")
+	e.mustRun("put", e.writeLocal("shared.txt", []byte("x")), target)
+
+	stdout, stderr, code := e.run("link", "create", target)
+	if code != 0 {
+		t.Fatalf("link create exited %d: %s", code, stderr)
+	}
+
+	// Link columns, not share columns.
+	for _, want := range []string{"ID", "TYPE", "PASSWORD", "EXPIRES", "URL"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the link table is missing the %q column:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "GRANTED TO") {
+		t.Errorf("link create should not use the share table:\n%s", stdout)
+	}
+
+	// The URL appears once, in the table — not also on stderr.
+	if n := strings.Count(stdout+stderr, "/s/"); n != 1 {
+		t.Errorf("the URL should appear exactly once, found %d:\nstdout:\n%s\nstderr:\n%s",
+			n, stdout, stderr)
+	}
+
+	// And the type is reported rather than left blank.
+	if !strings.Contains(stdout, "view") {
+		t.Errorf("the link type should be shown:\n%s", stdout)
+	}
+}
+
+// TestShareListShowsALinkType: a link has no unified role id, so reading only
+// the role field left the column empty for every link in a share listing.
+func TestShareListShowsALinkType(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("both.txt")
+	e.mustRun("put", e.writeLocal("both.txt", []byte("x")), target)
+	e.mustRun("link", "create", target)
+
+	out := e.mustRun("share", "list", target)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
+		if !strings.Contains(line, "link") {
+			continue
+		}
+		if !strings.Contains(line, "view") {
+			t.Errorf("a link row should report its type as the role: %q", line)
+		}
+	}
+}

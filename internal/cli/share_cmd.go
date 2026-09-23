@@ -308,10 +308,11 @@ func newLinkCreateCmd(app *App) *cobra.Command {
 				return err
 			}
 
-			if perm.Link != nil && perm.Link.URL != "" && !app.out.IsQuiet() {
-				app.out.Msg("%s", perm.Link.URL)
-			}
-			return app.renderPermissions([]client.Permission{*perm})
+			// The link table, not the share table: a link has no grantee, and
+			// its role lives in the link type, so the share columns showed the
+			// URL under "GRANTED TO" and left ROLE empty. The URL was also
+			// printed separately to stderr, so it appeared twice.
+			return app.renderLinks([]client.Permission{*perm})
 		},
 	}
 
@@ -347,13 +348,7 @@ func newLinkListCmd(app *App) *cobra.Command {
 				}
 			}
 
-			table := output.Table{Headers: []string{"ID", "TYPE", "PASSWORD", "EXPIRES", "URL"}, Items: links}
-			for _, p := range links {
-				table.Rows = append(table.Rows, []string{
-					p.ID, p.Link.Type, yesNo(p.Link.HasPassword), expiresColumn(p.ExpiresAt), p.Link.URL,
-				})
-			}
-			return app.out.Render(table)
+			return app.renderLinks(links)
 		},
 	}
 }
@@ -440,6 +435,25 @@ func (a *App) statResolved(ctx context.Context, arg string) (*client.ResourceInf
 	return info, nil
 }
 
+// renderLinks renders public links. They get their own columns because a link
+// has no grantee to name and carries its role as the link type, so the share
+// table left one column empty and repeated the URL in another.
+func (a *App) renderLinks(links []client.Permission) error {
+	table := output.Table{Headers: []string{"ID", "TYPE", "PASSWORD", "EXPIRES", "URL"}, Items: links}
+	for _, p := range links {
+		kind, url, locked := "-", "-", false
+		if p.Link != nil {
+			kind = orDash(p.Link.Type)
+			url = orDash(p.Link.URL)
+			locked = p.Link.HasPassword
+		}
+		table.Rows = append(table.Rows, []string{
+			p.ID, kind, yesNo(locked), expiresColumn(p.ExpiresAt), url,
+		})
+	}
+	return a.out.Render(table)
+}
+
 func (a *App) renderPermissions(perms []client.Permission) error {
 	table := output.Table{Headers: []string{"ID", "ROLE", "GRANTED TO", "TYPE", "EXPIRES"}, Items: perms}
 	for _, p := range perms {
@@ -452,7 +466,14 @@ func (a *App) renderPermissions(perms []client.Permission) error {
 			grantee = p.Link.URL
 			kind = "link"
 		}
-		table.Rows = append(table.Rows, []string{p.ID, orDash(p.Role), grantee, kind, expiresColumn(p.ExpiresAt)})
+		// A public link carries its role as the link type ("view", "edit")
+		// rather than as a unified role id, so reading only Role left the
+		// column empty for every link.
+		role := p.Role
+		if role == "" && p.Link != nil {
+			role = p.Link.Type
+		}
+		table.Rows = append(table.Rows, []string{p.ID, orDash(role), grantee, kind, expiresColumn(p.ExpiresAt)})
 	}
 	return a.out.Render(table)
 }
