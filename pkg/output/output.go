@@ -273,7 +273,8 @@ const (
 func HumanSize(n int64) string {
 	switch {
 	case n < kib:
-		return fmt.Sprintf("%dB", n)
+		// A bare number below 1K, as ls -lh and du -h print it: "3", not "3B".
+		return fmt.Sprintf("%d", n)
 	case n < mib:
 		return fmt.Sprintf("%.1fK", float64(n)/kib)
 	case n < gib:

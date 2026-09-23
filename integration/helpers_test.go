@@ -293,6 +293,24 @@ func (e *env) runJSONOneAs(a account, v any, args ...string) {
 	}
 }
 
+// waitFor polls until cond holds, for the cases where the server reaches a
+// state a moment after the request that caused it — EOS accounts a directory's
+// recursive size asynchronously, so a total read immediately after an upload is
+// legitimately still zero.
+func (e *env) waitFor(what string, cond func() bool) {
+	e.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // ── local helpers ────────────────────────────────────────────────────────────
 
 func (e *env) writeLocal(name string, body []byte) string {
