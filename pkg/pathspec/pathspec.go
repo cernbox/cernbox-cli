@@ -251,6 +251,33 @@ func ParseTransferPair(src, dst string) (Spec, Spec, error) {
 	return s, d, nil
 }
 
+// SplitForCompletion splits a partially typed argument into the text naming a
+// directory and the fragment being typed inside it. The directory part comes
+// back exactly as it was typed, prefix and alias included, so that a caller can
+// join a candidate name onto it and get something the user could have typed.
+//
+//	"cb:/eos/user/g/gdelmont/Doc" -> "cb:/eos/user/g/gdelmont/", "Doc"
+//	"home:notes/dr"               -> "home:notes/",              "dr"
+//	"home:"                       -> "home:",                    ""
+//	"Doc"                         -> "",                         "Doc"
+//
+// The directory part is not itself a valid argument in every case: "cb:" and ""
+// name no path at all. Resolve those to the home space, which is what a bare
+// relative path means.
+func SplitForCompletion(arg string) (dir, frag string) {
+	prefix := ""
+	if rest, ok := strings.CutPrefix(arg, RemotePrefix); ok {
+		prefix, arg = RemotePrefix, rest
+	}
+	if alias, rest, ok := splitAlias(arg); ok {
+		prefix, arg = prefix+alias+":", rest
+	}
+	if i := strings.LastIndex(arg, "/"); i >= 0 {
+		return prefix + arg[:i+1], arg[i+1:]
+	}
+	return prefix, arg
+}
+
 // Join returns a spec for a child of s.
 func Join(s Spec, elems ...string) Spec {
 	out := s

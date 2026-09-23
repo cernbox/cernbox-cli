@@ -64,6 +64,14 @@ type App struct {
 
 	client *client.Client
 	chain  *auth.Chain
+
+	// completing records that this process was started by a shell to complete a
+	// command line rather than to run one. It changes what the CLI is allowed to
+	// do: no prompting, no waiting, and no output beyond the list of candidates.
+	// connectTried keeps a completion that cannot reach the server from trying
+	// again for every argument it is asked about.
+	completing   bool
+	connectTried bool
 }
 
 // Client returns the HTTP client, which is built lazily so that commands which
@@ -190,6 +198,8 @@ func newRootCmd(app *App) *cobra.Command {
 		newCompletionCmd(),
 		newCommandsCmd(),
 	)
+	registerGlobalCompletions(cmd)
+	registerCompletions(cmd, app)
 	return cmd
 }
 
@@ -198,15 +208,27 @@ func newRootCmd(app *App) *cobra.Command {
 func (a *App) setup(cmd *cobra.Command) error {
 	f := a.flags
 
-	format, err := output.ParseFormat(f.outputFormat)
-	if err != nil {
-		return cberr.Usagef("%v", err)
-	}
 	if a.stdout == nil {
 		a.stdout = os.Stdout
 	}
 	if a.stderr == nil {
 		a.stderr = os.Stderr
+	}
+
+	// A completion request stops here. It arrives before cobra has parsed the
+	// flags of the command being completed, so there is nothing yet to build a
+	// client from; the completion functions build one themselves, once, and only
+	// if they turn out to need it. Everything written here would land in the
+	// middle of the user's half-typed command line, so the writer discards.
+	if isCompletionRequest(cmd) {
+		a.completing = true
+		a.out = output.New(io.Discard, output.FormatTable, output.Quiet(true), output.Stderr(io.Discard))
+		return nil
+	}
+
+	format, err := output.ParseFormat(f.outputFormat)
+	if err != nil {
+		return cberr.Usagef("%v", err)
 	}
 	a.out = output.New(a.stdout, format,
 		output.Quiet(f.quiet),
@@ -218,6 +240,13 @@ func (a *App) setup(cmd *cobra.Command) error {
 	if noServerNeeded(cmd) {
 		return nil
 	}
+	return a.connect()
+}
+
+// connect builds the credential chain and the client from configuration and the
+// global flags.
+func (a *App) connect() error {
+	f := a.flags
 
 	cfg, err := LoadConfig(f.configPath)
 	if err != nil {
@@ -241,8 +270,14 @@ func (a *App) setup(cmd *cobra.Command) error {
 		a.warnInsecure(cfg.Endpoint)
 	}
 
+	timeout := f.timeout
+	if a.completing && (timeout == 0 || timeout > completionTimeout) {
+		// Completing has its own deadline. A shell that waits on a slow server
+		// looks broken, and the user cannot see what it is waiting for.
+		timeout = completionTimeout
+	}
 	hc := &http.Client{
-		Timeout: f.timeout,
+		Timeout: timeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.skipVerify},
 			Proxy:           http.ProxyFromEnvironment,
@@ -255,11 +290,20 @@ func (a *App) setup(cmd *cobra.Command) error {
 	}
 	a.chain = chain
 
-	c, err := client.New(cfg.Endpoint,
+	opts := []client.Option{
 		client.WithHTTPClient(hc),
 		client.WithCredentials(chain),
 		client.WithUserAgent(userAgent()),
-	)
+	}
+	if a.completing {
+		// No retrying while completing. A server that did not answer the first
+		// time is not worth the backoff when the cost is the user's cursor: an
+		// unreachable endpoint took 1.7 seconds per key press with the default
+		// three attempts, and 5 milliseconds with one.
+		opts = append(opts, client.WithMaxRetries(0))
+	}
+
+	c, err := client.New(cfg.Endpoint, opts...)
 	if err != nil {
 		return err
 	}
@@ -285,7 +329,10 @@ func (a *App) buildChain(cfg *Config, hc *http.Client) (*auth.Chain, error) {
 		Scopes:   cfg.Auth.SSO.Scopes,
 	}
 
-	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+	// Completing must never start a sign-in. The shell is waiting on a cursor,
+	// and a device-flow prompt printed there is both unreadable and unanswerable.
+	interactive := !a.completing &&
+		term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
 
 	providers := []auth.Provider{
 		&auth.TokenProvider{Value: a.flags.token},
@@ -309,9 +356,17 @@ func (a *App) buildChain(cfg *Config, hc *http.Client) (*auth.Chain, error) {
 	// for development instances, and reaching it automatically would mean
 	// prompting for a password on a server that expects Kerberos.
 	if cfg.Auth.Method == auth.MethodBasic {
+		// Completing gets no prompt, which makes the provider unavailable unless
+		// the password is already in the environment. That is the right trade:
+		// pressing TAB must not ask for a password, but a password the CLI
+		// already has is no reason to stop completing.
+		prompt := promptPassword
+		if a.completing {
+			prompt = nil
+		}
 		providers = append(providers, &auth.BasicProvider{
 			Username: a.flags.user,
-			Prompt:   promptPassword,
+			Prompt:   prompt,
 		})
 	}
 

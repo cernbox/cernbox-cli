@@ -248,7 +248,9 @@ func newCompletionCmd() *cobra.Command {
 		Long: "Print a shell completion script.\n\n" +
 			"  bash:  source <(cernbox completion bash)\n" +
 			"  zsh:   cernbox completion zsh > \"${fpath[1]}/_cernbox\"\n" +
-			"  fish:  cernbox completion fish | source",
+			"  fish:  cernbox completion fish | source\n\n" +
+			"Once it is loaded, TAB completes CERNBox paths as you type them, along\n" +
+			"with space aliases, clipboard slots, share ids and version keys.",
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"bash", "zsh", "fish"},
 		RunE: func(cmd *cobra.Command, args []string) error {
