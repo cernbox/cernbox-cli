@@ -107,13 +107,6 @@ func TestCopyToRefusesWhatWouldShareTooMuch(t *testing.T) {
 		t.Fatalf("error = %v, want a usage error for --to with --slot", err)
 	}
 
-	// A live handover is between the user's own machines: the receiver claims the
-	// slot by writing into it, and a handover is shared read-only.
-	_, _, err = run(t, box, "copy", local, "--to", "marie", "--stream")
-	if err == nil || cberr.ExitCode(err) != cberr.ExitUsage {
-		t.Fatalf("error = %v, want a usage error for --to with --stream", err)
-	}
-
 	// A username that is not one path segment would put the slot outside the
 	// clipboard altogether.
 	_, _, err = run(t, box, "copy", local, "--to", "../elsewhere")

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/clipboard"
 	"github.com/cernbox/cernbox-cli/pkg/output"
 	"github.com/cernbox/cernbox-cli/pkg/pathspec"
@@ -53,7 +54,9 @@ func newCopyCmd(app *App) *cobra.Command {
 			"With --stream nothing is stored: this command waits for the paste and\n" +
 			"sends the file straight to it.\n\n" +
 			"With --to somebody else collects it instead, on their own account. That\n" +
-			"slot becomes readable by them, so keep it for what you meant to send.",
+			"slot becomes readable by them, so keep it for what you meant to send.\n\n" +
+			"The two combine: --stream --to waits for that person and sends it\n" +
+			"straight to them, storing nothing.",
 		Example: "  cernbox copy ./report.pdf\n" +
 			"  cernbox copy cb:/eos/user/g/gdelmont/report.pdf\n" +
 			"  cernbox copy -r ./data --slot build\n" +
@@ -227,12 +230,6 @@ type copySource struct {
 
 func (a *App) clipboardCopy(ctx context.Context, args []string, opts copyOptions) error {
 	if opts.to != "" {
-		if opts.stream {
-			return cberr.Usagef(
-				"--stream hands a file to another of your own computers, live. To send " +
-					"something to somebody else, leave --stream off: --to stores it until they " +
-					"collect it.")
-		}
 		slot, err := handoverSlotFor(opts.to, opts.slotGiven)
 		if err != nil {
 			return err
@@ -314,7 +311,7 @@ func (a *App) clipboardCopy(ctx context.Context, args []string, opts copyOptions
 
 	if opts.to != "" {
 		// Sharing last, so a copy that failed leaves nothing readable behind.
-		if err := a.shareHandover(ctx, clipboard.SlotDir(root, opts.slot), opts.to); err != nil {
+		if err := a.shareHandover(ctx, clipboard.SlotDir(root, opts.slot), opts.to, client.RoleViewer); err != nil {
 			return err
 		}
 		a.out.Msg("Copied %s (%s) for %s.", itemCount(len(m.Entries)), proseSize(m.Size()), opts.to)
@@ -663,14 +660,6 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 	// A live handover is a different thing from a stored copy: there is a process
 	// on the other side waiting to be told somebody arrived, and nothing to
 	// download until it has been.
-	if m.IsStream() && opts.from != "" {
-		// Claiming a live stream means writing into the slot, and a handover is
-		// shared read-only. This cannot happen from this CLI, which refuses
-		// --stream with --to, but a slot is a file format and the error should
-		// say what is wrong rather than fail on a permission.
-		return cberr.New(cberr.KindOther, "paste", opts.from,
-			"this slot holds a live stream, which only the sender's own computers can claim")
-	}
 	if m.IsStream() {
 		if dest != "-" {
 			if spec, err := pathspec.ParseTransfer(dest); err == nil && spec.IsRemote() {
@@ -1074,6 +1063,10 @@ func (a *App) clipboardClear(ctx context.Context, slots []string, all bool) erro
 		} else if cberr.KindOf(err) != cberr.KindNotFound {
 			return err
 		}
+
+		// A handover's grants go before the directory they were made on, or they
+		// outlive it as rows in the user's share list naming a path in the trash.
+		a.unshareHandover(ctx, root, slot)
 
 		removed, err := a.removeIfPresent(ctx, clipboard.SlotDir(root, slot))
 		if err != nil {

@@ -344,7 +344,19 @@ The slot is named after the recipient (`to-marie`) and is never your default one
 
 A CERNBox path handed over this way is *copied* into the shared slot rather than pointed at: a pointer to a path of yours is unreadable to anybody else. The copy is made by the server, so no data passes through either machine — and if the recipient pastes to a CERNBox path, none passes through theirs either. Two people, two accounts, one file, and nothing on the wire.
 
-It stays on your quota until you run `cernbox clipboard clear to-marie`, which is what ends the handover.
+It stays on your quota until you run `cernbox clipboard clear to-marie`, which is what ends the handover — and which also takes back the share, so it does not linger in `cernbox share list` pointing at a directory that no longer exists.
+
+`--stream` works across accounts too, and then nothing is stored at all:
+
+```bash
+# you: this blocks, holding the file open
+tar cz ./analysis | cernbox copy --stream - --name analysis.tgz --to marie
+
+# marie, whenever she gets there
+cernbox paste --from gdelmont - | tar xz
+```
+
+The sender waits (`--wait`, ten minutes by default) until she runs it, then the two halves run at once with only a few pieces on the server at any moment. Nothing is left behind and there is no quota to reclaim — though the pieces she consumes land in *your* recycle bin, so `cernbox trash purge` after a large one is worth the habit.
 
 ### What it does and does not do
 
@@ -354,7 +366,7 @@ It stays on your quota until you run `cernbox clipboard clear to-marie`, which i
 
 **Clearing never touches a referenced file.** A copy made with `cb:` points at your real file; only the duplicates the CLI uploaded for the clipboard itself are deleted. If you move or delete a referenced file, a later paste says so rather than reporting a bare "no such file".
 
-**A handover is read-only and exposes one slot.** `--to` shares the slot directory and nothing else: the recipient cannot read the rest of your clipboard, or the directory it sits in. They cannot write to it either, so the copy stays yours to clear, and `--stream` — which needs the receiver to write into the slot — is for your own machines only.
+**A handover exposes one slot, and grants as little on it as the job needs.** `--to` shares the slot directory and nothing else: the recipient cannot read the rest of your clipboard, or the directory it sits in. A stored handover is read-only, so the copy stays yours to clear. A live one (`--stream --to`) additionally makes the `stream/` directory inside the slot writable, because the protocol needs the receiver to announce itself there and to delete each piece as it consumes it — that deletion is the flow control. The manifest and everything else stay read-only either way.
 
 **Two machines copying to the same slot is detected, not silently resolved.** The manifest is replaced only while its ETag is unchanged, so the second copy is told that the first one landed instead of overwriting it and orphaning its staged bytes. A copy that fails partway leaves the previous one intact and pastable, because nothing is deleted until the replacement has been committed. The one gap is two machines writing a slot for the *very first* time simultaneously: reva ignores `If-None-Match`, so there is no way to make creating a file exclusive, and that case is last-writer-wins.
 

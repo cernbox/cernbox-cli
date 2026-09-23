@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/clipboard"
 )
 
@@ -343,4 +344,67 @@ func writeFileOrFail(t *testing.T, p, body string) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+func TestPendingChunksCountsOnlyPieces(t *testing.T) {
+	// A handover's arrival marker lives in the pieces directory, because it is the
+	// only place the recipient can write. Counting entries rather than pieces would
+	// leave the window permanently one short and the drain never finishing.
+	entries := []client.ResourceInfo{
+		{Name: "00000"}, {Name: "00001"}, {Name: "reader"},
+	}
+	if got := pendingChunks(entries); got != 2 {
+		t.Errorf("pendingChunks = %d, want 2", got)
+	}
+	if got := pendingChunks([]client.ResourceInfo{{Name: "reader"}}); got != 0 {
+		t.Errorf("a directory holding only the marker has %d pieces, want 0", got)
+	}
+}
+
+func TestStreamHandoverSharesTheSlotAndTheScratchDirectory(t *testing.T) {
+	box := streamBox(t)
+
+	// Nobody will paste, so the sender gives up — after it has set up everything
+	// the recipient would have needed.
+	_, _, err := runStdin(t, box, "payload",
+		"copy", "--stream", "-", "--name", "live.bin", "--to", "marie", "--wait", "1s")
+	if err == nil {
+		t.Fatal("the sender should have given up with no receiver")
+	}
+	if !strings.Contains(err.Error(), "paste --from einstein") {
+		t.Errorf("the error does not say what the recipient had to type: %v", err)
+	}
+
+	// Two grants, deliberately different: the slot read-only so the manifest
+	// cannot be rewritten, and the pieces directory writable so the recipient can
+	// announce itself and delete what it has consumed.
+	var roles []string
+	for _, body := range box.postBodies {
+		switch {
+		case strings.Contains(body, client.RoleViewer):
+			roles = append(roles, "viewer")
+		case strings.Contains(body, client.RoleEditor):
+			roles = append(roles, "editor")
+		}
+		if !strings.Contains(body, `"marie"`) {
+			t.Errorf("a share went to somebody other than the recipient: %s", body)
+		}
+	}
+	if strings.Join(roles, ",") != "viewer,editor" {
+		t.Fatalf("the shares were %v, want viewer on the slot then editor on the pieces directory", roles)
+	}
+
+	// And it waited on the marker the recipient can actually write.
+	waited := false
+	for _, r := range box.requests {
+		if strings.HasSuffix(r, "/to-marie/stream/reader") {
+			waited = true
+		}
+		if strings.HasSuffix(r, "/to-marie/reader") {
+			t.Errorf("the sender waited on a marker the recipient cannot write: %v", r)
+		}
+	}
+	if !waited {
+		t.Errorf("the sender never looked for the recipient's marker: %v", box.requests)
+	}
 }

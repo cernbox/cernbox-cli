@@ -206,3 +206,28 @@ func TestOriginString(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestReaderPathDependsOnWhoTheReceiverIs(t *testing.T) {
+	const root = "/eos/user/e/einstein/.cernbox/clipboard"
+
+	// Another of your own machines can write anywhere in the slot.
+	own := New("default", time.Now(), 0, Origin{})
+	own.Mode = ModeStream
+	if got, want := own.ReaderPath(root), root+"/default/reader"; got != want {
+		t.Errorf("own machine's marker at %q, want %q", got, want)
+	}
+
+	// Somebody else can only write in the pieces directory, because that is all a
+	// handover shares with them.
+	handover := New("to-marie", time.Now(), 0, Origin{})
+	handover.Mode = ModeStream
+	handover.To = "marie"
+	if got, want := handover.ReaderPath(root), root+"/to-marie/stream/reader"; got != want {
+		t.Errorf("recipient's marker at %q, want %q", got, want)
+	}
+
+	// The marker must not be mistaken for a piece, whichever directory it is in.
+	if _, ok := ChunkIndex("reader"); ok {
+		t.Error("the arrival marker parses as a piece number")
+	}
+}

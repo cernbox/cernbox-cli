@@ -43,10 +43,10 @@ var coveredCommands = map[string]string{
 	"archive": "TestArchiveDownloadsATreeAsOneFile, TestArchiveCanProduceAZip, TestArchiveWritesToAPipe",
 
 	// The cross-machine clipboard.
-	"copy":            "TestClipboardRoundTrip, TestClipboardReferencesARemotePathWithoutUploading, TestClipboardCarriesADirectory, TestHandoverReachesTheOtherPerson",
+	"copy":            "TestClipboardRoundTrip, TestClipboardReferencesARemotePathWithoutUploading, TestClipboardCarriesADirectory, TestHandoverReachesTheOtherPerson, TestHandoverStreamsLiveToAnotherPerson",
 	"paste":           "TestClipboardRoundTrip, TestClipboardPasteInsideCERNBoxMovesNoData, TestClipboardRefusesToOverwriteWithoutForce, TestHandoverOfACERNBoxPathMovesNoData",
 	"clipboard list":  "TestClipboardListShowsTheSlot, TestHandoverReachesTheOtherPerson",
-	"clipboard clear": "TestClipboardClearReleasesStagedBytes, TestClipboardClearLeavesTheOriginalAlone",
+	"clipboard clear": "TestClipboardClearReleasesStagedBytes, TestClipboardClearLeavesTheOriginalAlone, TestHandoverTakesBackItsSharesWhenItEnds",
 
 	// Sharing.
 	"share create":   "TestShareLifecycle, TestShareIsVisibleToTheRecipient, TestShareWithGroup",
