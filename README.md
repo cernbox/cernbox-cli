@@ -88,6 +88,40 @@ cernbox ls /home/Documents          # your own home space
 
 Space-qualified aliases also work: `home:Documents`, `project/cernbox:data`.
 
+### Listing
+
+`ls` behaves like `ls(1)`: no header, one entry per line when piped, columns when a terminal is attached, and the familiar switches.
+
+```bash
+cernbox ls -l /eos/user/g/gdelmont     # long listing
+cernbox ls -lt                          # newest first
+cernbox ls -lSr                         # smallest first
+cernbox ls -aF                          # include dotfiles, mark directories
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-l` | long listing: rights, size, modification time |
+| `-a` | include entries beginning with a dot |
+| `-R` | recurse into subdirectories |
+| `-1` | one entry per line, even on a terminal |
+| `-t` `-S` `-r` | sort by time, by size, or reverse the order |
+| `-F` | append `/` to directory names |
+| `--bytes` | exact byte counts instead of `1.2K` |
+
+Two deliberate differences from `ls`. Sizes are human-readable by default, because `-h` is not available: cobra reserves it for `--help`, and claiming it panics at startup. And the long listing shows **one** rights column rather than owner/group/other:
+
+```
+total 2.9K
+-rw-   3B Sep 23 08:58 notes.txt
+-rw- 2.9K Sep 23 08:58 report.pdf
+drwx   0B Sep 23 08:58 sub
+```
+
+CERNBox reports the rights *you* have on an entry, and has no owner/group/other split to show — nor a POSIX mode, an owner, or a link count. Those columns are absent rather than invented. `????` in place of the rights means the server reported none, which is not the same as reporting none granted.
+
+`--output json` and `--output csv` are unchanged by any of this: they keep their labelled columns, and directories keep their trailing slash there, so existing scripts are unaffected.
+
 ### Why transfer commands need `cb:`
 
 On lxplus `/eos/user/g/gdelmont` is *both* a CERNBox path and a local FUSE mount, so `cernbox cp /eos/... /eos/...` would be genuinely ambiguous. Commands that only ever touch the remote (`ls`, `rm`, `share`, …) take bare paths. Commands that move data between local and remote need the remote side marked:

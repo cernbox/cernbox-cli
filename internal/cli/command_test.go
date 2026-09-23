@@ -454,8 +454,84 @@ func TestLsCommand(t *testing.T) {
 	if !strings.Contains(stdout, "notes.txt") {
 		t.Errorf("ls output is missing the file:\n%s", stdout)
 	}
+	if !strings.Contains(stdout, "Documents") {
+		t.Errorf("ls output is missing the directory:\n%s", stdout)
+	}
+	// Like ls: no trailing slash unless asked for. Piped output is one entry
+	// per line, so a bare name is what a script reads.
+	if strings.Contains(stdout, "Documents/") {
+		t.Errorf("ls should not classify directories without -F:\n%s", stdout)
+	}
+	// And no header row: ls has none.
+	if strings.Contains(stdout, "NAME") {
+		t.Errorf("ls should not print a header:\n%s", stdout)
+	}
+}
+
+// TestLsClassify: -F is how ls marks a directory, and how the trailing slash
+// this CLI used to print unconditionally is now obtained.
+func TestLsClassify(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir("/eos/user/e/einstein/Documents")
+	box.putFile("/eos/user/e/einstein/notes.txt", "hello")
+
+	stdout, _, err := run(t, box, "ls", "-F", "/eos/user/e/einstein")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(stdout, "Documents/") {
-		t.Errorf("ls should mark directories with a trailing slash:\n%s", stdout)
+		t.Errorf("-F should mark the directory:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "notes.txt/") {
+		t.Errorf("-F must not mark a plain file:\n%s", stdout)
+	}
+}
+
+// TestLsLongLooksLikeLs: a mode column, a size, a time, a name, and a total
+// line — no labelled headers.
+func TestLsLongLooksLikeLs(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir("/eos/user/e/einstein/Documents")
+	box.putFile("/eos/user/e/einstein/notes.txt", "hello")
+
+	stdout, _, err := run(t, box, "ls", "-l", "/eos/user/e/einstein")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stdout, "total ") {
+		t.Errorf("a long listing should open with a total line:\n%s", stdout)
+	}
+	for _, unwanted := range []string{"TYPE", "SIZE", "MODIFIED", "NAME"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("a long listing should have no %q header:\n%s", unwanted, stdout)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n")[1:] {
+		if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "d") {
+			t.Errorf("each entry should start with a mode, got %q", line)
+		}
+	}
+}
+
+// TestLsMachineFormatsKeepTheirShape: the human rendering changed to look like
+// ls; the formats a script parses must not move with it.
+func TestLsMachineFormatsKeepTheirShape(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir("/eos/user/e/einstein/Documents")
+	box.putFile("/eos/user/e/einstein/notes.txt", "hello")
+
+	stdout, _, err := run(t, box, "--output", "csv", "ls", "-l", "/eos/user/e/einstein")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "TYPE,SIZE,MODIFIED,NAME") {
+		t.Errorf("csv should keep its header row:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "Documents/") {
+		t.Errorf("csv should keep the trailing slash that identifies a directory:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "total ") {
+		t.Errorf("the total line belongs to the human listing only:\n%s", stdout)
 	}
 }
 

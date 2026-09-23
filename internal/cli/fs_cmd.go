@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,7 +19,7 @@ import (
 )
 
 func newLsCmd(app *App) *cobra.Command {
-	var long, all, recursive, rawBytes bool
+	var opts lsOptions
 
 	cmd := &cobra.Command{
 		Use:   "ls [PATH...]",
@@ -39,7 +41,7 @@ func newLsCmd(app *App) *cobra.Command {
 				if len(args) > 1 && !app.out.Streaming() {
 					app.out.Msg("%s:", arg)
 				}
-				if err := app.listOne(ctx, arg, long, all, recursive, !rawBytes); err != nil {
+				if err := app.listOne(ctx, arg, opts); err != nil {
 					return err
 				}
 				if i < len(args)-1 && !app.out.Streaming() {
@@ -50,23 +52,44 @@ func newLsCmd(app *App) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVarP(&long, "long", "l", false, "show size, modification time and permissions")
-	cmd.Flags().BoolVarP(&all, "all", "a", false, "include entries whose name starts with a dot")
-	cmd.Flags().BoolVarP(&recursive, "recursive", "R", false, "list subdirectories recursively")
-	// There is no -h shorthand: cobra reserves it for --help, and claiming it
-	// panics at startup rather than failing gracefully.
-	cmd.Flags().BoolVar(&rawBytes, "bytes", false, "print exact byte counts instead of 1.2K")
+	f := cmd.Flags()
+	f.BoolVarP(&opts.Long, "long", "l", false, "long listing: permissions, size, modification time")
+	f.BoolVarP(&opts.All, "all", "a", false, "include entries whose name starts with a dot")
+	f.BoolVarP(&opts.Recursive, "recursive", "R", false, "list subdirectories recursively")
+	f.BoolVarP(&opts.OnePerLine, "one-per-line", "1", false, "one entry per line, even on a terminal")
+	f.BoolVarP(&opts.SortTime, "sort-time", "t", false, "sort by modification time, newest first")
+	f.BoolVarP(&opts.SortSize, "sort-size", "S", false, "sort by size, largest first")
+	f.BoolVarP(&opts.Reverse, "reverse", "r", false, "reverse the sort order")
+	f.BoolVarP(&opts.Classify, "classify", "F", false, "append / to directory names")
+	// No -h shorthand: cobra reserves it for --help, and claiming it panics at
+	// startup. Sizes are human-readable by default instead, which is what -h
+	// would have been for.
+	f.BoolVar(&opts.RawBytes, "bytes", false, "print exact byte counts instead of 1.2K")
 	return cmd
 }
 
-func (a *App) listOne(ctx context.Context, arg string, long, all, recursive, humanSizes bool) error {
+// lsOptions is what the ls flags select. It is a struct because ls has many
+// independent switches and a positional argument list is unreadable at six.
+type lsOptions struct {
+	Long       bool
+	All        bool
+	Recursive  bool
+	OnePerLine bool
+	SortTime   bool
+	SortSize   bool
+	Reverse    bool
+	Classify   bool
+	RawBytes   bool
+}
+
+func (a *App) listOne(ctx context.Context, arg string, opts lsOptions) error {
 	p, err := a.resolve(ctx, arg)
 	if err != nil {
 		return err
 	}
 
 	var entries []client.ResourceInfo
-	if recursive {
+	if opts.Recursive {
 		err = a.client.Walk(ctx, p, func(info client.ResourceInfo) error {
 			if info.Path == p {
 				return nil
@@ -81,7 +104,7 @@ func (a *App) listOne(ctx context.Context, arg string, long, all, recursive, hum
 		return err
 	}
 
-	if !all {
+	if !opts.All {
 		filtered := entries[:0]
 		for _, e := range entries {
 			if !strings.HasPrefix(e.Name, ".") {
@@ -90,7 +113,7 @@ func (a *App) listOne(ctx context.Context, arg string, long, all, recursive, hum
 		}
 		entries = filtered
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	sortEntries(entries, opts)
 
 	// Streaming mode writes each entry as it goes, which is what keeps a
 	// listing of a very large directory from being held in memory by the
@@ -104,25 +127,182 @@ func (a *App) listOne(ctx context.Context, arg string, long, all, recursive, hum
 		return nil
 	}
 
-	table := output.Table{Items: entries}
-	now := time.Now()
-	if long {
-		table.Headers = []string{"TYPE", "SIZE", "MODIFIED", "NAME"}
-		for _, e := range entries {
-			table.Rows = append(table.Rows, []string{
-				entryType(e),
-				formatSize(e.Size, humanSizes),
-				output.HumanTime(e.Modified, now),
-				displayName(e, p, recursive),
-			})
+	// JSON and CSV keep the labelled, stable shape a script parses. Only the
+	// human rendering is made to look like ls.
+	if a.out.Format() != output.FormatTable {
+		table := output.Table{Items: entries}
+		now := time.Now()
+		if opts.Long {
+			table.Headers = []string{"TYPE", "SIZE", "MODIFIED", "NAME"}
+			for _, e := range entries {
+				table.Rows = append(table.Rows, []string{
+					entryType(e),
+					formatSize(e.Size, !opts.RawBytes),
+					output.HumanTime(e.Modified, now),
+					displayName(e, p, opts.Recursive, true),
+				})
+			}
+		} else {
+			table.Headers = []string{"NAME"}
+			for _, e := range entries {
+				table.Rows = append(table.Rows, []string{displayName(e, p, opts.Recursive, true)})
+			}
 		}
-	} else {
-		table.Headers = []string{"NAME"}
+		return a.out.Render(table)
+	}
+
+	return a.renderListing(entries, p, opts)
+}
+
+// renderListing prints a listing the way ls does: no header, one entry per
+// line when piped, columns when a terminal is watching, and a long form that
+// leads with what may be done to the entry.
+func (a *App) renderListing(entries []client.ResourceInfo, root string, opts lsOptions) error {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, displayName(e, root, opts.Recursive, opts.Classify))
+	}
+
+	if opts.Long {
+		var total int64
 		for _, e := range entries {
-			table.Rows = append(table.Rows, []string{displayName(e, p, recursive)})
+			total += e.Size
+		}
+		// ls counts disk blocks here. CERNBox does not report blocks, so this
+		// is the summed apparent size, which is the useful number anyway.
+		a.out.Line("total %s", formatSize(total, !opts.RawBytes))
+
+		now := time.Now()
+		widest := 0
+		sizes := make([]string, len(entries))
+		for i, e := range entries {
+			sizes[i] = formatSize(e.Size, !opts.RawBytes)
+			widest = max(widest, len(sizes[i]))
+		}
+		for i, e := range entries {
+			a.out.Line("%s %*s %s %s",
+				modeString(e), widest, sizes[i], output.HumanTime(e.Modified, now), names[i])
+		}
+		return nil
+	}
+
+	for _, line := range columnise(names, a.listingWidth(), opts.OnePerLine) {
+		a.out.Line("%s", line)
+	}
+	return nil
+}
+
+// listingWidth is the width to lay columns out in, and 0 when the output is
+// not a terminal — piped output is one entry per line, as ls does, so that
+// "cernbox ls | while read" works.
+func (a *App) listingWidth() int {
+	f, ok := a.stdout.(*os.File)
+	if !ok || !output.IsTerminal(f) {
+		return 0
+	}
+	return output.TerminalWidth(f)
+}
+
+// columnise lays names out down-then-across within width, the way ls does. A
+// width of 0, or onePerLine, gives one name per line.
+func columnise(names []string, width int, onePerLine bool) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	if onePerLine || width <= 0 {
+		return names
+	}
+
+	const gap = 2
+	widest := 0
+	for _, n := range names {
+		widest = max(widest, len(n))
+	}
+	cols := max((width+gap)/(widest+gap), 1)
+	if cols == 1 {
+		return names
+	}
+	rows := (len(names) + cols - 1) / cols
+
+	out := make([]string, 0, rows)
+	for r := range rows {
+		var b strings.Builder
+		for c := range cols {
+			// Down-then-across: ls fills each column before the next.
+			i := c*rows + r
+			if i >= len(names) {
+				break
+			}
+			if c > 0 {
+				b.WriteString(strings.Repeat(" ", gap))
+			}
+			if i+rows < len(names) {
+				fmt.Fprintf(&b, "%-*s", widest, names[i])
+			} else {
+				b.WriteString(names[i]) // last in its row: no trailing padding
+			}
+		}
+		out = append(out, strings.TrimRight(b.String(), " "))
+	}
+	return out
+}
+
+// modeString renders what the caller may do with an entry, in the shape ls
+// uses for a mode.
+//
+// It is one triad, not three: CERNBox reports the effective rights of whoever
+// is asking, and has no owner/group/other split to show. Nor does it report a
+// POSIX mode, an owner, or a link count, so those columns are absent rather
+// than invented.
+func modeString(e client.ResourceInfo) string {
+	kind := "-"
+	if e.IsDir {
+		kind = "d"
+	}
+	if e.Permissions == "" {
+		// The server said nothing about rights; saying "---" would claim it did.
+		return kind + "???"
+	}
+
+	has := func(letters string) bool { return strings.ContainsAny(e.Permissions, letters) }
+	rwx := []byte("---")
+	if has("G") {
+		rwx[0] = 'r'
+		if e.IsDir {
+			rwx[2] = 'x' // a readable collection is one you can descend into
 		}
 	}
-	return a.out.Render(table)
+	// W writes a file; C and K create a file or a collection inside one.
+	if (e.IsDir && has("CK")) || (!e.IsDir && has("W")) {
+		rwx[1] = 'w'
+	}
+	return kind + string(rwx)
+}
+
+// sortEntries orders a listing: by name, or by time or size when asked, with
+// directories and files intermixed exactly as ls leaves them.
+func sortEntries(entries []client.ResourceInfo, opts lsOptions) {
+	switch {
+	case opts.SortTime:
+		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].Modified.Equal(entries[j].Modified) {
+				return entries[i].Path < entries[j].Path
+			}
+			return entries[i].Modified.After(entries[j].Modified)
+		})
+	case opts.SortSize:
+		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].Size == entries[j].Size {
+				return entries[i].Path < entries[j].Path
+			}
+			return entries[i].Size > entries[j].Size
+		})
+	default:
+		sort.SliceStable(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	}
+	if opts.Reverse {
+		slices.Reverse(entries)
+	}
 }
 
 func entryType(e client.ResourceInfo) string {
@@ -132,12 +312,15 @@ func entryType(e client.ResourceInfo) string {
 	return "file"
 }
 
-func displayName(e client.ResourceInfo, root string, recursive bool) string {
+// displayName is the name as listed. classify appends "/" to a directory, which
+// ls does only under -F — except in the machine formats, where the trailing
+// slash has always been part of the contract.
+func displayName(e client.ResourceInfo, root string, recursive, classify bool) string {
 	name := e.Name
 	if recursive {
 		name = strings.TrimPrefix(strings.TrimPrefix(e.Path, root), "/")
 	}
-	if e.IsDir {
+	if e.IsDir && classify {
 		name += "/"
 	}
 	return name
