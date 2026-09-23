@@ -53,18 +53,25 @@ func newLsCmd(app *App) *cobra.Command {
 	}
 
 	f := cmd.Flags()
-	f.BoolVarP(&opts.Long, "long", "l", false, "long listing: permissions, size, modification time")
+
+	// -h means human-readable here, as it does in ls, so it cannot also mean
+	// help. Declaring --help first stops cobra adding its own with the -h
+	// shorthand; cobra still honours the flag, so "cernbox ls --help" works,
+	// and every other command keeps -h for help.
+	f.Bool("help", false, "show help for ls")
+
+	f.BoolVarP(&opts.Long, "long", "l", false, "long listing: rights, size, modification time")
+	f.BoolVarP(&opts.Human, "human-readable", "h", false, "print sizes as 1.2K, 34M")
 	f.BoolVarP(&opts.All, "all", "a", false, "include entries whose name starts with a dot")
 	f.BoolVarP(&opts.Recursive, "recursive", "R", false, "list subdirectories recursively")
 	f.BoolVarP(&opts.OnePerLine, "one-per-line", "1", false, "one entry per line, even on a terminal")
-	f.BoolVarP(&opts.SortTime, "sort-time", "t", false, "sort by modification time, newest first")
-	f.BoolVarP(&opts.SortSize, "sort-size", "S", false, "sort by size, largest first")
 	f.BoolVarP(&opts.Reverse, "reverse", "r", false, "reverse the sort order")
 	f.BoolVarP(&opts.Classify, "classify", "F", false, "append / to directory names")
-	// No -h shorthand: cobra reserves it for --help, and claiming it panics at
-	// startup. Sizes are human-readable by default instead, which is what -h
-	// would have been for.
-	f.BoolVar(&opts.RawBytes, "bytes", false, "print exact byte counts instead of 1.2K")
+	f.StringVar(&opts.Sort, "sort", "name", "sort by: name, time, or size")
+	f.BoolVarP(&opts.SortTime, "sort-time", "t", false, "sort by modification time, newest first")
+	f.BoolVarP(&opts.SortSize, "sort-size", "S", false, "sort by size, largest first")
+	_ = f.MarkHidden("sort-time")
+	_ = f.MarkHidden("sort-size")
 	return cmd
 }
 
@@ -75,11 +82,27 @@ type lsOptions struct {
 	All        bool
 	Recursive  bool
 	OnePerLine bool
-	SortTime   bool
-	SortSize   bool
 	Reverse    bool
 	Classify   bool
-	RawBytes   bool
+	// Human prints 1.2K rather than a byte count, as ls -h does. Bytes are the
+	// default, again as in ls.
+	Human bool
+	// Sort is "name", "time" or "size"; -t and -S set it.
+	Sort     string
+	SortTime bool
+	SortSize bool
+}
+
+// sortKey resolves the -t and -S shorthands against --sort, which they set.
+func (o lsOptions) sortKey() string {
+	switch {
+	case o.SortTime:
+		return "time"
+	case o.SortSize:
+		return "size"
+	default:
+		return o.Sort
+	}
 }
 
 func (a *App) listOne(ctx context.Context, arg string, opts lsOptions) error {
@@ -137,7 +160,7 @@ func (a *App) listOne(ctx context.Context, arg string, opts lsOptions) error {
 			for _, e := range entries {
 				table.Rows = append(table.Rows, []string{
 					entryType(e),
-					formatSize(e.Size, !opts.RawBytes),
+					formatSize(e.Size, opts.Human),
 					output.HumanTime(e.Modified, now),
 					displayName(e, p, opts.Recursive, true),
 				})
@@ -158,9 +181,16 @@ func (a *App) listOne(ctx context.Context, arg string, opts lsOptions) error {
 // line when piped, columns when a terminal is watching, and a long form that
 // leads with what may be done to the entry.
 func (a *App) renderListing(entries []client.ResourceInfo, root string, opts lsOptions) error {
+	// Two parallel slices: the plain names decide column widths, the decorated
+	// ones are what gets printed. Measuring the decorated name would count the
+	// escape sequences and shear the columns.
 	names := make([]string, 0, len(entries))
+	shown := make([]string, 0, len(entries))
+	colors := a.listingColors()
 	for _, e := range entries {
-		names = append(names, displayName(e, root, opts.Recursive, opts.Classify))
+		name := displayName(e, root, opts.Recursive, opts.Classify)
+		names = append(names, name)
+		shown = append(shown, colors.Apply(name, e.IsDir))
 	}
 
 	if opts.Long {
@@ -170,26 +200,37 @@ func (a *App) renderListing(entries []client.ResourceInfo, root string, opts lsO
 		}
 		// ls counts disk blocks here. CERNBox does not report blocks, so this
 		// is the summed apparent size, which is the useful number anyway.
-		a.out.Line("total %s", formatSize(total, !opts.RawBytes))
+		a.out.Line("total %s", formatSize(total, opts.Human))
 
 		now := time.Now()
 		widest := 0
 		sizes := make([]string, len(entries))
 		for i, e := range entries {
-			sizes[i] = formatSize(e.Size, !opts.RawBytes)
+			sizes[i] = formatSize(e.Size, opts.Human)
 			widest = max(widest, len(sizes[i]))
 		}
 		for i, e := range entries {
 			a.out.Line("%s %*s %s %s",
-				modeString(e), widest, sizes[i], output.HumanTime(e.Modified, now), names[i])
+				modeString(e), widest, sizes[i], output.HumanTime(e.Modified, now), shown[i])
 		}
 		return nil
 	}
 
-	for _, line := range columnise(names, a.listingWidth(), opts.OnePerLine) {
+	for _, line := range columnise(names, shown, a.listingWidth(), opts.OnePerLine) {
 		a.out.Line("%s", line)
 	}
 	return nil
+}
+
+// listingColors is the colour database for a listing, empty unless the output
+// is a terminal — a pipe gets no escape sequences, which is what ls does and
+// what keeps "cernbox ls | grep" working.
+func (a *App) listingColors() output.LSColors {
+	f, ok := a.stdout.(*os.File)
+	if !ok || !output.IsTerminal(f) {
+		return output.LSColors{}
+	}
+	return output.LSColorsFromEnv()
 }
 
 // listingWidth is the width to lay columns out in, and 0 when the output is
@@ -205,12 +246,12 @@ func (a *App) listingWidth() int {
 
 // columnise lays names out down-then-across within width, the way ls does. A
 // width of 0, or onePerLine, gives one name per line.
-func columnise(names []string, width int, onePerLine bool) []string {
+func columnise(names, shown []string, width int, onePerLine bool) []string {
 	if len(names) == 0 {
 		return nil
 	}
 	if onePerLine || width <= 0 {
-		return names
+		return shown
 	}
 
 	const gap = 2
@@ -220,7 +261,7 @@ func columnise(names []string, width int, onePerLine bool) []string {
 	}
 	cols := max((width+gap)/(widest+gap), 1)
 	if cols == 1 {
-		return names
+		return shown
 	}
 	rows := (len(names) + cols - 1) / cols
 
@@ -237,9 +278,11 @@ func columnise(names []string, width int, onePerLine bool) []string {
 				b.WriteString(strings.Repeat(" ", gap))
 			}
 			if i+rows < len(names) {
-				fmt.Fprintf(&b, "%-*s", widest, names[i])
+				// Pad by the plain width, print the decorated name.
+				b.WriteString(shown[i])
+				b.WriteString(strings.Repeat(" ", widest-len(names[i])))
 			} else {
-				b.WriteString(names[i]) // last in its row: no trailing padding
+				b.WriteString(shown[i]) // last in its row: no trailing padding
 			}
 		}
 		out = append(out, strings.TrimRight(b.String(), " "))
@@ -282,15 +325,15 @@ func modeString(e client.ResourceInfo) string {
 // sortEntries orders a listing: by name, or by time or size when asked, with
 // directories and files intermixed exactly as ls leaves them.
 func sortEntries(entries []client.ResourceInfo, opts lsOptions) {
-	switch {
-	case opts.SortTime:
+	switch opts.sortKey() {
+	case "time":
 		sort.SliceStable(entries, func(i, j int) bool {
 			if entries[i].Modified.Equal(entries[j].Modified) {
 				return entries[i].Path < entries[j].Path
 			}
 			return entries[i].Modified.After(entries[j].Modified)
 		})
-	case opts.SortSize:
+	case "size":
 		sort.SliceStable(entries, func(i, j int) bool {
 			if entries[i].Size == entries[j].Size {
 				return entries[i].Path < entries[j].Path
@@ -494,7 +537,10 @@ func newDuCmd(app *App) *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&depth, "depth", 0, "also show entries this many levels below PATH")
-	cmd.Flags().BoolVar(&humanSizes, "human-readable", true, "print sizes like 1.2K")
+	// Same arrangement as ls, and for the same reason: -h means human-readable
+	// in du(1), so declaring --help first keeps cobra from taking the shorthand.
+	cmd.Flags().Bool("help", false, "show help for du")
+	cmd.Flags().BoolVarP(&humanSizes, "human-readable", "h", false, "print sizes as 1.2K, 34M")
 	return cmd
 }
 
