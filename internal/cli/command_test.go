@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,17 @@ type testBox struct {
 	trash    map[string]trashEntry
 	versions map[string][]versionEntry
 	restored string
+
+	// etags tracks the version of each file the fake has written, so that a PUT
+	// carrying If-Match can be accepted or refused the way reva does. Paths the
+	// fake never wrote report a fixed etag, which is all most tests need.
+	etags map[string]string
+
+	// beforePut runs at the start of every PUT, before the If-Match check. It is
+	// how a test stands in for another client writing the same path in the window
+	// between a read and the write that depends on it — a race no test could
+	// otherwise reach reliably.
+	beforePut func(path string)
 
 	// appMethod is the HTTP method the fake application session advertises.
 	appMethod string
@@ -60,6 +72,7 @@ func newTestBox(t *testing.T) *testBox {
 		dirs:     map[string]bool{"/": true},
 		trash:    map[string]trashEntry{},
 		versions: map[string][]versionEntry{},
+		etags:    map[string]string{},
 	}
 	b.ts = httptest.NewServer(http.HandlerFunc(b.route))
 	t.Cleanup(b.ts.Close)
@@ -169,21 +182,21 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 		var entries []string
 		switch {
 		case b.dirs[p]:
-			entries = append(entries, davXML(p, true, 0))
+			entries = append(entries, b.davXML(p, true, 0))
 			if r.Header.Get("Depth") == "1" {
 				for f, body := range b.files {
 					if path.Dir(f) == p {
-						entries = append(entries, davXML(f, false, len(body)))
+						entries = append(entries, b.davXML(f, false, len(body)))
 					}
 				}
 				for d := range b.dirs {
 					if d != p && path.Dir(d) == p {
-						entries = append(entries, davXML(d, true, 0))
+						entries = append(entries, b.davXML(d, true, 0))
 					}
 				}
 			}
 		case b.files[p] != "":
-			entries = append(entries, davXML(p, false, len(b.files[p])))
+			entries = append(entries, b.davXML(p, false, len(b.files[p])))
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -201,6 +214,19 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, body)
 
 	case http.MethodPut:
+		if b.beforePut != nil {
+			b.beforePut(p)
+		}
+		if want := r.Header.Get("If-Match"); want != "" {
+			if _, exists := b.files[p]; !exists {
+				http.Error(w, "no such file", http.StatusPreconditionFailed)
+				return
+			}
+			if strings.Trim(want, `"`) != b.etagOf(p) {
+				http.Error(w, "etag mismatch", http.StatusPreconditionFailed)
+				return
+			}
+		}
 		var sb strings.Builder
 		buf := make([]byte, 4096)
 		for {
@@ -211,6 +237,7 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		b.files[p] = sb.String()
+		b.bumpETag(p)
 		w.WriteHeader(http.StatusCreated)
 
 	case "MKCOL":
@@ -218,21 +245,51 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "exists", http.StatusMethodNotAllowed)
 			return
 		}
-		b.dirs[p] = true
+		// Ancestors are registered too. The fake has always accepted a MKCOL of a
+		// deep path without checking the parent; recording the whole chain is what
+		// makes a later PROPFIND of it agree with that.
+		b.mkdir(p)
 		w.WriteHeader(http.StatusCreated)
 
 	case http.MethodDelete:
+		// DELETE on a collection is recursive in WebDAV, so the children go too —
+		// otherwise a deleted directory leaves orphans a later listing still finds.
 		delete(b.files, p)
 		delete(b.dirs, p)
+		for f := range b.files {
+			if strings.HasPrefix(f, p+"/") {
+				delete(b.files, f)
+			}
+		}
+		for d := range b.dirs {
+			if strings.HasPrefix(d, p+"/") {
+				delete(b.dirs, d)
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 
 	case "MOVE":
 		if body, ok := b.files[p]; ok {
-			dst := r.Header.Get("Destination")
-			if i := strings.Index(dst, testDavPrefix); i >= 0 {
-				b.files[path.Clean(dst[i+len(testDavPrefix):])] = body
+			if dst, ok := destPath(r); ok {
+				b.files[dst] = body
 				delete(b.files, p)
 			}
+		}
+		w.WriteHeader(http.StatusCreated)
+
+	case "COPY":
+		dst, ok := destPath(r)
+		if !ok {
+			http.Error(w, "bad destination", http.StatusBadGateway)
+			return
+		}
+		if r.Header.Get("Overwrite") == "F" && (b.dirs[dst] || b.files[dst] != "") {
+			http.Error(w, "exists", http.StatusPreconditionFailed)
+			return
+		}
+		if !b.copyTree(p, dst) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
 		}
 		w.WriteHeader(http.StatusCreated)
 
@@ -241,7 +298,69 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func davXML(p string, isDir bool, size int) string {
+// destPath extracts the path a MOVE or COPY targets from its Destination header.
+func destPath(r *http.Request) (string, bool) {
+	dst := r.Header.Get("Destination")
+	_, after, ok := strings.Cut(dst, testDavPrefix)
+	if !ok {
+		return "", false
+	}
+	return path.Clean(after), true
+}
+
+// copyTree duplicates a file or a whole collection, reporting whether the source
+// existed at all.
+func (b *testBox) copyTree(src, dst string) bool {
+	if body, ok := b.files[src]; ok {
+		b.files[dst] = body
+		b.mkdir(path.Dir(dst))
+		return true
+	}
+	if !b.dirs[src] {
+		return false
+	}
+
+	// Collect before writing: adding keys to a map while ranging it may or may
+	// not visit them, which would copy a tree only sometimes.
+	copies := map[string]string{}
+	var newDirs []string
+	for f, body := range b.files {
+		if strings.HasPrefix(f, src+"/") {
+			copies[dst+strings.TrimPrefix(f, src)] = body
+		}
+	}
+	for d := range b.dirs {
+		if strings.HasPrefix(d, src+"/") {
+			newDirs = append(newDirs, dst+strings.TrimPrefix(d, src))
+		}
+	}
+
+	b.mkdir(dst)
+	for _, d := range newDirs {
+		b.dirs[d] = true
+	}
+	maps.Copy(b.files, copies)
+	return true
+}
+
+// etagOf reports the current version of a path.
+func (b *testBox) etagOf(p string) string {
+	if e, ok := b.etags[p]; ok {
+		return e
+	}
+	return "etag-1"
+}
+
+// bumpETag records that a path changed, as a real server would.
+func (b *testBox) bumpETag(p string) {
+	b.etags[p] = fmt.Sprintf("etag-%d", len(b.requests))
+}
+
+func (b *testBox) davXML(p string, isDir bool, size int) string {
+	return davXMLWithETag(p, isDir, size, b.etagOf(p))
+}
+
+func davXMLWithETag(p string, isDir bool, size int, etag string) string {
 	href := testDavPrefix + p
 	rt := "<d:resourcetype></d:resourcetype>"
 	if isDir {
@@ -252,12 +371,12 @@ func davXML(p string, isDir bool, size int) string {
 		`<d:status>HTTP/1.1 200 OK</d:status><d:prop>`+
 		`<d:displayname>%s</d:displayname>%s`+
 		`<d:getcontentlength>%d</d:getcontentlength><oc:size>%d</oc:size>`+
-		`<d:getetag>&quot;etag-1&quot;</d:getetag>`+
+		`<d:getetag>&quot;%s&quot;</d:getetag>`+
 		`<oc:fileid>s1$ABC!%s</oc:fileid>`+
 		`<oc:privatelink>https://cernbox.test/files/spaces/s1%s</oc:privatelink>`+
 		`<d:getlastmodified>Mon, 02 Jan 2026 15:04:05 GMT</d:getlastmodified>`+
 		`</d:prop></d:propstat></d:response>`,
-		href, path.Base(p), rt, size, size, strings.ReplaceAll(p, "/", "_"), p)
+		href, path.Base(p), rt, size, size, etag, strings.ReplaceAll(p, "/", "_"), p)
 }
 
 // serveTrash implements the trash-bin endpoints: a PROPFIND listing, MOVE to
@@ -417,6 +536,13 @@ func (b *testBox) putFile(p, body string) {
 // stderr and the error.
 func run(t *testing.T, box *testBox, args ...string) (string, string, error) {
 	t.Helper()
+	return runStdin(t, box, "", args...)
+}
+
+// runStdin is run with something on standard input, for the commands that read
+// it ("cernbox copy -").
+func runStdin(t *testing.T, box *testBox, in string, args ...string) (string, string, error) {
+	t.Helper()
 
 	// Point the user config at a file that does not exist, so a developer's
 	// real configuration cannot influence the test.
@@ -426,7 +552,7 @@ func run(t *testing.T, box *testBox, args ...string) (string, string, error) {
 	t.Setenv("CERNBOX_APP_TOKEN", "")
 
 	var stdout, stderr bytes.Buffer
-	app := &App{flags: &globalFlags{}, stdout: &stdout, stderr: &stderr}
+	app := &App{flags: &globalFlags{}, stdout: &stdout, stderr: &stderr, stdin: strings.NewReader(in)}
 	root := newRootCmd(app)
 	root.SilenceErrors = true
 	root.SilenceUsage = true

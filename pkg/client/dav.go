@@ -375,6 +375,21 @@ func (c *Client) Download(ctx context.Context, p string, offset int64) (io.ReadC
 // Upload writes a file in a single PUT. Large files should go through
 // UploadResumable instead.
 func (c *Client) Upload(ctx context.Context, p string, open func() (io.ReadCloser, error), size int64, checksum string) error {
+	return c.put(ctx, p, open, size, checksum, "")
+}
+
+// UploadIfUnchanged writes a file only while its current ETag is still etag,
+// failing with KindConflict otherwise.
+//
+// This is how two clients writing the same small file detect that they raced,
+// rather than one silently overwriting the other. reva does honour If-Match on
+// PUT — unlike If-None-Match, which it ignores, so there is no equivalent way to
+// make *creating* a file exclusive.
+func (c *Client) UploadIfUnchanged(ctx context.Context, p string, open func() (io.ReadCloser, error), size int64, etag string) error {
+	return c.put(ctx, p, open, size, "", etag)
+}
+
+func (c *Client) put(ctx context.Context, p string, open func() (io.ReadCloser, error), size int64, checksum, ifMatch string) error {
 	u, err := c.davURL(ctx, p)
 	if err != nil {
 		return err
@@ -382,6 +397,11 @@ func (c *Client) Upload(ctx context.Context, p string, open func() (io.ReadClose
 	header := http.Header{"Content-Type": []string{"application/octet-stream"}}
 	if checksum != "" {
 		header.Set("OC-Checksum", checksum)
+	}
+	if ifMatch != "" {
+		// The ETag travels quoted, as PROPFIND reports it and as RFC 9110 wants
+		// it; the parsed form the rest of the CLI carries has the quotes stripped.
+		header.Set("If-Match", `"`+strings.Trim(ifMatch, `"`)+`"`)
 	}
 
 	resp, err := c.do(ctx, request{

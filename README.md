@@ -28,6 +28,7 @@ RPM and deb packages are built by the release pipeline and attached to each rele
 | Browse | `ls` `stat` `find` `du` `cat` |
 | Namespace | `mkdir` `touch` `rm` `mv` |
 | Transfer | `cp` `get` `put` `sync` |
+| Clipboard | `copy` `paste` `clipboard list/clear` |
 | Sharing | `share create/list/update/remove/received` |
 | Links | `link create/list/remove/password` |
 | Federated | `ocm invite/contacts/providers/received` |
@@ -48,7 +49,7 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 | OCS `remote_shares` is an empty handler that writes nothing | `ocm received` reads the graph `sharedWithMe` endpoint, filtering on the OCM id prefix |
 | App-token creation is not exposed publicly | `token create` explains where to create one; `list` and `revoke` work normally |
 | Reva's demo app provider advertises no mime types, so nothing can open anything | `open --web` works regardless; the application link needs a real provider such as Collabora |
-| `If-None-Match: *` on PUT is ignored, so a "create only" write silently overwrites | `touch` checks for an existing path before writing, rather than trusting the precondition |
+| `If-None-Match: *` on PUT is ignored, so a "create only" write silently overwrites | `touch` checks for an existing path before writing, rather than trusting the precondition. `If-Match` *is* honoured, and the clipboard uses it |
 | Downloading a directory answers 501 | `cat` reports "is a directory", as `cat(1)` does |
 
 **Two-way sync** is a deliberate omission rather than a gap. `sync` is a one-way mirror: genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there", and without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
@@ -167,6 +168,71 @@ Two places where this CLI is deliberately more cautious than the original, both 
 
 - **`touch` never rewrites an existing file.** `touch(1)` would update its timestamp; CERNBox offers no way to do that without rewriting the contents, so an existing path is reported and left alone.
 - **`mv` and `cp` refuse to overwrite** unless given `-f`. The originals overwrite silently.
+
+## Moving files between machines
+
+A clipboard that spans machines. Copy on one, paste on another, with CERNBox carrying whatever is in between:
+
+```bash
+# on your laptop
+cernbox copy ./report.pdf
+```
+
+```bash
+# on lxplus, or any other machine you are signed in on
+cernbox paste
+```
+
+There is nothing to set up and nothing to name: the state lives in your CERNBox home space, which is the one thing both machines can already see. A local file is what needs the trip through the server; but a file that is *already* in CERNBox is only pointed at, and then this costs nothing at all:
+
+```bash
+cernbox copy cb:/eos/user/g/gdelmont/report.pdf   # nothing is transferred
+cernbox paste cb:/eos/project/c/cernbox/data/     # nor here: the server copies it
+```
+
+That second line is worth knowing about. With both ends inside CERNBox the paste is a WebDAV `COPY`, so a 40 GB file moves between two spaces in two requests and no data reaches your terminal. It is also how the lxplus case stays free, since `/eos` there is a real mount and `cb:` is how you say you mean the CERNBox path rather than the local one.
+
+`-` works on both ends, which makes this a pipe between machines:
+
+```bash
+tar cz ./analysis | cernbox copy - --name analysis.tgz
+```
+
+```bash
+cernbox paste - | tar xz
+```
+
+### Slots
+
+One slot is used unless you name another, so the two-command case stays two commands. `--slot` keeps several copies in flight without them treading on each other:
+
+```bash
+cernbox copy -r ./build-logs --slot logs
+cernbox paste --slot logs ./incoming/
+cernbox clipboard list
+cernbox clipboard clear logs
+```
+
+```console
+$ cernbox clipboard list
+SLOT     CONTENTS          SIZE   ORIGIN              COPIED   EXPIRES
+default  report.pdf        2.1M   gdelmont@lxplus812  20m ago  2026-09-30 00:00
+logs     build-logs/ +2 m  118M   gdelmont@nb-042     3h ago   2026-09-30 00:00
+```
+
+The `ORIGIN` column is there because a clipboard shared by every machine on one account is otherwise ambiguous — knowing a copy came from lxplus twenty minutes ago is most of what you want from a listing.
+
+### What it does and does not do
+
+**Pasting does not empty the clipboard.** That is deliberate: it is a clipboard, so the same copy reaches as many machines as you like, and a paste that fails halfway has not destroyed the only copy. `cernbox clipboard clear` is how you let go of it.
+
+**Uploaded copies count against your quota** until the slot is cleared or expires. `--ttl` sets the lifetime, a week by default, and `0` means "until I clear it". Nothing runs on a schedule to collect expired slots, so `copy` and `clipboard list` do it on the way past. `clipboard list` shows what each slot is costing; note that a cleared slot's bytes land in your trash first, so `cernbox trash purge` is what actually returns the quota.
+
+**Clearing never touches a referenced file.** A copy made with `cb:` points at your real file; only the duplicates the CLI uploaded for the clipboard itself are deleted. If you move or delete a referenced file, a later paste says so rather than reporting a bare "no such file".
+
+**It is same-account, not same-person.** Every machine signed in as you sees the same clipboard. Handing a file to a colleague is a different thing, and `cernbox share` and `cernbox link` already do it — keeping that line clear is what stops this from slowly becoming a second sharing system.
+
+**Two machines copying to the same slot is detected, not silently resolved.** The manifest is replaced only while its ETag is unchanged, so the second copy is told that the first one landed instead of overwriting it and orphaning its staged bytes. A copy that fails partway leaves the previous one intact and pastable, because nothing is deleted until the replacement has been committed. The one gap is two machines writing a slot for the *very first* time simultaneously: reva ignores `If-None-Match`, so there is no way to make creating a file exclusive, and that case is last-writer-wins.
 
 ## Sharing
 

@@ -56,9 +56,11 @@ type App struct {
 
 	// stdout and stderr are fields rather than direct references to os.Stdout
 	// and os.Stderr so that tests can drive the whole command tree and read
-	// back exactly what a user would see.
+	// back exactly what a user would see. stdin is a field for the same reason:
+	// "cernbox copy -" reads it, and a test should not need a real pipe.
 	stdout io.Writer
 	stderr io.Writer
+	stdin  io.Reader
 
 	client *client.Client
 	chain  *auth.Chain
@@ -77,7 +79,7 @@ func (a *App) Chain() *auth.Chain { return a.chain }
 
 // Execute builds and runs the command tree.
 func Execute() int {
-	app := &App{flags: &globalFlags{}, stdout: os.Stdout, stderr: os.Stderr}
+	app := &App{flags: &globalFlags{}, stdout: os.Stdout, stderr: os.Stderr, stdin: os.Stdin}
 	root := newRootCmd(app)
 
 	// Errors are printed here rather than by cobra, so that the exit code and
@@ -168,6 +170,10 @@ func newRootCmd(app *App) *cobra.Command {
 		newGetCmd(app),
 		newPutCmd(app),
 		newSyncCmd(app),
+
+		newCopyCmd(app),
+		newPasteCmd(app),
+		newClipboardCmd(app),
 
 		newShareCmd(app),
 		newLinkCmd(app),
