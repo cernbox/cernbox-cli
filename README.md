@@ -50,6 +50,7 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 | App-token creation is not exposed publicly | `token create` explains where to create one; `list` and `revoke` work normally |
 | Reva's demo app provider advertises no mime types, so nothing can open anything | `open --web` works regardless; the application link needs a real provider such as Collabora |
 | `If-None-Match: *` on PUT is ignored, so a "create only" write silently overwrites | `touch` checks for an existing path before writing, rather than trusting the precondition. `If-Match` *is* honoured, and the clipboard uses it |
+| No upload accepts a body of unknown length: `PUT` requires `Content-Length`, and TUS does not offer `creation-defer-length` | `copy -` splits a stream into known-length pieces rather than spooling it to disk to measure it |
 | Downloading a directory answers 501 | `cat` reports "is a directory", as `cat(1)` does |
 
 **Two-way sync** is a deliberate omission rather than a gap. `sync` is a one-way mirror: genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there", and without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
@@ -201,6 +202,14 @@ tar cz ./analysis | cernbox copy - --name analysis.tgz
 ```bash
 cernbox paste - | tar xz
 ```
+
+A pipe is streamed, not buffered. It never touches local disk on either machine and memory stays at one chunk however large it is — a gigabyte through the pipe above costs about 30 MB of resident memory and no temporary file. That matters most on lxplus, where `/tmp` is small and the obvious implementation (spool the stream to a file to find out how long it is) would fail on exactly the transfers worth doing.
+
+The reason it needs mentioning at all is that reva has no way to accept a body of unknown length: its WebDAV `PUT` parses `Content-Length` and answers 400 without one, and its TUS endpoint does not implement `creation-defer-length`. So a stream larger than one chunk is stored as numbered pieces, each of a length that is known by the time it is sent, and `paste` joins them on the way out. That is visible in `--output json` as a `parts` count, and nowhere else: a small pipe stays a single ordinary object, and pasting is the same command either way.
+
+Two consequences worth knowing. Pasting a streamed copy to another CERNBox path is the one paste inside CERNBox that does move data, because a server-side `COPY` cannot join pieces: it is pulled and pushed back through a pipe, so nothing is ever whole on the client, but the bytes do make the trip. And clearing a streamed slot puts every piece in your recycle bin separately — a gigabyte at the default chunk is 128 entries — so `cernbox trash purge` after a large stream is worth the habit.
+
+None of this applies to an ordinary file. A file's length is known from a single `stat`, so it is sent as one request streamed straight off disk, with no pieces and nothing buffered: a 512 MB `cernbox put` runs in about 17 MB of resident memory. Splitting exists only because a pipe cannot be measured without reading it.
 
 ### Slots
 

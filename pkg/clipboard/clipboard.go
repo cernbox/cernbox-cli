@@ -90,6 +90,16 @@ type Entry struct {
 	// clearing the slot should delete; a referenced one is the user's actual
 	// file, which clearing must leave alone.
 	Staged bool `json:"staged"`
+	// Parts is how many pieces the entry was split into, and zero when it is a
+	// single object at Path — which is every entry except a stream too large to
+	// send in one request.
+	//
+	// When it is non-zero, Path is a directory and the pieces are the files
+	// PartPath names, to be joined in order. Splitting is what lets a pipe be
+	// copied at all: its length cannot be known in advance, and every way of
+	// sending bytes to reva needs the length up front, so the stream is cut into
+	// lengths that are known by the time each piece is sent.
+	Parts int `json:"parts,omitempty"`
 	// ETag identifies the version that was copied. On a referenced entry it is
 	// how paste can tell that the source has changed since, which is worth
 	// saying out loud rather than silently handing over different bytes.
@@ -233,6 +243,9 @@ func Decode(b []byte) (*Manifest, error) {
 		if e.Name == "" || e.Path == "" {
 			return nil, fmt.Errorf("the clipboard manifest is incomplete: entry %d has no name or no location", i+1)
 		}
+		if e.Parts < 0 {
+			return nil, fmt.Errorf("the clipboard manifest is invalid: entry %q claims %d parts", e.Name, e.Parts)
+		}
 	}
 	return &m, nil
 }
@@ -279,3 +292,18 @@ func PayloadDir(root, slot string) string { return path.Join(root, slot, payload
 // IsManifest reports whether name is the manifest file, so a listing of a slot
 // can tell metadata from payload.
 func IsManifest(name string) bool { return name == manifestName }
+
+// PartPath returns where the n-th piece of a split entry is stored, given the
+// entry's Path.
+//
+// The pieces sit inside a directory of their own rather than alongside each other
+// under suffixed names, so that releasing them is one recursive delete instead of
+// one request per piece — which for a large stream is the difference between a
+// single request and thousands.
+//
+// The number is zero-padded so that a plain listing of the directory is in the
+// order the pieces have to be joined, which is what makes a half-finished stream
+// something a person can look at and understand.
+func PartPath(base string, n int) string {
+	return path.Join(base, fmt.Sprintf("%05d", n))
+}

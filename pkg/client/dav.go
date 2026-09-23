@@ -389,6 +389,43 @@ func (c *Client) UploadIfUnchanged(ctx context.Context, p string, open func() (i
 	return c.put(ctx, p, open, size, "", etag)
 }
 
+// UploadStream writes a file of known length from a reader that can only be read
+// once. It is what lets a stream be moved through the client without ever landing
+// on local disk.
+//
+// The length is still required — reva's PUT handler parses the Content-Length
+// header and answers 400 without one, and its TUS endpoint does not implement
+// creation-defer-length, so there is no way to send a body of unknown size. The
+// caller has to know how many bytes are coming; it just does not have to have
+// them all in hand.
+//
+// Unlike Upload this is never retried. A retry re-reads the body, and a reader
+// that has already been drained would send a shorter one, quietly truncating the
+// file.
+func (c *Client) UploadStream(ctx context.Context, p string, r io.Reader, size int64) error {
+	u, err := c.davURL(ctx, p)
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(ctx, request{
+		method: http.MethodPut,
+		url:    u,
+		header: http.Header{"Content-Type": []string{"application/octet-stream"}},
+		body: readerBody(func() (io.ReadCloser, error) {
+			return io.NopCloser(r), nil
+		}, size),
+		op:      "upload",
+		path:    p,
+		noRetry: true,
+		expects: []int{http.StatusOK, http.StatusCreated, http.StatusNoContent},
+	})
+	if err != nil {
+		return err
+	}
+	drain(resp)
+	return nil
+}
+
 func (c *Client) put(ctx context.Context, p string, open func() (io.ReadCloser, error), size int64, checksum, ifMatch string) error {
 	u, err := c.davURL(ctx, p)
 	if err != nil {
