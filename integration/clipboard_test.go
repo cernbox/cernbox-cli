@@ -892,6 +892,18 @@ func (e *env) clearHandoverTo(user string) {
 	})
 }
 
+// resetHandoverTo clears the slot now as well as afterwards, for a test that
+// needs the share to be a new one.
+//
+// A second copy to the same person reuses the share that is already there, and
+// keeps whatever state the recipient has put it in — including hidden. Starting
+// from a slot left over from an earlier run would test the wrong thing.
+func (e *env) resetHandoverTo(user string) {
+	e.t.Helper()
+	e.run("clipboard", "clear", "to-"+user)
+	e.clearHandoverTo(user)
+}
+
 func TestHandoverReachesTheOtherPerson(t *testing.T) {
 	e := setup(t)
 	e.clearHandoverTo(otherUser)
@@ -1118,5 +1130,65 @@ func TestHandoverTakesBackItsSharesWhenItEnds(t *testing.T) {
 	// reach the path it was made on.
 	if _, _, code := e.runAs(e.other(), "ls", slotPath); code == 0 {
 		t.Error("the recipient can still read the slot after it was cleared")
+	}
+}
+
+// TestHandoverHidesItselfOnceCollected: a handover is the CLI's own plumbing —
+// a directory named after you that somebody else will clear — so once it has been
+// collected it has no business in the recipient's share list or in the web
+// interface. It cannot be created hidden, because the flag belongs to the
+// recipient's own copy of the share and only they can set it, so collecting it is
+// the moment.
+//
+// Only a real server can check this. The flag has to be set with the share's own
+// id rather than the id of the resource that was shared, which is what the listing
+// reports as the item's id; sending the wrong one answers 404. And hiding must
+// grant and revoke nothing.
+func TestHandoverHidesItselfOnceCollected(t *testing.T) {
+	e := setup(t)
+	e.resetHandoverTo(otherUser)
+
+	received := func() (rows int, hidden bool) {
+		var items []struct {
+			Name   string `json:"name"`
+			Hidden bool   `json:"hidden"`
+		}
+		e.runJSONAs(e.other(), &items, "share", "received")
+		for _, it := range items {
+			if it.Name == "to-"+otherUser {
+				rows++
+				hidden = it.Hidden
+			}
+		}
+		return rows, hidden
+	}
+
+	e.mustRun("copy", e.writeLocal("theirs.txt", []byte("theirs")), "--to", otherUser)
+	if rows, hidden := received(); rows != 1 || hidden {
+		t.Fatalf("before collecting: %d rows, hidden=%v; want one visible row", rows, hidden)
+	}
+
+	dest := filepath.Join(e.localDir, "inbox")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRunAs(e.other(), "paste", "--from", username, dest+"/")
+
+	if rows, hidden := received(); rows != 1 || !hidden {
+		t.Errorf("after collecting: %d rows, hidden=%v; want the row marked hidden", rows, hidden)
+	}
+
+	// Hiding is cosmetic: the grant is untouched, so it can still be found and
+	// collected again. If this fails, hiding has revoked something.
+	if _, _, code := e.runAs(e.other(), "ls", homeRoot+"/.cernbox/clipboard/to-"+otherUser); code != 0 {
+		t.Error("hiding the handover took away the recipient's access")
+	}
+	again := filepath.Join(e.localDir, "again")
+	if err := os.MkdirAll(again, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRunAs(e.other(), "paste", "--from", username, again+"/")
+	if got, err := os.ReadFile(filepath.Join(again, "theirs.txt")); err != nil || string(got) != "theirs" {
+		t.Errorf("collecting a hidden handover again gave %q, %v", got, err)
 	}
 }

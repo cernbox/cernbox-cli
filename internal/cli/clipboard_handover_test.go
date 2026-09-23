@@ -228,3 +228,67 @@ func TestClipboardListJSONKeepsItsShape(t *testing.T) {
 		t.Errorf("the manifest fields are no longer inline: %v", slots[0])
 	}
 }
+
+func TestPasteFromHidesTheHandoverWithTheShareID(t *testing.T) {
+	box := handoverBox(t)
+	t.Chdir(t.TempDir())
+
+	if _, _, err := run(t, box, "paste", "--from", "other"); err != nil {
+		t.Fatalf("paste --from: %v", err)
+	}
+
+	// A received share has two ids and they are not interchangeable. The update
+	// has to name the caller's own copy of the share; sending the id of the
+	// resource that was shared — which is what the listing reports as the item's
+	// id — answers 404.
+	var patched string
+	for _, r := range box.requests {
+		if strings.HasPrefix(r, "PATCH ") {
+			patched = r
+		}
+	}
+	if patched == "" {
+		t.Fatalf("the collected handover was not hidden: %v", box.requests)
+	}
+	if !strings.Contains(patched, testShareJailID) {
+		t.Errorf("the hide named the wrong id: %s", patched)
+	}
+	if strings.Contains(patched, "localhome") {
+		t.Errorf("the hide used the resource id, which the server refuses: %s", patched)
+	}
+	if body := box.lastPostBody(); !strings.Contains(body, `"@UI.Hidden":true`) {
+		t.Errorf("the request does not hide the share: %s", body)
+	}
+}
+
+func TestPasteFromDoesNotHideTwice(t *testing.T) {
+	box := handoverBox(t)
+	box.handoverHidden = true // already out of the recipient's listings
+	t.Chdir(t.TempDir())
+
+	if _, _, err := run(t, box, "paste", "--from", "other"); err != nil {
+		t.Fatalf("paste --from: %v", err)
+	}
+	for _, r := range box.requests {
+		if strings.HasPrefix(r, "PATCH ") {
+			t.Errorf("a handover that was already hidden was hidden again: %v", r)
+		}
+	}
+}
+
+// TestPasteFromStillWorksOnAHiddenHandover is why hiding is safe: it takes the
+// share out of listings meant for people and changes nothing else, so the
+// clipboard can still find it and the file can be collected again.
+func TestPasteFromStillWorksOnAHiddenHandover(t *testing.T) {
+	box := handoverBox(t)
+	box.handoverHidden = true
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if _, _, err := run(t, box, "paste", "--from", "other"); err != nil {
+		t.Fatalf("paste --from on a hidden handover: %v", err)
+	}
+	if got := readFileOrFail(t, filepath.Join(dir, "notes.txt")); got != "from the sender" {
+		t.Errorf("the pasted file reads %q", got)
+	}
+}
