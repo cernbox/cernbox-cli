@@ -544,6 +544,18 @@ func (c *Client) moveOrCopy(ctx context.Context, method, op, src, dst string, ov
 
 // Touch creates an empty file, failing if it already exists.
 func (c *Client) Touch(ctx context.Context, p string) error {
+	// Look before writing. The request below carries If-None-Match: *, which
+	// should make the server refuse to overwrite, but reva's WebDAV does not
+	// implement that precondition — it accepts the PUT and truncates the file.
+	// Relying on it silently destroyed content, so existence is checked here
+	// instead. The header stays, so this becomes atomic if reva ever honours it.
+	if info, statErr := c.Stat(ctx, p); statErr == nil {
+		if info.IsDir {
+			return cberr.New(cberr.KindConflict, "create file", p, "is a directory")
+		}
+		return cberr.New(cberr.KindConflict, "create file", p, "already exists")
+	}
+
 	u, err := c.davURL(ctx, p)
 	if err != nil {
 		return err

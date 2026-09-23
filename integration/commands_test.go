@@ -704,3 +704,83 @@ func TestDuSummarizeAndHuman(t *testing.T) {
 		t.Errorf("-h should print a human-readable size:\n%s", h)
 	}
 }
+
+// TestTouchNeverTruncates is a regression test for silent data loss. touch on
+// an existing file used to rewrite it with an empty body, destroying the
+// contents. The client sends If-None-Match: * to prevent exactly that, but
+// reva's WebDAV does not implement the precondition and accepts the write.
+func TestTouchNeverTruncates(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("precious.txt")
+	e.mustRun("put", e.writeLocal("precious.txt", []byte("do not lose me")), target)
+
+	// touch(1) succeeds on a file that is already there, so this must too.
+	stdout, stderr, code := e.run("touch", target)
+	if code != 0 {
+		t.Fatalf("touch on an existing file should succeed, exited %d\nstdout:\n%s\nstderr:\n%s",
+			code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "already exists") {
+		t.Errorf("touch should say it changed nothing:\n%s", stderr)
+	}
+	if got := e.mustRun("cat", target); got != "do not lose me" {
+		t.Errorf("touch destroyed the contents: %q", got)
+	}
+}
+
+// TestTouchCreatesAndHonoursNoCreate covers the two other touch behaviours.
+func TestTouchCreatesAndHonoursNoCreate(t *testing.T) {
+	e := setup(t)
+
+	fresh := e.remotePath("fresh.txt")
+	e.mustRun("touch", fresh)
+	if out := e.mustRun("cat", fresh); out != "" {
+		t.Errorf("a touched file should be empty, got %q", out)
+	}
+
+	// -c must not bring a missing file into existence.
+	absent := e.remotePath("absent.txt")
+	if _, _, code := e.run("touch", "-c", absent); code != 0 {
+		t.Errorf("touch -c on a missing path should succeed quietly, exited %d", code)
+	}
+	if _, _, code := e.run("stat", absent); code == 0 {
+		t.Error("touch -c created the file it was told not to create")
+	}
+}
+
+// TestCatOnADirectoryIsNotAServerError: the server answers a download of a
+// collection with 501, which reads as "not implemented" for something that is
+// simply the wrong kind of thing. cat(1) says "Is a directory".
+func TestCatOnADirectoryIsNotAServerError(t *testing.T) {
+	e := setup(t)
+	dir := e.remotePath("adir")
+	e.mustRun("mkdir", dir)
+
+	_, stderr, code := e.run("cat", dir)
+	if code == 0 {
+		t.Fatal("cat on a directory should fail")
+	}
+	if !strings.Contains(stderr, "is a directory") {
+		t.Errorf("cat should say it is a directory:\n%s", stderr)
+	}
+	for _, leak := range []string{"501", "Not Implemented"} {
+		if strings.Contains(stderr, leak) {
+			t.Errorf("the raw server error leaked through (%q):\n%s", leak, stderr)
+		}
+	}
+}
+
+// TestRecursiveUppercaseAlias: coreutils rm and cp take -R as well as -r, and
+// ls -R trains the habit.
+func TestRecursiveUppercaseAlias(t *testing.T) {
+	e := setup(t)
+	dir := e.remotePath("tree")
+	e.mustRun("mkdir", "-p", dir+"/inner")
+
+	if _, stderr, code := e.run("rm", "-R", dir); code != 0 {
+		t.Errorf("rm -R should work as rm -r does (%d): %s", code, stderr)
+	}
+	if _, _, code := e.run("stat", dir); code == 0 {
+		t.Error("rm -R did not delete the tree")
+	}
+}

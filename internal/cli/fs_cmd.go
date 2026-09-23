@@ -638,6 +638,13 @@ func newCatCmd(app *App) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// Without this the server answers a download of a collection
+				// with 501, and the user is told "not implemented" about
+				// something that is simply the wrong kind of thing. cat(1)
+				// says "Is a directory"; so does this.
+				if info, statErr := app.client.Stat(ctx, p); statErr == nil && info.IsDir {
+					return cberr.New(cberr.KindUsage, "read", p, "is a directory")
+				}
 				body, _, err := app.client.Download(ctx, p, 0)
 				if err != nil {
 					return err
@@ -682,10 +689,16 @@ func newMkdirCmd(app *App) *cobra.Command {
 }
 
 func newTouchCmd(app *App) *cobra.Command {
-	return &cobra.Command{
+	var noCreate bool
+
+	cmd := &cobra.Command{
 		Use:   "touch PATH...",
 		Short: "Create an empty file",
-		Args:  cobra.MinimumNArgs(1),
+		Long: "Create an empty file, leaving an existing one alone.\n\n" +
+			"touch(1) would update the timestamp of a file that already exists.\n" +
+			"CERNBox offers no way to do that without rewriting the file, so an\n" +
+			"existing path is left untouched and reported rather than emptied.",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
@@ -695,14 +708,29 @@ func newTouchCmd(app *App) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := app.client.Touch(ctx, p); err != nil {
+				if noCreate {
+					if _, err := app.client.Stat(ctx, p); err != nil {
+						continue // -c: nothing to do for a path that is not there
+					}
+				}
+				err = app.client.Touch(ctx, p)
+				switch {
+				case err == nil:
+					app.out.Msg("Created %s", p)
+				case cberr.KindOf(err) == cberr.KindConflict:
+					// Already there. touch(1) succeeds in this case, so this
+					// does too, but says plainly that nothing changed.
+					app.out.Warn("%s already exists; left unchanged", p)
+				default:
 					return err
 				}
-				app.out.Msg("Created %s", p)
 			}
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVarP(&noCreate, "no-create", "c", false, "do not create a file that does not exist")
+	return cmd
 }
 
 func newRmCmd(app *App) *cobra.Command {
@@ -746,6 +774,9 @@ func newRmCmd(app *App) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "delete directories and their contents")
+	// coreutils rm accepts -R too, and ls -R trains the habit.
+	cmd.Flags().BoolVarP(&recursive, "recursive-upper", "R", false, "same as --recursive")
+	_ = cmd.Flags().MarkHidden("recursive-upper")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "ignore paths that do not exist")
 	return cmd
 }
