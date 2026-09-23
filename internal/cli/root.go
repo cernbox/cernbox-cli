@@ -120,12 +120,12 @@ func newRootCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cernbox",
 		Short: "Command-line client for CERNBox",
-		Long: "Command-line client for CERNBox.\n\n" +
-			"On lxplus there is nothing to configure and nothing to log into: the CLI\n" +
-			"picks up your Kerberos ticket, exactly like the eos command.\n\n" +
-			"Commands that only touch CERNBox take bare paths (/eos/user/g/gdelmont).\n" +
-			"Commands that move data between local and remote need the remote side\n" +
-			"marked with cb:, because on lxplus /eos is also a local mount.",
+		Long: "Work with your CERNBox files from the command line.\n\n" +
+			"Paths look like /eos/user/g/gdelmont, or home:Documents to use a space\n" +
+			"alias. Commands that copy between your computer and CERNBox mark the\n" +
+			"CERNBox side with cb:, because a path like /eos/... can exist on your\n" +
+			"computer too.\n\n" +
+			"Run 'cernbox status' to see how you are signed in.",
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return app.setup(cmd)
@@ -136,17 +136,17 @@ func newRootCmd(app *App) *cobra.Command {
 	pf.StringVar(&f.endpoint, "endpoint", "", "CERNBox base URL")
 	pf.StringVar(&f.configPath, "config", "", "configuration file to use instead of the defaults")
 	pf.StringVarP(&f.outputFormat, "output", "o", "table", "output format: table, json, or csv")
-	pf.BoolVarP(&f.quiet, "quiet", "q", false, "suppress headers and informational messages")
-	pf.BoolVar(&f.debug, "debug", false, "show underlying errors and request detail")
+	pf.BoolVarP(&f.quiet, "quiet", "q", false, "hide headers and progress messages")
+	pf.BoolVar(&f.debug, "debug", false, "show the underlying error and request details")
 	pf.BoolVar(&f.stream, "stream", false, "with --output json, emit newline-delimited JSON")
-	pf.BoolVar(&f.noProgress, "no-progress", false, "do not draw transfer progress")
+	pf.BoolVar(&f.noProgress, "no-progress", false, "hide the progress bar")
 
-	pf.StringVar(&f.token, "token", "", "use this token instead of authenticating")
-	pf.StringVar(&f.method, "method", "", "authentication method: kerberos, device, app-token, basic, token")
-	pf.StringVar(&f.user, "user", "", "username, for app-token and basic authentication")
+	pf.StringVar(&f.token, "token", "", "use this token instead of signing in")
+	pf.StringVar(&f.method, "method", "", "how to sign in: kerberos, device, app-token, basic, or token")
+	pf.StringVar(&f.user, "user", "", "username, for app-token and basic sign-in")
 	pf.StringVar(&f.appTokenFile, "app-token-file", "", "file holding a CERNBox app token")
 	pf.StringVar(&f.kerberosSPN, "kerberos-spn", "",
-		"service principal to request a ticket for, when it differs from HTTP/<endpoint host>")
+		"Kerberos service name to ask for, if it differs from the server host")
 
 	pf.BoolVar(&f.insecure, "insecure", false, "allow plain HTTP (development instances only)")
 	pf.BoolVar(&f.skipVerify, "skip-verify", false, "do not verify the server certificate (development instances only)")

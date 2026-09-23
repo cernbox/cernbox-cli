@@ -13,14 +13,13 @@ func newOCMCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "ocm",
 		Aliases: []string{"federated"},
-		Short:   "Share with people at other institutions",
-		Long: "Federated sharing through Open Cloud Mesh.\n\n" +
-			"Sharing across institutions is a two-step affair: first the two people\n" +
-			"establish a link by exchanging an invitation, then they share as usual.\n" +
-			"Use 'ocm invite create' to start, and 'ocm contacts' to see who you can\n" +
-			"already share with.\n\n" +
-			"Once a contact is accepted, share with them using\n" +
-			"'cernbox share create PATH --with-remote user@their-provider.org'.",
+		Short:   "Share with people on another server",
+		Long: "Share with people whose files are on another server.\n\n" +
+			"It takes two steps. First you exchange an invitation, then you share as\n" +
+			"normal.\n\n" +
+			"Start with 'ocm invite create'. 'ocm contacts' shows who you can already\n" +
+			"share with; share with them using\n" +
+			"'cernbox share create PATH --with-remote name@their-server.org'.",
 	}
 	cmd.AddCommand(
 		newOCMInviteCmd(app),
@@ -36,7 +35,7 @@ func newOCMCmd(app *App) *cobra.Command {
 func newOCMInviteCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "invite",
-		Short: "Create, list and accept federated sharing invitations",
+		Short: "Create, list and accept sharing invitations",
 	}
 	cmd.AddCommand(newOCMInviteCreateCmd(app), newOCMInviteListCmd(app), newOCMInviteAcceptCmd(app))
 	return cmd
@@ -47,11 +46,10 @@ func newOCMInviteCreateCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create an invitation to send to someone at another institution",
+		Short: "Create an invitation to send to someone",
 		Long: "Create an invitation.\n\n" +
-			"Send the link to the person you want to share with; they accept it at\n" +
-			"their own provider. With --recipient the server mails it for you, if it\n" +
-			"is configured to send mail.",
+			"Send the link to the person you want to share with. They accept it on\n" +
+			"their own provider. With --recipient the server can email it for you.",
 		Example: "  cernbox ocm invite create --description 'joint analysis'\n" +
 			"  cernbox ocm invite create --recipient alice@other-lab.org",
 		Args: cobra.NoArgs,
@@ -121,11 +119,10 @@ func newOCMInviteAcceptCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "accept TOKEN",
-		Short: "Accept an invitation from another institution",
+		Short: "Accept an invitation you were sent",
 		Long: "Accept an invitation.\n\n" +
-			"You need the token and the provider it came from. If you were sent a\n" +
-			"link, both are in it: pass the link instead of the token and the CLI\n" +
-			"will take them apart.",
+			"You need the token and the provider it came from. If you were sent a link,\n" +
+			"pass the link instead and the CLI reads both from it.",
 		Example: "  cernbox ocm invite accept abc123 --provider other-lab.org\n" +
 			"  cernbox ocm invite accept 'https://other-lab.org/ocm/invite?token=abc123'",
 		Args: cobra.ExactArgs(1),
@@ -191,8 +188,8 @@ func newOCMContactsCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "contacts",
 		Aliases: []string{"users"},
-		Short:   "List the people at other institutions you can share with",
-		Long: "List accepted federated contacts.\n\n" +
+		Short:   "List the people you can share with",
+		Long: "List the people you can already share with.\n\n" +
 			"The ADDRESS column is what you pass to 'share create --with-remote'.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -227,7 +224,7 @@ func newOCMContactsCmd(app *App) *cobra.Command {
 				return err
 			}
 			if len(users) == 0 {
-				app.out.Msg("You have no federated contacts yet. Start with 'cernbox ocm invite create'.")
+				app.out.Msg("No contacts yet. Start with 'cernbox ocm invite create'.")
 			}
 
 			table := output.Table{Headers: []string{"ADDRESS", "NAME", "MAIL", "PROVIDER"}, Items: users}
@@ -247,7 +244,7 @@ func newOCMContactsCmd(app *App) *cobra.Command {
 func newOCMProvidersCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "providers",
-		Short: "List the institutions this server federates with",
+		Short: "List the other servers you can share with",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -272,7 +269,7 @@ func newOCMProvidersCmd(app *App) *cobra.Command {
 func newOCMReceivedCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "received",
-		Short: "List shares you have received from other institutions",
+		Short: "List shares you have received from another server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -283,7 +280,7 @@ func newOCMReceivedCmd(app *App) *cobra.Command {
 				return err
 			}
 			if len(shares) == 0 {
-				app.out.Msg("You have no federated shares.")
+				app.out.Msg("Nothing has been shared with you from another server.")
 			}
 
 			table := output.Table{Headers: []string{"ID", "NAME", "SHARED BY", "PROVIDER", "ROLE", "ACCEPTED"}, Items: shares}

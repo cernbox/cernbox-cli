@@ -204,7 +204,7 @@ func TestVersionsListOnFileWithoutHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr, "no previous versions") {
+	if !strings.Contains(stderr, "no earlier versions") {
 		t.Errorf("should say there is no history:\n%s", stderr)
 	}
 }
@@ -320,7 +320,7 @@ func TestSyncDeleteAnnouncesItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr, "removed from the destination") {
+	if !strings.Contains(stderr, "will be deleted from the destination") {
 		t.Errorf("--delete should warn before acting:\n%s", stderr)
 	}
 }

@@ -26,8 +26,8 @@ func newSpaceListCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List the spaces you can reach",
-		Long: "List your spaces. The ALIAS column shows what you can type as a path\n" +
-			"prefix: 'home:Documents', 'project/cernbox:data'.",
+		Long: "List your spaces. The ALIAS column is what you can use as a path prefix,\n" +
+			"like home:Documents or project/cernbox:data.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -111,11 +111,10 @@ func quotaColumn(total int64) string {
 func newTokenCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "token",
-		Short: "Manage app tokens for batch jobs and cron",
-		Long: "App tokens are long-lived credentials for automation, where no Kerberos\n" +
-			"ticket is available.\n\n" +
-			"Scope them: a token limited to one path and read access is a much smaller\n" +
-			"problem if it leaks than one with full account access.",
+		Short: "Manage app tokens for scripts and scheduled jobs",
+		Long: "App tokens are long-lived credentials for scripts and scheduled jobs.\n\n" +
+			"Keep them narrow. A token limited to one path and read-only does far less\n" +
+			"damage if it leaks than one with full access to your account.",
 	}
 	cmd.AddCommand(newTokenListCmd(app), newTokenRevokeCmd(app), newTokenCreateCmd(app))
 	return cmd
@@ -176,8 +175,8 @@ func newTokenCreateCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if scopePath == "" && !unlimited {
 				return cberr.Usagef(
-					"pass --path to scope the token to one directory, or --all to create an " +
-						"unscoped token with full access to your account")
+					"pass --path to limit the token to one directory, or --all to give it " +
+						"full access to your account")
 			}
 			if _, err := parseExpiry(expiry); err != nil {
 				return err
@@ -193,10 +192,10 @@ func newTokenCreateCmd(app *App) *cobra.Command {
 			// than a public endpoint. Say so plainly instead of failing with a
 			// 404 the user cannot act on.
 			return cberr.New(cberr.KindOther, "create an app token", "",
-				"CERNBox does not expose app-token creation over its public API.\n"+
-					"Create one in the web interface under Settings, then set CERNBOX_APP_TOKEN\n"+
-					"or pass --app-token-file. Use 'cernbox token list' and 'cernbox token revoke'\n"+
-					"to manage the tokens you already have.")
+				"app tokens cannot be created from the command line.\n"+
+					"Create one in the CERNBox web interface under Settings, then set\n"+
+					"CERNBOX_APP_TOKEN or pass --app-token-file. 'cernbox token list' and\n"+
+					"'cernbox token revoke' manage the ones you already have.")
 		},
 	}
 

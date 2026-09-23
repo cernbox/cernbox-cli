@@ -77,7 +77,7 @@ func (p *DeviceProvider) Token(ctx context.Context) (*Token, error) {
 		return nil, err
 	}
 	if meta.DeviceAuthorizationEndpoint == "" {
-		return nil, cberr.Authf("this identity provider does not support the device flow; " +
+		return nil, cberr.Authf("this server does not support signing in with a browser code; " +
 			"use 'cernbox login --method kerberos' or an app token instead")
 	}
 

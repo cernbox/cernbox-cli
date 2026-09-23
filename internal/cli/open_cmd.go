@@ -17,13 +17,12 @@ func newOpenCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "open PATH",
-		Short: "Print the link to open a file in the browser",
+		Short: "Print the link that opens a file in a browser",
 		Long: "Print the URL that opens a file in CERNBox.\n\n" +
-			"By default this is an application link — the online editor for the file's\n" +
-			"type. With --web it is the file's page in the CERNBox interface.\n\n" +
-			"Nothing is launched unless you pass --launch. On lxplus there is usually\n" +
-			"no browser to launch, and printing the link so you can paste it into your\n" +
-			"own is more useful than an error about a missing display.",
+			"By default this is the online editor for the file's type. With --web it is\n" +
+			"the file's page in the CERNBox interface.\n\n" +
+			"The link is only printed, so you can paste it into a browser. Pass\n" +
+			"--launch to open it directly.",
 		Example: "  cernbox open /eos/user/g/gdelmont/report.docx\n" +
 			"  cernbox open --web /eos/user/g/gdelmont/Documents\n" +
 			"  cernbox open --app Collabora --view-mode write /eos/user/g/gdelmont/notes.odt",
@@ -141,7 +140,7 @@ func openInBrowser(url string) error {
 func newAppsCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "apps",
-		Short: "List the file types this server can open in a web application",
+		Short: "List the file types that can be opened in a browser",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)

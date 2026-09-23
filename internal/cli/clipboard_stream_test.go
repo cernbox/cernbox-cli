@@ -194,7 +194,7 @@ func TestStreamReceiverGivesUpOnASilentSender(t *testing.T) {
 	if err == nil {
 		t.Fatal("the receiver should give up on a sender that never sends")
 	}
-	if !strings.Contains(err.Error(), "sender") {
+	if !strings.Contains(err.Error(), "other computer") {
 		t.Errorf("the error should point at the sender: %v", err)
 	}
 }
@@ -245,7 +245,7 @@ func TestStreamCannotBePastedIntoCERNBox(t *testing.T) {
 	if err == nil {
 		t.Fatal("a live stream cannot be pasted to a CERNBox path")
 	}
-	if !strings.Contains(err.Error(), "live stream") {
+	if !strings.Contains(err.Error(), "sending this live") {
 		t.Errorf("the error should say why: %v", err)
 	}
 }

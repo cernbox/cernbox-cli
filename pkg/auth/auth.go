@@ -207,7 +207,7 @@ func (ch *Chain) candidates() ([]Provider, error) {
 	for _, p := range ch.providers {
 		names = append(names, p.Name())
 	}
-	return nil, cberr.Usagef("unknown authentication method %q: want one of %s",
+	return nil, cberr.Usagef("unknown sign-in method %q: use one of %s",
 		ch.forced, strings.Join(names, ", "))
 }
 
@@ -293,8 +293,7 @@ func (ch *Chain) noCredentialsError(attempted []string) error {
 		advice.WriteString(" (tried: " + strings.Join(attempted, ", ") + ")")
 	}
 	advice.WriteString("\n")
-	advice.WriteString("On lxplus, run 'kinit' to get a Kerberos ticket.\n")
-	advice.WriteString("Elsewhere, run 'cernbox login' to authenticate in a browser.")
+	advice.WriteString("Run 'cernbox login' to sign in, or 'kinit' if you use Kerberos.")
 	return cberr.Authf("%s", advice.String())
 }
 

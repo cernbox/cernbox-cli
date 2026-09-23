@@ -41,18 +41,17 @@ func newCopyCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "copy PATH...",
-		Short: "Copy to the clipboard, to paste on another machine",
-		Long: "Copy files to a clipboard kept in your CERNBox home space, then paste them\n" +
-			"from any other machine you are signed in on.\n\n" +
-			"A path marked as remote (cb:/eos/..., home:Documents) is referenced rather\n" +
-			"than uploaded: nothing is transferred, and pasting it to another CERNBox\n" +
-			"path is a server-side copy that moves no data at all. A local path is\n" +
-			"uploaded into the slot, which is what makes this work from a laptop.\n\n" +
-			"Copying replaces whatever the slot held. Pasting does not empty it, so the\n" +
-			"same copy can be pasted on several machines; 'cernbox clipboard clear'\n" +
-			"releases the space when you are done.\n\n" +
-			"With --stream the file is handed over live instead: this command waits for a\n" +
-			"paste on the other machine and streams straight to it, storing nothing.",
+		Short: "Copy files, to paste on another computer",
+		Long: "Put files on a clipboard stored in CERNBox, then paste them on another\n" +
+			"computer you are signed in on.\n\n" +
+			"A CERNBox path (cb:/eos/...) is only pointed at, so nothing is\n" +
+			"transferred. A file on your computer is uploaded, which is what lets you\n" +
+			"paste it elsewhere.\n\n" +
+			"Copying replaces what the clipboard held. Pasting does not empty it, so\n" +
+			"you can paste on several computers. 'cernbox clipboard clear' frees the\n" +
+			"space.\n\n" +
+			"With --stream nothing is stored: this command waits for the paste and\n" +
+			"sends the file straight to it.",
 		Example: "  cernbox copy ./report.pdf\n" +
 			"  cernbox copy cb:/eos/user/g/gdelmont/report.pdf\n" +
 			"  cernbox copy -r ./data --slot build\n" +
@@ -71,14 +70,14 @@ func newCopyCmd(app *App) *cobra.Command {
 	f.BoolVarP(&opts.recursive, "recursive-upper", "R", false, "same as --recursive")
 	_ = f.MarkHidden("recursive-upper")
 	f.DurationVar(&opts.ttl, "ttl", clipboard.DefaultTTL,
-		"how long the copy lives before it is collected; 0 keeps it until cleared")
+		"how long the copy lives; 0 keeps it until you clear it")
 	f.StringVar(&opts.name, "name", "", `name to store standard input under (default "stdin")`)
 	f.BoolVar(&opts.verify, "verify", false, "compute and check checksums when staging")
 	f.IntVarP(&opts.jobs, "jobs", "j", 0, "number of files to transfer at once")
 	f.BoolVar(&opts.stream, "stream", false,
-		"hand the file over live: wait for a paste on another machine, then stream to it")
+		"wait for a paste on another computer and send the file straight to it")
 	f.DurationVar(&opts.wait, "wait", 10*time.Minute,
-		"how long to wait for the other machine, with --stream")
+		"how long to wait for the other computer, with --stream")
 	return cmd
 }
 
@@ -102,16 +101,14 @@ func newPasteCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "paste [DEST]",
-		Short: "Paste what was copied on another machine",
-		Long: "Paste the contents of a clipboard slot.\n\n" +
-			"With no destination, the items land in the current directory under their\n" +
-			"own names. A destination marked as remote (cb:/eos/...) is pasted inside\n" +
-			"CERNBox by the server, so no data crosses the wire in either direction.\n" +
-			"A destination of - writes a single item to standard output.\n\n" +
-			"Pasting leaves the clipboard alone, so the same copy can be pasted on as\n" +
-			"many machines as you like. Use 'cernbox clipboard clear' when you are done.\n\n" +
-			"Progress is drawn while the bytes move, on a terminal only. The global\n" +
-			"--no-progress flag turns it off, as do --quiet and --output json.",
+		Short: "Paste what was copied on another computer",
+		Long: "Paste what was copied.\n\n" +
+			"With no destination the files land in the current directory under their\n" +
+			"own names. Give a CERNBox path (cb:/eos/...) and the server copies them\n" +
+			"without sending any data. Use - to write a single file to standard output.\n\n" +
+			"Pasting leaves the clipboard alone, so you can paste again elsewhere.\n" +
+			"'cernbox clipboard clear' frees the space when you are done.\n\n" +
+			"A progress bar is shown on a terminal. --no-progress turns it off.",
 		Example: "  cernbox paste\n" +
 			"  cernbox paste ./incoming/\n" +
 			"  cernbox paste cb:/eos/project/c/cernbox/data/\n" +
@@ -131,7 +128,7 @@ func newPasteCmd(app *App) *cobra.Command {
 	f.BoolVar(&opts.noArchive, "no-archive", false, "download a directory file by file instead of as one archive")
 	f.IntVarP(&opts.jobs, "jobs", "j", 0, "number of files to transfer at once")
 	f.DurationVar(&opts.wait, "wait", 10*time.Minute,
-		"how long to wait on a sender that is streaming")
+		"how long to wait for a computer that is sending with --stream")
 	return cmd
 }
 
@@ -151,11 +148,11 @@ type pasteOptions struct {
 func newClipboardCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clipboard",
-		Short: "Inspect and clear the cross-machine clipboard",
+		Short: "See and clear the clipboard",
 		Long: "The clipboard that 'cernbox copy' and 'cernbox paste' share.\n\n" +
-			"Slots live in your CERNBox home space, so every machine you are signed in\n" +
-			"on sees the same ones. Anything uploaded for a slot counts against your\n" +
-			"quota until the slot is cleared or expires.",
+			"It is stored in CERNBox, so every computer you are signed in on sees the\n" +
+			"same clipboard. Uploaded files use your quota until you clear them.\n\n" +
+			"Use --slot to keep more than one copy at a time.",
 	}
 	cmd.AddCommand(newClipboardListCmd(app), newClipboardClearCmd(app))
 	return cmd
@@ -179,10 +176,11 @@ func newClipboardClearCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "clear [SLOT...]",
-		Short: "Empty a clipboard slot and release the space",
-		Long: "Empty one or more clipboard slots. With no argument, the default slot.\n\n" +
-			"Anything the slot referenced in place is left alone: clearing only deletes\n" +
-			"the copies that were uploaded for the clipboard itself.",
+		Short: "Empty the clipboard and free the space",
+		Long: "Empty the clipboard. With no name, the default slot.\n\n" +
+			"Files that were only pointed at are left alone. Only the uploaded copies\n" +
+			"are deleted, and they go to the trash, so 'cernbox trash purge' frees the\n" +
+			"quota.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -329,7 +327,7 @@ func classifyCopySources(args []string, opts copyOptions) ([]copySource, error) 
 	for _, s := range out {
 		if seen[s.name] {
 			return nil, cberr.Usagef(
-				"two arguments are both called %q: copy them one at a time, or into separate slots", s.name)
+				"two files are both called %q: copy them one at a time, or use --slot", s.name)
 		}
 		seen[s.name] = true
 	}
@@ -404,8 +402,7 @@ func (a *App) stageLocal(ctx context.Context, src copySource, staged string, opt
 	// tell — that ambiguity is why transfer commands need cb: at all — but it can
 	// say so, because the saving is the whole file.
 	if looksLikeCERNBoxMount(src.spec.Path) {
-		a.out.Msg("Note: %s looks like a CERNBox mount. Writing it as cb:%s would reference it instead of uploading it.",
-			src.spec.Path, src.spec.Path)
+		a.out.Msg("Tip: cb:%s would point at the file instead of uploading a copy.", src.spec.Path)
 	}
 
 	engine, err := a.transferEngine(transferFlags{
@@ -473,7 +470,7 @@ func (a *App) stageStdin(ctx context.Context, base string, opts copyOptions) (in
 	if err := a.client.Mkdir(ctx, base, true); err != nil {
 		return 0, 0, err
 	}
-	a.out.Msg("Streaming standard input in %s pieces...", output.HumanSize(chunk))
+	a.out.Msg("Sending in %s pieces...", output.HumanSize(chunk))
 
 	total, parts := int64(0), 0
 	for {
@@ -571,7 +568,7 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 		// The bytes are evidently still here, since the manifest was readable.
 		// Refusing to hand over data that is sitting right there would be
 		// unhelpful; saying it is stale is not.
-		a.out.Warn("this copy expired on %s and may be collected at any time",
+		a.out.Warn("this copy expired on %s and may be removed at any time",
 			m.Expires.Local().Format(expiryLayout))
 	}
 
@@ -587,8 +584,8 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 		if dest != "-" {
 			if spec, err := pathspec.ParseTransfer(dest); err == nil && spec.IsRemote() {
 				return cberr.Usagef(
-					"this slot is a live stream from %s, so it can only be received to a local path "+
-						"or to standard output — there is nothing on the server to copy", m.Origin)
+					"%s is sending this live, so it can only be pasted to your computer "+
+						"or to standard output. Nothing is stored in CERNBox to copy from.", m.Origin)
 			}
 		}
 		return a.streamPaste(ctx, root, m, dest, dest == "-", opts)
@@ -750,7 +747,7 @@ func (a *App) pasteRemote(ctx context.Context, m *clipboard.Manifest, spec paths
 		return nil
 	}
 
-	a.out.Msg("Pasted %s (%s) into %s, server-side: no data crossed the wire",
+	a.out.Msg("Pasted %s (%s) into %s. The server made the copy, so nothing was transferred.",
 		itemCount(len(m.Entries)), proseSize(m.Size()), dest)
 	a.reportSlotSurvives(m)
 	if a.out.Format() == output.FormatJSON {
@@ -858,20 +855,20 @@ func (a *App) pasteError(err error, e clipboard.Entry) error {
 	}
 	if e.Staged {
 		return cberr.New(cberr.KindNotFound, "paste", e.Name,
-			"the copy is gone from the clipboard: it may have expired, or been cleared from another machine")
+			"the copy is gone. It may have expired, or been cleared from another computer.")
 	}
 	return cberr.New(cberr.KindNotFound, "paste", e.Path,
-		fmt.Sprintf("%s was copied by reference and is no longer there: it has been moved or deleted since", e.Name))
+		fmt.Sprintf("the clipboard points here, but %s has been moved or deleted since it was copied", e.Name))
 }
 
 // reportSlotSurvives says that pasting did not consume the clipboard, which is
 // the one thing about this feature a user is most likely to assume wrongly.
 func (a *App) reportSlotSurvives(m *clipboard.Manifest) {
 	if !m.HasStaged() {
-		a.out.Msg("The clipboard still holds this copy; paste it again anywhere, or 'cernbox clipboard clear' to forget it.")
+		a.out.Msg("Still on the clipboard. Paste it again anywhere, or 'cernbox clipboard clear' to forget it.")
 		return
 	}
-	a.out.Msg("The clipboard still holds this copy (%s of your quota); 'cernbox clipboard clear%s' releases it.",
+	a.out.Msg("Still on the clipboard, using %s. Free it with 'cernbox clipboard clear%s'.",
 		proseSize(m.StagedSize()), slotArg(m.Slot))
 }
 
@@ -889,7 +886,7 @@ func (a *App) clipboardList(ctx context.Context) error {
 		return err
 	}
 	if len(manifests) == 0 {
-		a.out.Msg("The clipboard is empty. 'cernbox copy PATH' puts something on it.")
+		a.out.Msg("The clipboard is empty. Use 'cernbox copy PATH' to put something on it.")
 	}
 
 	now := time.Now()
@@ -955,7 +952,7 @@ func (a *App) clipboardClear(ctx context.Context, slots []string, all bool) erro
 			return err
 		}
 		if !removed {
-			a.out.Msg("Nothing on the %q clipboard slot.", slot)
+			a.out.Msg("The %q clipboard slot is already empty.", slot)
 			continue
 		}
 		cleared++
@@ -963,7 +960,7 @@ func (a *App) clipboardClear(ctx context.Context, slots []string, all bool) erro
 	}
 
 	if freed > 0 {
-		a.out.Msg("Released %s. Deleted files go to your trash first, so 'cernbox trash purge' reclaims the quota.",
+		a.out.Msg("Freed %s. The files are in your trash; 'cernbox trash purge' frees the quota.",
 			proseSize(freed))
 	}
 	if a.out.Format() == output.FormatJSON {
@@ -993,7 +990,7 @@ func (a *App) readSlot(ctx context.Context, root, slot string) (*clipboard.Manif
 	if err != nil {
 		if cberr.KindOf(err) == cberr.KindNotFound {
 			return nil, cberr.New(cberr.KindNotFound, "read the clipboard", slot,
-				"nothing has been copied to this slot")
+				"nothing has been copied here yet")
 		}
 		return nil, err
 	}
@@ -1093,8 +1090,8 @@ func (a *App) writeSlot(ctx context.Context, root string, m *clipboard.Manifest,
 	err = a.client.UploadIfUnchanged(ctx, p, open, int64(len(b)), ifMatch)
 	if cberr.KindOf(err) == cberr.KindConflict {
 		return cberr.New(cberr.KindConflict, "copy", m.Slot,
-			fmt.Sprintf("another machine copied to this slot while this copy was running: "+
-				"run 'cernbox clipboard list' to see what it holds, then copy again%s",
+			fmt.Sprintf("another computer copied to this slot at the same time. "+
+				"Run 'cernbox clipboard list' to see what it holds, then copy again%s",
 				slotHint(m.Slot)))
 	}
 	return err
@@ -1168,7 +1165,7 @@ func (a *App) collectExpired(ctx context.Context, root string) {
 		if _, err := a.removeIfPresent(ctx, clipboard.SlotDir(root, e.Name)); err != nil {
 			continue
 		}
-		a.out.Msg("Collected the expired %q clipboard slot.", e.Name)
+		a.out.Msg("Removed the expired %q clipboard slot.", e.Name)
 	}
 }
 

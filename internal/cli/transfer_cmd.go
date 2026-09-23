@@ -42,13 +42,13 @@ func newCpCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "cp SOURCE DEST",
-		Short: "Copy between the local filesystem and CERNBox",
-		Long: "Copy files between the local filesystem and CERNBox.\n\n" +
-			"The CERNBox side must be marked with cb:. On lxplus /eos is both a\n" +
-			"CERNBox path and a local FUSE mount, so an unmarked path is ambiguous and\n" +
-			"guessing would silently do the wrong thing to your data.\n\n" +
-			"If you find the prefix awkward, use get and put instead: they are\n" +
-			"unambiguous by position.",
+		Short: "Copy between your computer and CERNBox",
+		Long: "Copy files between your computer and CERNBox.\n\n" +
+			"Mark the CERNBox side with cb:. A path like /eos/... can exist on your\n" +
+			"computer too, and guessing which one you meant could touch the wrong\n" +
+			"file.\n\n" +
+			"If the prefix is awkward, use get and put: they tell the two sides apart\n" +
+			"by position.",
 		Example: "  cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/\n" +
 			"  cernbox cp -r cb:/eos/project/c/cernbox/data ./data\n" +
 			"  cernbox cp cb:/eos/user/g/gdelmont/a.txt cb:/eos/user/g/gdelmont/b.txt",
@@ -82,10 +82,9 @@ func newPutCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "put LOCAL REMOTE",
-		Short: "Upload a local file or directory to CERNBox",
-		Long: "Upload to CERNBox. Unlike cp, the sides are unambiguous by position, so\n" +
-			"no cb: prefix is needed.\n\n" +
-			"Large files are uploaded in chunks and resume where they left off if the\n" +
+		Short: "Upload a file or directory to CERNBox",
+		Long: "Upload to CERNBox. No cb: prefix is needed: your computer comes first.\n\n" +
+			"Large files go up in chunks and carry on where they stopped if the\n" +
 			"transfer is interrupted.",
 		Example: "  cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/\n" +
 			"  cernbox put -r ./data /eos/project/c/cernbox/data",
@@ -111,12 +110,12 @@ func newGetCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "get REMOTE [LOCAL]",
-		Short: "Download from CERNBox to the local filesystem",
-		Long: "Download from CERNBox. With no local path, the file lands in the current\n" +
+		Short: "Download from CERNBox to your computer",
+		Long: "Download from CERNBox. With no local path the file lands in the current\n" +
 			"directory under its own name.\n\n" +
-			"An interrupted download resumes from where it stopped. A recursive\n" +
-			"download is served as a single archive when the server supports it, which\n" +
-			"is much faster for a directory of many small files.",
+			"An interrupted download carries on where it stopped. A whole directory\n" +
+			"comes down as one archive when the server can build one, which is much\n" +
+			"faster for many small files.",
 		Example: "  cernbox get /eos/user/g/gdelmont/Documents/report.pdf\n" +
 			"  cernbox get -r /eos/project/c/cernbox/data ./data",
 		Args: cobra.RangeArgs(1, 2),

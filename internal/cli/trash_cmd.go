@@ -13,10 +13,10 @@ import (
 func newTrashCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "trash",
-		Short: "List, restore and purge deleted files",
-		Long: "Work with the trash bin.\n\n" +
-			"Each space has its own bin. With no --space, commands act on your home\n" +
-			"space; pass --space to reach a project's bin.",
+		Short: "Work with deleted files",
+		Long: "Work with deleted files.\n\n" +
+			"Each space has its own trash. Commands use your home space unless you pass\n" +
+			"--space.",
 	}
 	cmd.AddCommand(newTrashListCmd(app), newTrashRestoreCmd(app), newTrashPurgeCmd(app))
 	return cmd
@@ -60,7 +60,7 @@ func newTrashListCmd(app *App) *cobra.Command {
 				return err
 			}
 			if len(items) == 0 {
-				app.out.Msg("The trash bin is empty.")
+				app.out.Msg("The trash is empty.")
 			}
 
 			now := time.Now()
@@ -90,8 +90,8 @@ func newTrashRestoreCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restore KEY...",
 		Short: "Restore a deleted file",
-		Long: "Restore deleted files. Without --to they go back where they came from,\n" +
-			"which is what the KEY's original path column shows.",
+		Long: "Restore deleted files. Without --to they go back where they were, which is\n" +
+			"the path shown by 'cernbox trash list'.",
 		Example: "  cernbox trash restore 1a2b3c\n" +
 			"  cernbox trash restore 1a2b3c --to /eos/user/g/gdelmont/recovered.txt",
 		Args: cobra.MinimumNArgs(1),
@@ -137,10 +137,9 @@ func newTrashPurgeCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "purge [KEY...]",
-		Short: "Permanently delete items from the trash bin",
-		Long: "Permanently delete trash items. This cannot be undone.\n\n" +
-			"With --all the whole bin is emptied, which is why it asks for confirmation\n" +
-			"unless you pass --yes.",
+		Short: "Delete items from the trash for good",
+		Long: "Delete trash items for good. This cannot be undone.\n\n" +
+			"--all empties the whole trash, so it asks first unless you pass --yes.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -167,7 +166,7 @@ func newTrashPurgeCmd(app *App) *cobra.Command {
 				if err := app.client.PurgeTrash(ctx, "", base); err != nil {
 					return err
 				}
-				app.out.Msg("Emptied the trash bin.")
+				app.out.Msg("Emptied the trash.")
 				return nil
 			}
 
