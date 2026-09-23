@@ -84,6 +84,10 @@ type Manifest struct {
 	Expires time.Time `json:"expires,omitzero"`
 	// Origin records the machine that did the copying.
 	Origin Origin `json:"origin"`
+	// To is the user this was staged for, empty for an ordinary copy. It is
+	// written so that a slot says who can read it without the reader having to
+	// take the slot's name apart.
+	To string `json:"to,omitempty"`
 	// Entries are what was copied, in the order the arguments were given.
 	Entries []Entry `json:"entries"`
 }
@@ -323,6 +327,28 @@ func ValidateSlot(name string) error {
 		}
 	}
 	return nil
+}
+
+// HandoverPrefix marks a slot staged for somebody else rather than for another
+// of your own machines.
+//
+// A handover gets a slot of its own, named after the recipient, and never the
+// default one. The slot directory is shared with them, so anything in it is
+// theirs to read: putting a handover in the slot the rest of your copies go to
+// would hand over the next thing you copied as well.
+const HandoverPrefix = "to-"
+
+// HandoverSlot is the slot a handover to user is staged in.
+func HandoverSlot(user string) string { return HandoverPrefix + user }
+
+// HandoverRecipient reports who a slot was staged for, and whether it is a
+// handover at all.
+func HandoverRecipient(slot string) (string, bool) {
+	rest, ok := strings.CutPrefix(slot, HandoverPrefix)
+	if !ok || rest == "" {
+		return "", false
+	}
+	return rest, true
 }
 
 // SlotDir is the directory holding one slot.

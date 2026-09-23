@@ -518,3 +518,27 @@ func TestSharedWithMeReadsTheRoleFromTheRemoteItem(t *testing.T) {
 		t.Errorf("SharedBy = %+v", items[0].SharedBy)
 	}
 }
+
+func TestSpacePathOfID(t *testing.T) {
+	// The space half of a resource id is the base32 of the space's path. This is
+	// the only way to a path for a received share, which carries none of its own.
+	for _, tc := range []struct {
+		id, want string
+		ok       bool
+	}{
+		{"localhome$F5SW64ZPOVZWK4RPMUXWK2LOON2GK2LO!3857", "/eos/user/e/einstein", true},
+		{"localhome$F5SW64ZPMRSXML3QOJXWGL3SMVRXSY3MMU======!1", "/eos/dev/proc/recycle", true},
+		{"nospace", "", false},
+		{"localhome$!1", "", false},
+		{"localhome$not-base32!1", "", false},
+		// Decodes, but not to a path: acting on it would address something else.
+		{"localhome$" + "MFRGG===" + "!1", "", false},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			got, ok := SpacePathOfID(tc.id)
+			if ok != tc.ok || got != tc.want {
+				t.Errorf("SpacePathOfID(%q) = %q, %v; want %q, %v", tc.id, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}

@@ -221,7 +221,7 @@ Two places where this CLI is deliberately more cautious than the original, both 
 
 ## Moving files between machines
 
-A clipboard that spans machines. Copy on one, paste on another, with CERNBox carrying whatever is in between:
+A clipboard that spans machines. Copy on one, paste on another, with CERNBox carrying whatever is in between. With `--to` it spans people as well: see [handing a file to somebody else](#handing-a-file-to-somebody-else).
 
 ```bash
 # on your laptop
@@ -316,12 +316,35 @@ cernbox clipboard clear logs
 
 ```console
 $ cernbox clipboard list
-SLOT     CONTENTS          SIZE   ORIGIN              COPIED   EXPIRES
-default  report.pdf        2.1M   gdelmont@lxplus812  20m ago  2026-09-30 00:00
-logs     build-logs/ +2 m  118M   gdelmont@nb-042     3h ago   2026-09-30 00:00
+SLOT      FROM      CONTENTS          SIZE   ORIGIN              COPIED   EXPIRES
+default   -         report.pdf        2.1M   gdelmont@lxplus812  20m ago  2026-09-30 00:00
+logs      -         build-logs/ +2 m  118M   gdelmont@nb-042     3h ago   2026-09-30 00:00
+to-marie  -         plots.tar         14M    gdelmont@nb-042     5m ago   2026-09-30 00:00
+default   asmith    dataset.root      1.2G   asmith@lxplus701    1h ago   2026-09-30 00:00
 ```
 
+Rows with a `FROM` are handovers waiting for you, on somebody else's quota rather than yours.
+
 The `ORIGIN` column is there because a clipboard shared by every machine on one account is otherwise ambiguous — knowing a copy came from lxplus twenty minutes ago is most of what you want from a listing.
+
+### Handing a file to somebody else
+
+The same clipboard works between two people. The sender names the recipient, and the recipient names the sender:
+
+```bash
+# you
+cernbox copy ./plots.tar --to marie
+
+# marie, on her own account
+cernbox clipboard list          # shows what is waiting, and from whom
+cernbox paste --from gdelmont ./incoming/
+```
+
+The slot is named after the recipient (`to-marie`) and is never your default one, because the whole slot directory becomes readable by them — a handover left in the slot everything else goes to would hand over the next thing you copied as well. For the same reason `--to` cannot be combined with `--slot`.
+
+A CERNBox path handed over this way is *copied* into the shared slot rather than pointed at: a pointer to a path of yours is unreadable to anybody else. The copy is made by the server, so no data passes through either machine — and if the recipient pastes to a CERNBox path, none passes through theirs either. Two people, two accounts, one file, and nothing on the wire.
+
+It stays on your quota until you run `cernbox clipboard clear to-marie`, which is what ends the handover.
 
 ### What it does and does not do
 
@@ -331,7 +354,7 @@ The `ORIGIN` column is there because a clipboard shared by every machine on one 
 
 **Clearing never touches a referenced file.** A copy made with `cb:` points at your real file; only the duplicates the CLI uploaded for the clipboard itself are deleted. If you move or delete a referenced file, a later paste says so rather than reporting a bare "no such file".
 
-**It is same-account, not same-person.** Every machine signed in as you sees the same clipboard. Handing a file to a colleague is a different thing, and `cernbox share` and `cernbox link` already do it — keeping that line clear is what stops this from slowly becoming a second sharing system.
+**A handover is read-only and exposes one slot.** `--to` shares the slot directory and nothing else: the recipient cannot read the rest of your clipboard, or the directory it sits in. They cannot write to it either, so the copy stays yours to clear, and `--stream` — which needs the receiver to write into the slot — is for your own machines only.
 
 **Two machines copying to the same slot is detected, not silently resolved.** The manifest is replaced only while its ETag is unchanged, so the second copy is told that the first one landed instead of overwriting it and orphaning its staged bytes. A copy that fails partway leaves the previous one intact and pastable, because nothing is deleted until the replacement has been committed. The one gap is two machines writing a slot for the *very first* time simultaneously: reva ignores `If-None-Match`, so there is no way to make creating a file exclusive, and that case is last-writer-wins.
 
