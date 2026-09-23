@@ -104,6 +104,8 @@ type Link struct {
 	URL  string `json:"url,omitempty"`
 	// HasPassword reports whether the link is password protected.
 	HasPassword bool `json:"has_password,omitempty"`
+	// Name is the label the link was given, for telling several apart.
+	Name string `json:"name,omitempty"`
 }
 
 // Permission is a share or a public link on a resource.
@@ -365,6 +367,7 @@ type graphPermission struct {
 		WebURL           *string `json:"webUrl"`
 		PreventsDownload *bool   `json:"preventsDownload"`
 		HasPassword      *bool   `json:"@libre.graph.permissions.link.hasPassword"`
+		DisplayName      *string `json:"@libre.graph.displayName"`
 	} `json:"link"`
 	ExpirationDateTime *time.Time `json:"expirationDateTime"`
 }
@@ -404,6 +407,9 @@ func (p graphPermission) toPermission() Permission {
 		}
 		if p.Link.HasPassword != nil {
 			l.HasPassword = *p.Link.HasPassword
+		}
+		if p.Link.DisplayName != nil {
+			l.Name = *p.Link.DisplayName
 		}
 		out.Link = l
 	}
@@ -541,6 +547,69 @@ func (c *Client) CreateLink(ctx context.Context, resourceID string, opts LinkOpt
 
 	var out graphPermission
 	if err := c.postJSON(ctx, u, "create link", "", body, &out); err != nil {
+		return nil, err
+	}
+	p := out.toPermission()
+	return &p, nil
+}
+
+// LinkUpdate is what can be changed on a public link that already exists. An
+// empty field leaves that part of the link alone.
+type LinkUpdate struct {
+	// Type is "view" or "edit".
+	Type        string
+	DisplayName string
+	Expiry      *time.Time
+	// ClearExpiry removes the expiry, which is a different request from not
+	// mentioning it: the server distinguishes an absent field from an explicit
+	// null, and only the null takes an expiry away.
+	ClearExpiry bool
+}
+
+// Empty reports whether the update would change nothing.
+func (u LinkUpdate) Empty() bool {
+	return u.Type == "" && u.DisplayName == "" && u.Expiry == nil && !u.ClearExpiry
+}
+
+// UpdateLink changes the type, name or expiry of an existing public link.
+//
+// A link is a permission, but it is not updated like one: a share carries its
+// role in "roles", whereas a link carries it in the link type, and the server
+// rejects a body that mixes the two. It also refuses unknown fields outright,
+// so each key here has to be one libregraph names.
+func (c *Client) UpdateLink(ctx context.Context, resourceID, permissionID string, u LinkUpdate) (*Permission, error) {
+	if u.Empty() {
+		return nil, cberr.Usagef("nothing to update: pass --role, --name, --expiry or --no-expiry")
+	}
+	if u.Expiry != nil && u.ClearExpiry {
+		return nil, cberr.Usagef("--expiry and --no-expiry ask for opposite things")
+	}
+
+	endpoint, err := c.itemURL(resourceID, "/permissions/"+url.PathEscape(permissionID))
+	if err != nil {
+		return nil, err
+	}
+
+	body := map[string]any{}
+	link := map[string]any{}
+	if u.Type != "" {
+		link["type"] = u.Type
+	}
+	if u.DisplayName != "" {
+		link["@libre.graph.displayName"] = u.DisplayName
+	}
+	if len(link) > 0 {
+		body["link"] = link
+	}
+	switch {
+	case u.Expiry != nil:
+		body["expirationDateTime"] = u.Expiry
+	case u.ClearExpiry:
+		body["expirationDateTime"] = nil
+	}
+
+	var out graphPermission
+	if err := c.sendJSON(ctx, http.MethodPatch, endpoint, "update link", permissionID, body, &out); err != nil {
 		return nil, err
 	}
 	p := out.toPermission()

@@ -256,6 +256,21 @@ func (b *testBox) serveGraphItem(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"value":[
 		  {"id":"share-1","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"],"grantedToV2":{"user":{"id":"marie"}}},
 		  {"id":"link-1","link":{"type":"view","webUrl":"https://cernbox.test/s/abc"}}]}`)
+	case r.Method == http.MethodPatch:
+		// Echo the patch back with the id from the URL, which is close enough to
+		// what the server does and lets a test see exactly what was sent. The
+		// real handler refuses unknown fields, so the body a test asserts on is
+		// the body that has to be right.
+		body := readBody(r)
+		b.postBodies = append(b.postBodies, body)
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(body), &patch); err != nil {
+			http.Error(w, "bad patch", http.StatusBadRequest)
+			return
+		}
+		patch["id"] = path.Base(r.URL.Path)
+		_ = json.NewEncoder(w).Encode(patch)
+
 	case r.Method == http.MethodDelete:
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -1235,5 +1250,66 @@ func TestCommandsDumpListsTheTree(t *testing.T) {
 		if listed[unwanted] {
 			t.Errorf("%q should not be listed", unwanted)
 		}
+	}
+}
+
+func TestLinkUpdateSendsALinkTypeRatherThanARole(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.pdf", "x")
+
+	stdout, _, err := run(t, box, "link", "update",
+		"/eos/user/e/einstein/report.pdf", "link-1", "--role", "editor", "--name", "weekly")
+	if err != nil {
+		t.Fatalf("link update: %v", err)
+	}
+
+	// A share carries its role in "roles"; a link carries it in the link type,
+	// and the server rejects a body that mixes them.
+	body := box.lastPostBody()
+	for _, want := range []string{`"type":"edit"`, `"@libre.graph.displayName":"weekly"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the request body does not contain %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `"roles"`) {
+		t.Errorf("the request body sends a share role for a link:\n%s", body)
+	}
+	if !strings.Contains(stdout, "link-1") {
+		t.Errorf("the updated link was not shown:\n%s", stdout)
+	}
+}
+
+func TestLinkUpdateClearsTheExpiryWithAnExplicitNull(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.pdf", "x")
+
+	if _, _, err := run(t, box, "link", "update",
+		"/eos/user/e/einstein/report.pdf", "link-1", "--no-expiry"); err != nil {
+		t.Fatalf("link update --no-expiry: %v", err)
+	}
+
+	// Leaving the field out means "do not touch the expiry", so removing one
+	// takes an explicit null.
+	if body := box.lastPostBody(); !strings.Contains(body, `"expirationDateTime":null`) {
+		t.Errorf("the request body does not clear the expiry:\n%s", body)
+	}
+}
+
+func TestLinkUpdateWithNothingToChangeIsAUsageError(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.pdf", "x")
+
+	_, _, err := run(t, box, "link", "update", "/eos/user/e/einstein/report.pdf", "link-1")
+	if err == nil || cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Fatalf("error = %v, want a usage error", err)
+	}
+	if !strings.Contains(err.Error(), "--role") {
+		t.Errorf("the error does not name the flags that would change something: %v", err)
+	}
+
+	_, _, err = run(t, box, "link", "update", "/eos/user/e/einstein/report.pdf", "link-1",
+		"--expiry", "2026-12-31", "--no-expiry")
+	if err == nil || cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Fatalf("error = %v, want a usage error for two contradictory flags", err)
 	}
 }

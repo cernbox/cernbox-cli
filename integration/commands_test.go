@@ -395,6 +395,77 @@ func TestLinkWithExpiryAndName(t *testing.T) {
 	e.mustRun("link", "remove", target, created.ID)
 }
 
+// linkView is the shape of a link in the JSON output.
+type linkView struct {
+	ID   string `json:"id"`
+	Link *struct {
+		URL  string `json:"url"`
+		Type string `json:"type"`
+		Name string `json:"name"`
+	} `json:"link"`
+	ExpiresAt *time.Time `json:"expires_at"`
+}
+
+func TestLinkUpdateKeepsTheSameAddress(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("linked.txt")
+	e.mustRun("put", e.writeLocal("linked.txt", []byte("x")), target)
+
+	var created linkView
+	e.runJSONOne(&created, "link", "create", target, "--role", "viewer", "--name", "first")
+	if created.Link == nil || created.Link.URL == "" {
+		t.Fatalf("no link URL: %+v", created)
+	}
+
+	// Everything about the link can change except the address, which is the
+	// point: the people already holding it keep working.
+	var updated linkView
+	e.runJSONOne(&updated, "link", "update", target, created.ID,
+		"--role", "editor", "--name", "second", "--expiry", "2030-12-31")
+
+	if updated.Link.URL != created.Link.URL {
+		t.Errorf("the address changed: %q became %q", created.Link.URL, updated.Link.URL)
+	}
+	if updated.Link.Type != "edit" {
+		t.Errorf("link type = %q, want edit", updated.Link.Type)
+	}
+	if updated.Link.Name != "second" {
+		t.Errorf("link name = %q, want second", updated.Link.Name)
+	}
+	if updated.ExpiresAt == nil {
+		t.Error("the link did not take an expiry")
+	}
+
+	// An expiry can be taken away again, which is a different request from not
+	// mentioning it.
+	var cleared linkView
+	e.runJSONOne(&cleared, "link", "update", target, created.ID, "--no-expiry")
+	if cleared.ExpiresAt != nil {
+		t.Errorf("--no-expiry left an expiry of %v", cleared.ExpiresAt)
+	}
+
+	e.mustRun("link", "remove", target, created.ID)
+}
+
+func TestLinkUpdateNeedsSomethingToChange(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("a.txt")
+	e.mustRun("put", e.writeLocal("a.txt", []byte("x")), target)
+
+	var created linkView
+	e.runJSONOne(&created, "link", "create", target, "--role", "viewer")
+
+	_, stderr, code := e.run("link", "update", target, created.ID)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 for a command that would change nothing", code)
+	}
+	if !strings.Contains(stderr, "--role") {
+		t.Errorf("the error does not name the flags that change something: %s", stderr)
+	}
+
+	e.mustRun("link", "remove", target, created.ID)
+}
+
 func TestLinkRejectsAnUnknownRole(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("a.txt")
