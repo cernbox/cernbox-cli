@@ -28,6 +28,9 @@ type fakeIDP struct {
 	expiresIn        int64
 	noDeviceEndpoint bool
 	devicePendingFor int32
+	// noNewRefreshToken makes the issuer omit a rotated refresh token, which
+	// not every provider sends.
+	noNewRefreshToken bool
 
 	// Captured for assertions.
 	gotNegotiate   string
@@ -128,11 +131,15 @@ func newFakeIDP(t *testing.T) *fakeIDP {
 		}
 
 		n := idp.issued.Add(1)
+		refreshed := "refresh-me"
+		if idp.noNewRefreshToken {
+			refreshed = ""
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  fmt.Sprintf("access-token-%d", n),
 			"token_type":    "Bearer",
 			"expires_in":    idp.expiresIn,
-			"refresh_token": "refresh-me",
+			"refresh_token": refreshed,
 		})
 	})
 
@@ -397,4 +404,81 @@ func withStubTicket(t *testing.T, p *KerberosProvider) context.Context {
 		p.ticket = &Ticket{Principal: "einstein@CERN.CH", Realm: "CERN.CH", CachePath: "/tmp/stub"}
 	})
 	return context.Background()
+}
+
+// ── refresh ──────────────────────────────────────────────────────────────────
+
+// TestDeviceRefresh: a CERN SSO access token lives twenty minutes. Without
+// honouring the refresh token that offline_access yields, the user is sent back
+// to the browser every twenty minutes for no reason.
+func TestDeviceRefresh(t *testing.T) {
+	idp := newFakeIDP(t)
+	p := &DeviceProvider{SSO: ssoConfig(idp), HTTPClient: idp.ts.Client()}
+
+	got, err := p.Refresh(context.Background(), &Token{
+		RefreshToken: "refresh-me", Subject: "gdelmont", Provider: MethodDevice,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idp.gotGrantType != "refresh_token" {
+		t.Errorf("grant_type = %q, want refresh_token", idp.gotGrantType)
+	}
+	if idp.gotRefreshWith != "refresh-me" {
+		t.Errorf("the issuer was sent %q", idp.gotRefreshWith)
+	}
+	if got.Value == "" {
+		t.Error("no access token came back")
+	}
+	if got.Subject != "gdelmont" {
+		t.Errorf("Subject = %q, want it carried over", got.Subject)
+	}
+}
+
+// TestDeviceRefreshKeepsTheRefreshToken: not every issuer rotates it, and
+// dropping it costs the ability to refresh a second time.
+func TestDeviceRefreshKeepsTheRefreshToken(t *testing.T) {
+	idp := newFakeIDP(t)
+	idp.noNewRefreshToken = true
+	p := &DeviceProvider{SSO: ssoConfig(idp), HTTPClient: idp.ts.Client()}
+
+	got, err := p.Refresh(context.Background(), &Token{RefreshToken: "refresh-me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RefreshToken != "refresh-me" {
+		t.Errorf("RefreshToken = %q, want the original kept", got.RefreshToken)
+	}
+}
+
+// TestDeviceRefreshRejected: an expired refresh token is an error here, and the
+// chain then falls through to authenticating normally.
+func TestDeviceRefreshRejected(t *testing.T) {
+	idp := newFakeIDP(t)
+	p := &DeviceProvider{SSO: ssoConfig(idp), HTTPClient: idp.ts.Client()}
+
+	if _, err := p.Refresh(context.Background(), &Token{RefreshToken: "stale"}); err == nil {
+		t.Fatal("a refresh token the issuer rejects should be an error")
+	}
+}
+
+// TestDeviceRefreshWithoutAToken needs no network at all.
+func TestDeviceRefreshWithoutAToken(t *testing.T) {
+	p := &DeviceProvider{}
+	if _, err := p.Refresh(context.Background(), &Token{}); err == nil {
+		t.Error("refreshing without a refresh token should fail")
+	}
+	if _, err := p.Refresh(context.Background(), nil); err == nil {
+		t.Error("refreshing a nil token should fail")
+	}
+}
+
+// TestDeviceProviderIsARefresher pins the wiring: the chain only refreshes a
+// provider that implements the interface, so losing it silently reinstates the
+// twenty-minute re-login.
+func TestDeviceProviderIsARefresher(t *testing.T) {
+	var p any = &DeviceProvider{}
+	if _, ok := p.(Refresher); !ok {
+		t.Fatal("DeviceProvider must implement Refresher or the chain cannot renew a session")
+	}
 }

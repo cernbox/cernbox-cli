@@ -97,6 +97,53 @@ func (p *DeviceProvider) Token(ctx context.Context) (*Token, error) {
 	return p.poll(ctx, hc, meta, auth)
 }
 
+// Refresh implements Refresher, renewing the access token from the refresh
+// token that offline_access yielded.
+//
+// This is what keeps a CERN SSO session usable: the access token lives twenty
+// minutes, and without this the user is sent back to the browser every twenty
+// minutes even though the issuer handed over a refresh token specifically so
+// that they would not be.
+//
+// It needs no terminal, so a cron job with a cached refresh token renews
+// silently — the chain offers every provider a chance to refresh regardless of
+// whether it could start a fresh login.
+func (p *DeviceProvider) Refresh(ctx context.Context, tok *Token) (*Token, error) {
+	if tok == nil || tok.RefreshToken == "" {
+		return nil, fmt.Errorf("no refresh token to renew with")
+	}
+	if p.SSO == nil || p.SSO.Issuer == "" {
+		return nil, fmt.Errorf("no SSO issuer configured")
+	}
+
+	hc := p.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	meta, err := discover(ctx, hc, p.SSO.Issuer)
+	if err != nil {
+		return nil, err
+	}
+
+	tr, err := postForm(ctx, hc, meta.TokenEndpoint, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {tok.RefreshToken},
+		"client_id":     {p.SSO.ClientID},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := tr.toToken(MethodDevice)
+	if out.RefreshToken == "" {
+		// Not every issuer rotates the refresh token; keep the one that still
+		// works rather than losing the ability to refresh again.
+		out.RefreshToken = tok.RefreshToken
+	}
+	out.Subject = tok.Subject
+	return out, nil
+}
+
 func (p *DeviceProvider) startDeviceAuth(ctx context.Context, hc *http.Client, meta *providerMetadata) (*deviceAuthResponse, error) {
 	form := url.Values{
 		"client_id": {p.SSO.ClientID},
