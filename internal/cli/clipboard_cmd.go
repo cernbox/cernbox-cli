@@ -326,11 +326,11 @@ func (a *App) copyOne(ctx context.Context, root string, src copySource, opts cop
 	staged := path.Join(clipboard.PayloadDir(root, opts.slot), src.name)
 
 	if src.stdin {
-		size, err := a.stageStdin(ctx, staged, opts)
+		size, parts, err := a.stageStdin(ctx, staged, opts)
 		if err != nil {
 			return clipboard.Entry{}, err
 		}
-		return clipboard.Entry{Name: src.name, Path: staged, Size: size, Staged: true}, nil
+		return clipboard.Entry{Name: src.name, Path: staged, Size: size, Staged: true, Parts: parts}, nil
 	}
 
 	if src.spec.IsRemote() {
@@ -404,35 +404,116 @@ func (a *App) stageLocal(ctx context.Context, src copySource, staged string, opt
 	}, nil
 }
 
-// stageStdin spools standard input to a temporary file and uploads that.
+// stageStdin sends standard input to CERNBox without ever writing it to local
+// disk, and reports how many bytes and how many pieces it took.
 //
-// It has to land on disk first. reva's PUT handler reads Content-Length and
-// rejects a request without one, so the size must be known before the request
-// starts — and the only way to size a pipe is to read all of it.
-func (a *App) stageStdin(ctx context.Context, remote string, opts copyOptions) (int64, error) {
-	tmp, err := os.CreateTemp("", "cernbox-copy-*")
+// A pipe has no knowable length, and every way of sending bytes to reva needs one
+// up front: the PUT handler parses Content-Length and answers 400 without it, and
+// the TUS endpoint does not advertise creation-defer-length, so an upload of
+// deferred size is refused there too.
+//
+// So the stream is read a chunk at a time and each chunk is sent as its own
+// object, with a length that is known by the time it goes out. Memory stays at one
+// chunk however large the stream is, and paste joins the pieces back up.
+//
+// The obvious alternative — spool to a temporary file to learn the length, which
+// is what this used to do — needs as much free local disk as the stream is large.
+// On lxplus that is exactly what one does not have, and it is a second full write
+// of every byte for no purpose.
+//
+// A stream that fits in a single chunk is stored as one plain object instead, so
+// the common case of a small pipe stays an ordinary entry.
+func (a *App) stageStdin(ctx context.Context, base string, opts copyOptions) (int64, int, error) {
+	chunk, err := a.chunkSize()
 	if err != nil {
-		return 0, cberr.Wrap(cberr.KindOther, "buffer standard input", "", err)
-	}
-	defer os.Remove(tmp.Name())
-
-	n, copyErr := io.Copy(tmp, a.in())
-	closeErr := tmp.Close()
-	if copyErr != nil {
-		return 0, cberr.Wrap(cberr.KindOther, "read standard input", "", copyErr)
-	}
-	if closeErr != nil {
-		return 0, cberr.Wrap(cberr.KindOther, "buffer standard input", tmp.Name(), closeErr)
+		return 0, 0, err
 	}
 
-	engine, err := a.transferEngine(transferFlags{force: true, verify: opts.verify, jobs: opts.jobs})
+	buf := make([]byte, chunk)
+	n, readErr := io.ReadFull(a.in(), buf)
+	if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+		if err := a.putBytes(ctx, base, buf[:n]); err != nil {
+			return 0, 0, err
+		}
+		return int64(n), 0, nil
+	}
+	if readErr != nil {
+		return 0, 0, cberr.Wrap(cberr.KindOther, "read standard input", "", readErr)
+	}
+
+	// Bigger than one chunk. The pieces go in a directory of their own so that
+	// releasing them later is one recursive delete rather than one request each.
+	if err := a.client.Mkdir(ctx, base, true); err != nil {
+		return 0, 0, err
+	}
+	a.out.Msg("Streaming standard input in %s pieces...", output.HumanSize(chunk))
+
+	total, parts := int64(0), 0
+	for {
+		if err := a.putBytes(ctx, clipboard.PartPath(base, parts), buf[:n]); err != nil {
+			return 0, 0, err
+		}
+		total += int64(n)
+		parts++
+
+		n, readErr = io.ReadFull(a.in(), buf)
+		switch readErr {
+		case nil, io.ErrUnexpectedEOF:
+			// A full chunk, or the short final one: send it on the next pass.
+		case io.EOF:
+			return total, parts, nil
+		default:
+			return 0, 0, cberr.Wrap(cberr.KindOther, "read standard input", "", readErr)
+		}
+	}
+}
+
+// putBytes uploads a buffer already in memory. It stays retryable, because the
+// bytes are still there to be sent again.
+func (a *App) putBytes(ctx context.Context, p string, b []byte) error {
+	return a.client.Upload(ctx, p, func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(b)), nil
+	}, int64(len(b)), "")
+}
+
+// chunkSize is how much of a stream is sent per request.
+func (a *App) chunkSize() (int64, error) {
+	n, err := ParseSize(a.cfg.Transfer.ChunkSize)
 	if err != nil {
-		return 0, err
+		return 0, cberr.Usagef("%v", err)
 	}
-	if _, err := engine.UploadFile(ctx, tmp.Name(), remote); err != nil {
-		return 0, err
+	if n <= 0 {
+		n = 8 << 20
 	}
 	return n, nil
+}
+
+// streamEntry writes an entry's contents to w, joining its pieces when it was
+// streamed in. Nothing is buffered beyond what io.Copy uses, so this is how a
+// streamed copy reaches a pipe, a file or another CERNBox path without ever being
+// whole in one place.
+func (a *App) streamEntry(ctx context.Context, e clipboard.Entry, w io.Writer) error {
+	if e.Parts == 0 {
+		return a.streamOne(ctx, e, e.Path, w)
+	}
+	for i := range e.Parts {
+		if err := a.streamOne(ctx, e, clipboard.PartPath(e.Path, i), w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) streamOne(ctx context.Context, e clipboard.Entry, p string, w io.Writer) error {
+	body, _, err := a.client.Download(ctx, p, 0)
+	if err != nil {
+		return a.pasteError(err, e)
+	}
+	defer body.Close()
+	if _, err := io.Copy(w, body); err != nil {
+		return cberr.Wrap(cberr.KindOther, "paste", e.Name, err)
+	}
+	return nil
 }
 
 // looksLikeCERNBoxMount reports whether a local path is plausibly the FUSE mount
@@ -532,14 +613,22 @@ func (a *App) pasteLocal(ctx context.Context, m *clipboard.Manifest, spec pathsp
 	}
 
 	var total int64
-	var files int
 	for i, e := range m.Entries {
+		// A streamed entry is a run of pieces rather than one object, so the
+		// transfer engine cannot fetch it: it is joined on the way to disk.
+		if e.Parts > 0 {
+			n, err := a.pasteStreamedToFile(ctx, e, targets[i])
+			if err != nil {
+				return err
+			}
+			total += n
+			continue
+		}
 		stats, err := engine.DownloadTree(ctx, e.Path, targets[i])
 		if err != nil {
 			return a.pasteError(err, e)
 		}
 		total += stats.Bytes
-		files += stats.Files
 	}
 
 	a.out.Msg("Pasted %s (%s) into %s", itemCount(len(m.Entries)), proseSize(total), dest)
@@ -583,10 +672,30 @@ func (a *App) pasteRemote(ctx context.Context, m *clipboard.Manifest, spec paths
 		}
 	}
 
+	streamed := false
 	for i, e := range m.Entries {
+		// A server-side COPY cannot join pieces, so a streamed entry is pulled and
+		// pushed back in one pass instead. It is the one case where a paste inside
+		// CERNBox does move data.
+		if e.Parts > 0 {
+			streamed = true
+			if err := a.pasteStreamedToRemote(ctx, e, targets[i]); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := a.client.Copy(ctx, e.Path, targets[i], opts.force); err != nil {
 			return a.pasteError(err, e)
 		}
+	}
+
+	if streamed {
+		a.out.Msg("Pasted %s (%s) into %s", itemCount(len(m.Entries)), proseSize(m.Size()), dest)
+		a.reportSlotSurvives(m)
+		if a.out.Format() == output.FormatJSON {
+			return a.out.Object(m)
+		}
+		return nil
 	}
 
 	a.out.Msg("Pasted %s (%s) into %s, server-side: no data crossed the wire",
@@ -609,17 +718,60 @@ func (a *App) pasteToStdout(ctx context.Context, m *clipboard.Manifest) error {
 	if e.IsDir {
 		return cberr.Usagef("%s is a directory: paste it to a path rather than to standard output", e.Name)
 	}
+	return a.streamEntry(ctx, e, a.stdout)
+}
 
-	body, _, err := a.client.Download(ctx, e.Path, 0)
+// pasteStreamedToFile joins a streamed entry's pieces into a local file.
+//
+// The pieces go straight through to the file as they arrive, so this needs room
+// for the result and nothing more — the same property that let the copy side
+// avoid a temporary file.
+func (a *App) pasteStreamedToFile(ctx context.Context, e clipboard.Entry, target string) (int64, error) {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return 0, cberr.Wrap(cberr.KindOther, "create", filepath.Dir(target), err)
+	}
+
+	// Written beside the destination and renamed at the end, as the transfer
+	// engine does: a reader watching the target never sees a half-joined file.
+	part := target + ".part"
+	f, err := os.Create(part)
 	if err != nil {
-		return a.pasteError(err, e)
+		return 0, cberr.Wrap(cberr.KindOther, "create", part, err)
 	}
-	defer body.Close()
 
-	if _, err := io.Copy(a.stdout, body); err != nil {
-		return cberr.Wrap(cberr.KindOther, "paste", e.Name, err)
+	err = a.streamEntry(ctx, e, f)
+	closeErr := f.Close()
+	if err == nil && closeErr != nil {
+		err = cberr.Wrap(cberr.KindOther, "write", part, closeErr)
 	}
-	return nil
+	if err != nil {
+		os.Remove(part)
+		return 0, err
+	}
+
+	if err := os.Rename(part, target); err != nil {
+		return 0, cberr.Wrap(cberr.KindOther, "write", target, err)
+	}
+	return e.Size, nil
+}
+
+// pasteStreamedToRemote rebuilds a streamed entry at another CERNBox path.
+//
+// The pieces are pulled and pushed back through a pipe, so the whole thing never
+// exists anywhere but in flight. The manifest knows the total length, which is
+// what lets the PUT carry the Content-Length reva requires even though nothing
+// here ever holds the bytes.
+func (a *App) pasteStreamedToRemote(ctx context.Context, e clipboard.Entry, target string) error {
+	pr, pw := io.Pipe()
+	go func() {
+		// Closing with the error is what makes a failed download surface as a
+		// failed upload rather than as a silently truncated file.
+		pw.CloseWithError(a.streamEntry(ctx, e, pw))
+	}()
+	// Closing the read end unblocks the writer if the upload gives up first.
+	defer pr.Close()
+
+	return a.client.UploadStream(ctx, target, pr, e.Size)
 }
 
 // pasteTargets decides where each entry lands, following cp's rule: an existing

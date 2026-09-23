@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -598,6 +599,225 @@ func TestPasteToStdoutNeedsExactlyOneItem(t *testing.T) {
 
 	if _, _, err := run(t, box, "paste", "-"); err == nil {
 		t.Fatal("two items cannot be written to standard output")
+	}
+}
+
+// ── streaming ────────────────────────────────────────────────────────────────
+
+// smallChunkConfig writes a configuration with a tiny transfer chunk, so that a
+// test can reach the split-stream path without pushing megabytes through a fake
+// server. --config wins over the environment, so this is the whole setup.
+func smallChunkConfig(t *testing.T, chunk string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	body := "transfer:\n  chunk_size: " + chunk + "\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// streamPayload is recognisable at any offset, so a wrongly ordered or dropped
+// piece shows up as a content mismatch rather than as a length that happens to
+// match.
+func streamPayload(n int) string {
+	var b strings.Builder
+	for i := 0; b.Len() < n; i++ {
+		fmt.Fprintf(&b, "%06d-", i)
+	}
+	return b.String()[:n]
+}
+
+// TestCopyStreamsALargeStdinInPieces: a pipe has no knowable length and reva needs
+// one, so a stream too big for a single request is cut into pieces rather than
+// spooled to local disk to be measured.
+func TestCopyStreamsALargeStdinInPieces(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+	body := streamPayload(5000)
+
+	if _, _, err := runStdin(t, box, body, "--config", cfg, "copy", "-", "--name", "big.bin"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := storedManifest(t, box, clipboard.DefaultSlot)
+	if len(m.Entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(m.Entries))
+	}
+	e := m.Entries[0]
+	// 5000 bytes at 1024 per piece is five: four full and one of 904.
+	if e.Parts != 5 {
+		t.Errorf("Parts = %d, want 5", e.Parts)
+	}
+	if e.Size != 5000 {
+		t.Errorf("Size = %d, want 5000", e.Size)
+	}
+	if !e.Staged {
+		t.Error("a stream can only ever be staged")
+	}
+
+	// The pieces are really there, in order, and together they are the stream.
+	var joined strings.Builder
+	for i := range e.Parts {
+		piece, ok := box.files[clipboard.PartPath(e.Path, i)]
+		if !ok {
+			t.Fatalf("piece %d is missing from %s", i, e.Path)
+		}
+		joined.WriteString(piece)
+	}
+	if joined.String() != body {
+		t.Errorf("the pieces do not reassemble into the stream (%d bytes vs %d)",
+			joined.Len(), len(body))
+	}
+}
+
+// TestCopyKeepsASmallStreamWhole: only a stream that does not fit in one request
+// is split, so the ordinary case of a small pipe stays an ordinary entry.
+func TestCopyKeepsASmallStreamWhole(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+
+	if _, _, err := runStdin(t, box, "short", "--config", cfg, "copy", "-"); err != nil {
+		t.Fatal(err)
+	}
+	m := storedManifest(t, box, clipboard.DefaultSlot)
+	if got := m.Entries[0].Parts; got != 0 {
+		t.Errorf("Parts = %d, want 0 for a stream that fits in one piece", got)
+	}
+	if got := box.files[payloadPath(clipboard.DefaultSlot, "stdin")]; got != "short" {
+		t.Errorf("the payload is %q", got)
+	}
+}
+
+// TestCopyStreamsAnExactMultipleOfTheChunk: the boundary case, where the last read
+// fills the buffer exactly and the one after it sees end of file.
+func TestCopyStreamsAnExactMultipleOfTheChunk(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+	body := streamPayload(3072) // exactly three pieces
+
+	if _, _, err := runStdin(t, box, body, "--config", cfg, "copy", "-"); err != nil {
+		t.Fatal(err)
+	}
+	e := storedManifest(t, box, clipboard.DefaultSlot).Entries[0]
+	if e.Parts != 3 || e.Size != 3072 {
+		t.Errorf("Parts = %d, Size = %d; want 3 and 3072", e.Parts, e.Size)
+	}
+	if _, extra := box.files[clipboard.PartPath(e.Path, 3)]; extra {
+		t.Error("an empty trailing piece was written")
+	}
+}
+
+func TestPasteJoinsAStreamedCopy(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+	body := streamPayload(4097)
+
+	if _, _, err := runStdin(t, box, body, "--config", cfg, "copy", "-", "--name", "joined.bin"); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if _, _, err := run(t, box, "paste", dest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "joined.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Errorf("pasted %d bytes, want %d", len(got), len(body))
+	}
+	// The temporary file the join writes through must not be left behind.
+	if _, err := os.Stat(filepath.Join(dest, "joined.bin.part")); err == nil {
+		t.Error("the .part file was left behind")
+	}
+}
+
+func TestPasteStreamedCopyToStandardOutput(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+	body := streamPayload(2600)
+
+	if _, _, err := runStdin(t, box, body, "--config", cfg, "copy", "-"); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := run(t, box, "paste", "-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != body {
+		t.Errorf("paste - wrote %d bytes, want %d", len(stdout), len(body))
+	}
+}
+
+// TestPasteStreamedCopyToARemotePath: a server-side COPY cannot join pieces, so
+// this is the one paste inside CERNBox that moves data — through a pipe, so the
+// whole thing is never held anywhere.
+func TestPasteStreamedCopyToARemotePath(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+	body := streamPayload(3000)
+
+	if _, _, err := runStdin(t, box, body, "--config", cfg, "copy", "-", "--name", "remote.bin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, box, "paste", "cb:"+clipHome+"/landing/"); err != nil {
+		t.Fatal(err)
+	}
+	if got := box.files[clipHome+"/landing/remote.bin"]; got != body {
+		t.Errorf("the remote copy is %d bytes, want %d", len(got), len(body))
+	}
+}
+
+// TestClearReleasesEveryPieceOfAStream: the pieces live in a directory precisely so
+// that this is one recursive delete, and none is left paying for quota.
+func TestClearReleasesEveryPieceOfAStream(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+
+	if _, _, err := runStdin(t, box, streamPayload(4000), "--config", cfg, "copy", "-"); err != nil {
+		t.Fatal(err)
+	}
+	e := storedManifest(t, box, clipboard.DefaultSlot).Entries[0]
+
+	if _, _, err := run(t, box, "clipboard", "clear"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range e.Parts {
+		if _, left := box.files[clipboard.PartPath(e.Path, i)]; left {
+			t.Errorf("piece %d survived the clear", i)
+		}
+	}
+}
+
+// TestReplacingAStreamedCopyReleasesItsPieces: the same for the cleanup that runs
+// after a copy commits.
+func TestReplacingAStreamedCopyReleasesItsPieces(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir(clipHome)
+	cfg := smallChunkConfig(t, "1K")
+
+	if _, _, err := runStdin(t, box, streamPayload(4000), "--config", cfg, "copy", "-"); err != nil {
+		t.Fatal(err)
+	}
+	first := storedManifest(t, box, clipboard.DefaultSlot).Entries[0]
+
+	box.putFile(clipHome+"/plain.txt", "a plain file")
+	if _, _, err := run(t, box, "copy", "cb:"+clipHome+"/plain.txt"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range first.Parts {
+		if _, left := box.files[clipboard.PartPath(first.Path, i)]; left {
+			t.Errorf("piece %d of the replaced stream was left behind", i)
+		}
 	}
 }
 

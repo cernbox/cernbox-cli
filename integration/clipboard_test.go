@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -210,6 +211,155 @@ func TestClipboardPipe(t *testing.T) {
 	if got != string(body) {
 		t.Errorf("the pipe carried %d bytes, want %d", len(got), len(body))
 	}
+}
+
+// TestClipboardStreamsAPipeWithoutTouchingLocalDisk is the point of streaming: a
+// pipe of unknown length reaches CERNBox without being spooled to a temporary
+// file first, which is what let it need as much free local disk as the stream was
+// large.
+//
+// The chunk is set small so the split path runs on a stream a test can afford,
+// and the payload is position-dependent so a dropped or misordered piece shows up
+// as wrong content rather than as a length that happens to match.
+func TestClipboardStreamsAPipeWithoutTouchingLocalDisk(t *testing.T) {
+	e := setup(t)
+	slot := clipSlot(t)
+	e.clearSlot(slot)
+
+	cfg := e.writeLocal("small-chunk.yaml", []byte("transfer:\n  chunk_size: 64K\n"))
+	body := streamBody(300 << 10) // a little under five chunks
+
+	// TMPDIR points at a directory that does not exist, so anything that tried to
+	// spool the stream to disk would fail rather than quietly succeed. That is the
+	// assertion: the bytes never touch the filesystem.
+	cmd := e.cmd("--config", cfg, "copy", "--slot", slot, "-", "--name", "piped.bin")
+	cmd.Env = append(cmd.Env, "TMPDIR="+filepath.Join(e.localDir, "no-such-dir"))
+	cmd.Stdin = strings.NewReader(body)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("streaming a pipe failed: %v\n%s", err, out)
+	}
+
+	var listed []clipManifest
+	e.runJSON(&listed, "clipboard", "list")
+	entry, ok := entryOf(listed, slot, "piped.bin")
+	if !ok {
+		t.Fatalf("the stream is not on the clipboard: %+v", listed)
+	}
+	if entry.Parts != 5 {
+		t.Errorf("Parts = %d, want 5 for %d bytes at 64K", entry.Parts, len(body))
+	}
+	if entry.Size != int64(len(body)) {
+		t.Errorf("Size = %d, want %d", entry.Size, len(body))
+	}
+
+	// And it comes back byte for byte, through a pipe on the way out too.
+	got := e.mustRun("paste", "--slot", slot, "-")
+	if got != body {
+		t.Errorf("the stream came back as %d bytes, want %d", len(got), len(body))
+	}
+	if sha256hex([]byte(got)) != sha256hex([]byte(body)) {
+		t.Error("the stream came back with the right length but the wrong contents")
+	}
+}
+
+// TestClipboardStreamJoinsIntoAFile: the same stream, pasted to a path rather than
+// a pipe.
+func TestClipboardStreamJoinsIntoAFile(t *testing.T) {
+	e := setup(t)
+	slot := clipSlot(t)
+	e.clearSlot(slot)
+
+	cfg := e.writeLocal("small-chunk.yaml", []byte("transfer:\n  chunk_size: 64K\n"))
+	body := streamBody(200 << 10)
+
+	cmd := e.cmd("--config", cfg, "copy", "--slot", slot, "-", "--name", "joined.bin")
+	cmd.Stdin = strings.NewReader(body)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("streaming a pipe failed: %v\n%s", err, out)
+	}
+
+	dest := t.TempDir()
+	e.mustRun("paste", "--slot", slot, dest)
+
+	got, err := os.ReadFile(filepath.Join(dest, "joined.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Errorf("the joined file is %d bytes, want %d", len(got), len(body))
+	}
+	if _, err := os.Stat(filepath.Join(dest, "joined.bin.part")); err == nil {
+		t.Error("the temporary join file was left behind")
+	}
+}
+
+// TestClipboardStreamPastesInsideCERNBox: a streamed entry cannot be a server-side
+// COPY, because nothing in WebDAV joins objects. It is pulled and pushed back
+// through a pipe instead, so the result has to be identical even though this is the
+// one paste inside CERNBox that moves data.
+func TestClipboardStreamPastesInsideCERNBox(t *testing.T) {
+	e := setup(t)
+	slot := clipSlot(t)
+	e.clearSlot(slot)
+
+	cfg := e.writeLocal("small-chunk.yaml", []byte("transfer:\n  chunk_size: 64K\n"))
+	body := streamBody(150 << 10)
+
+	cmd := e.cmd("--config", cfg, "copy", "--slot", slot, "-", "--name", "rebuilt.bin")
+	cmd.Stdin = strings.NewReader(body)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("streaming a pipe failed: %v\n%s", err, out)
+	}
+
+	landing := e.remotePath("landing")
+	e.mustRun("mkdir", landing)
+	e.mustRun("paste", "--slot", slot, "cb:"+landing+"/")
+
+	if got := e.mustRun("cat", landing+"/rebuilt.bin"); got != body {
+		t.Errorf("the rebuilt file is %d bytes, want %d", len(got), len(body))
+	}
+	if info := e.stat(landing + "/rebuilt.bin"); info.Size != int64(len(body)) {
+		t.Errorf("the server reports %d bytes, want %d", info.Size, len(body))
+	}
+}
+
+// TestClipboardClearReleasesEveryPieceOfAStream: the pieces are a directory, so one
+// recursive delete should take all of them.
+func TestClipboardClearReleasesEveryPieceOfAStream(t *testing.T) {
+	e := setup(t)
+	slot := clipSlot(t)
+
+	cfg := e.writeLocal("small-chunk.yaml", []byte("transfer:\n  chunk_size: 64K\n"))
+	cmd := e.cmd("--config", cfg, "copy", "--slot", slot, "-", "--name", "doomed.bin")
+	cmd.Stdin = strings.NewReader(streamBody(200 << 10))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("streaming a pipe failed: %v\n%s", err, out)
+	}
+
+	var listed []clipManifest
+	e.runJSON(&listed, "clipboard", "list")
+	base := stagedPathOf(listed, slot, "doomed.bin")
+	if base == "" {
+		t.Fatal("the stream is not on the clipboard")
+	}
+	if _, _, code := e.run("stat", base); code != 0 {
+		t.Fatalf("the pieces are not at %s", base)
+	}
+
+	e.mustRun("clipboard", "clear", slot)
+	if _, _, code := e.run("stat", base); code == 0 {
+		t.Errorf("the pieces survived the clear at %s", base)
+	}
+}
+
+// streamBody is content whose every offset is identifiable, so a piece joined out
+// of order fails on content rather than passing on length.
+func streamBody(n int) string {
+	var b strings.Builder
+	for i := 0; b.Len() < n; i++ {
+		fmt.Fprintf(&b, "%08d-", i)
+	}
+	return b.String()[:n]
 }
 
 // TestClipboardRefusesToOverwriteWithoutForce: the destination is somebody's
@@ -485,18 +635,26 @@ func TestClipboardManifestIsReplacedConditionally(t *testing.T) {
 	}
 }
 
-// stagedPathOf finds where a listing says a named entry's bytes were uploaded,
-// which is the path that has to stop existing when the slot is replaced.
-func stagedPathOf(listed []clipManifest, slot, name string) string {
+// entryOf finds a named entry in a listing.
+func entryOf(listed []clipManifest, slot, name string) (clipEntry, bool) {
 	for _, m := range listed {
 		if m.Slot != slot {
 			continue
 		}
 		for _, e := range m.Entries {
-			if e.Name == name && e.Staged {
-				return e.Path
+			if e.Name == name {
+				return e, true
 			}
 		}
+	}
+	return clipEntry{}, false
+}
+
+// stagedPathOf finds where a listing says a named entry's bytes were uploaded,
+// which is the path that has to stop existing when the slot is replaced.
+func stagedPathOf(listed []clipManifest, slot, name string) string {
+	if e, ok := entryOf(listed, slot, name); ok && e.Staged {
+		return e.Path
 	}
 	return ""
 }
@@ -511,11 +669,16 @@ type clipManifest struct {
 		User string `json:"user"`
 		Dir  string `json:"dir"`
 	} `json:"origin"`
-	Entries []struct {
-		Name   string `json:"name"`
-		Path   string `json:"path"`
-		IsDir  bool   `json:"is_dir"`
-		Size   int64  `json:"size"`
-		Staged bool   `json:"staged"`
-	} `json:"entries"`
+	Entries []clipEntry `json:"entries"`
+}
+
+// clipEntry is one item on the clipboard, as a script would read it.
+type clipEntry struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	IsDir  bool   `json:"is_dir"`
+	Size   int64  `json:"size"`
+	Staged bool   `json:"staged"`
+	// Parts is non-zero when the entry was streamed in and stored as pieces.
+	Parts int `json:"parts"`
 }
