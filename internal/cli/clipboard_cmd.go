@@ -50,7 +50,9 @@ func newCopyCmd(app *App) *cobra.Command {
 			"uploaded into the slot, which is what makes this work from a laptop.\n\n" +
 			"Copying replaces whatever the slot held. Pasting does not empty it, so the\n" +
 			"same copy can be pasted on several machines; 'cernbox clipboard clear'\n" +
-			"releases the space when you are done.",
+			"releases the space when you are done.\n\n" +
+			"With --stream the file is handed over live instead: this command waits for a\n" +
+			"paste on the other machine and streams straight to it, storing nothing.",
 		Example: "  cernbox copy ./report.pdf\n" +
 			"  cernbox copy cb:/eos/user/g/gdelmont/report.pdf\n" +
 			"  cernbox copy -r ./data --slot build\n" +
@@ -107,7 +109,9 @@ func newPasteCmd(app *App) *cobra.Command {
 			"CERNBox by the server, so no data crosses the wire in either direction.\n" +
 			"A destination of - writes a single item to standard output.\n\n" +
 			"Pasting leaves the clipboard alone, so the same copy can be pasted on as\n" +
-			"many machines as you like. Use 'cernbox clipboard clear' when you are done.",
+			"many machines as you like. Use 'cernbox clipboard clear' when you are done.\n\n" +
+			"Progress is drawn while the bytes move, on a terminal only. The global\n" +
+			"--no-progress flag turns it off, as do --quiet and --output json.",
 		Example: "  cernbox paste\n" +
 			"  cernbox paste ./incoming/\n" +
 			"  cernbox paste cb:/eos/project/c/cernbox/data/\n" +
@@ -639,23 +643,27 @@ func (a *App) pasteLocal(ctx context.Context, m *clipboard.Manifest, spec pathsp
 		}
 	}
 
-	engine, err := a.transferEngine(transferFlags{
+	bar := a.newMeter(pasteLabel(m), manifestTotal(m))
+	defer bar.Stop()
+
+	engine, err := a.transferEngineWith(transferFlags{
 		recursive: true, // whatever is on the clipboard is pasted whole
 		force:     true, // collisions were decided above
 		verify:    opts.verify,
 		noArchive: opts.noArchive,
 		jobs:      opts.jobs,
-	})
+	}, newEngineProgress(bar).progressFunc())
 	if err != nil {
 		return err
 	}
 
 	var total int64
 	for i, e := range m.Entries {
+		bar.SetLabel(e.Name)
 		// A streamed entry is a run of pieces rather than one object, so the
 		// transfer engine cannot fetch it: it is joined on the way to disk.
 		if e.Parts > 0 {
-			n, err := a.pasteStreamedToFile(ctx, e, targets[i])
+			n, err := a.pasteStreamedToFile(ctx, e, targets[i], bar)
 			if err != nil {
 				return err
 			}
@@ -668,6 +676,7 @@ func (a *App) pasteLocal(ctx context.Context, m *clipboard.Manifest, spec pathsp
 		}
 		total += stats.Bytes
 	}
+	bar.Stop()
 
 	a.out.Msg("Pasted %s (%s) into %s", itemCount(len(m.Entries)), proseSize(total), dest)
 	a.reportSlotSurvives(m)
@@ -710,14 +719,18 @@ func (a *App) pasteRemote(ctx context.Context, m *clipboard.Manifest, spec paths
 		}
 	}
 
+	bar := a.newMeter(pasteLabel(m), manifestTotal(m))
+	defer bar.Stop()
+
 	streamed := false
 	for i, e := range m.Entries {
+		bar.SetLabel(e.Name)
 		// A server-side COPY cannot join pieces, so a streamed entry is pulled and
 		// pushed back in one pass instead. It is the one case where a paste inside
 		// CERNBox does move data.
 		if e.Parts > 0 {
 			streamed = true
-			if err := a.pasteStreamedToRemote(ctx, e, targets[i]); err != nil {
+			if err := a.pasteStreamedToRemote(ctx, e, targets[i], bar); err != nil {
 				return err
 			}
 			continue
@@ -728,6 +741,7 @@ func (a *App) pasteRemote(ctx context.Context, m *clipboard.Manifest, spec paths
 	}
 
 	if streamed {
+		bar.Stop()
 		a.out.Msg("Pasted %s (%s) into %s", itemCount(len(m.Entries)), proseSize(m.Size()), dest)
 		a.reportSlotSurvives(m)
 		if a.out.Format() == output.FormatJSON {
@@ -756,7 +770,10 @@ func (a *App) pasteToStdout(ctx context.Context, m *clipboard.Manifest) error {
 	if e.IsDir {
 		return cberr.Usagef("%s is a directory: paste it to a path rather than to standard output", e.Name)
 	}
-	return a.streamEntry(ctx, e, a.stdout)
+
+	bar := a.newMeter(e.Name, e.Size)
+	defer bar.Stop()
+	return a.streamEntry(ctx, e, bar.Writer(a.stdout))
 }
 
 // pasteStreamedToFile joins a streamed entry's pieces into a local file.
@@ -764,7 +781,7 @@ func (a *App) pasteToStdout(ctx context.Context, m *clipboard.Manifest) error {
 // The pieces go straight through to the file as they arrive, so this needs room
 // for the result and nothing more — the same property that let the copy side
 // avoid a temporary file.
-func (a *App) pasteStreamedToFile(ctx context.Context, e clipboard.Entry, target string) (int64, error) {
+func (a *App) pasteStreamedToFile(ctx context.Context, e clipboard.Entry, target string, bar *meter) (int64, error) {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return 0, cberr.Wrap(cberr.KindOther, "create", filepath.Dir(target), err)
 	}
@@ -777,7 +794,7 @@ func (a *App) pasteStreamedToFile(ctx context.Context, e clipboard.Entry, target
 		return 0, cberr.Wrap(cberr.KindOther, "create", part, err)
 	}
 
-	err = a.streamEntry(ctx, e, f)
+	err = a.streamEntry(ctx, e, bar.Writer(f))
 	closeErr := f.Close()
 	if err == nil && closeErr != nil {
 		err = cberr.Wrap(cberr.KindOther, "write", part, closeErr)
@@ -799,12 +816,12 @@ func (a *App) pasteStreamedToFile(ctx context.Context, e clipboard.Entry, target
 // exists anywhere but in flight. The manifest knows the total length, which is
 // what lets the PUT carry the Content-Length reva requires even though nothing
 // here ever holds the bytes.
-func (a *App) pasteStreamedToRemote(ctx context.Context, e clipboard.Entry, target string) error {
+func (a *App) pasteStreamedToRemote(ctx context.Context, e clipboard.Entry, target string, bar *meter) error {
 	pr, pw := io.Pipe()
 	go func() {
 		// Closing with the error is what makes a failed download surface as a
 		// failed upload rather than as a silently truncated file.
-		pw.CloseWithError(a.streamEntry(ctx, e, pw))
+		pw.CloseWithError(a.streamEntry(ctx, e, bar.Writer(pw)))
 	}()
 	// Closing the read end unblocks the writer if the upload gives up first.
 	defer pr.Close()
