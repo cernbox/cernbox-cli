@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // This file exists to make the coverage claim checkable: every command in the
@@ -59,16 +60,79 @@ func TestLsLongAndRecursive(t *testing.T) {
 	e.mustRun("put", e.writeLocal("a.txt", []byte("alpha")), e.remotePath("a.txt"))
 	e.mustRun("put", e.writeLocal("b.txt", []byte("beta")), e.remotePath("sub/b.txt"))
 
+	// The long listing is shaped like ls: a total line, then one line per
+	// entry starting with a mode. No labelled headers.
 	long := e.mustRun("ls", "-l", e.remote)
-	for _, want := range []string{"TYPE", "SIZE", "MODIFIED", "a.txt", "sub/"} {
-		if !strings.Contains(long, want) {
-			t.Errorf("ls -l is missing %q:\n%s", want, long)
+	if !strings.HasPrefix(long, "total ") {
+		t.Errorf("ls -l should open with a total line:\n%s", long)
+	}
+	for _, unwanted := range []string{"TYPE", "MODIFIED"} {
+		if strings.Contains(long, unwanted) {
+			t.Errorf("ls -l should not print a %q header:\n%s", unwanted, long)
 		}
+	}
+	if !strings.Contains(long, "a.txt") || !strings.Contains(long, "sub") {
+		t.Errorf("ls -l is missing entries:\n%s", long)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(long), "\n")[1:] {
+		if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "d") {
+			t.Errorf("every entry should start with a mode, got %q", line)
+		}
+	}
+
+	// A directory is marked only under -F, as ls does.
+	if strings.Contains(e.mustRun("ls", e.remote), "sub/") {
+		t.Error("ls should not classify directories without -F")
+	}
+	if !strings.Contains(e.mustRun("ls", "-F", e.remote), "sub/") {
+		t.Error("ls -F should mark the directory")
 	}
 
 	recursive := e.mustRun("ls", "-R", e.remote)
 	if !strings.Contains(recursive, "sub/b.txt") {
 		t.Errorf("ls -R did not descend:\n%s", recursive)
+	}
+}
+
+// TestLsSortFlags: -t, -S and -r are the orderings ls offers, and a listing
+// people read in a terminal is worth little without them.
+func TestLsSortFlags(t *testing.T) {
+	e := setup(t)
+	// Written oldest-first and with distinct sizes, so name, time and size
+	// each give a different order.
+	e.mustRun("put", e.writeLocal("big.txt", []byte("0123456789")), e.remotePath("big.txt"))
+	e.mustRun("put", e.writeLocal("small.txt", []byte("x")), e.remotePath("small.txt"))
+
+	first := func(out string) string {
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		if len(lines) == 0 {
+			return ""
+		}
+		return lines[0]
+	}
+
+	if got := first(e.mustRun("ls", e.remote)); !strings.Contains(got, "big.txt") {
+		t.Errorf("default order should be by name, first line was %q", got)
+	}
+	if got := first(e.mustRun("ls", "-S", e.remote)); !strings.Contains(got, "big.txt") {
+		t.Errorf("-S should put the largest first, got %q", got)
+	}
+	if got := first(e.mustRun("ls", "-r", e.remote)); !strings.Contains(got, "small.txt") {
+		t.Errorf("-r should reverse the order, got %q", got)
+	}
+	// -t is checked as a property rather than by naming a file: two uploads a
+	// moment apart can share a timestamp, and then the order is decided by the
+	// tiebreak, not by time.
+	var byTime []struct {
+		Name     string    `json:"name"`
+		Modified time.Time `json:"modified"`
+	}
+	e.runJSON(&byTime, "ls", "-t", e.remote)
+	for i := 1; i < len(byTime); i++ {
+		if byTime[i].Modified.After(byTime[i-1].Modified) {
+			t.Errorf("-t is not newest-first: %s (%s) came after %s (%s)",
+				byTime[i].Name, byTime[i].Modified, byTime[i-1].Name, byTime[i-1].Modified)
+		}
 	}
 }
 

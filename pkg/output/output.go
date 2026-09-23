@@ -159,6 +159,17 @@ func (w *Writer) Item(v any) error {
 
 // Streaming reports whether Item will actually write something, so callers can
 // skip building display rows they will not use.
+// Line writes one literal line of result output to stdout, for a command whose
+// natural rendering is not a table of labelled columns — ls, which has to look
+// like ls. It writes nothing in JSON or CSV mode, where the structured
+// rendering is the authoritative one and a stray line would corrupt it.
+func (w *Writer) Line(format string, args ...any) {
+	if w.format != FormatTable {
+		return
+	}
+	fmt.Fprintf(w.out, format+"\n", args...)
+}
+
 func (w *Writer) Streaming() bool { return w.format == FormatJSON && w.stream }
 
 // Msg writes an informational line to stderr. It is suppressed when quiet, and
@@ -302,4 +313,17 @@ func IsTerminal(f *os.File) bool {
 		return false
 	}
 	return term.IsTerminal(int(f.Fd()))
+}
+
+// TerminalWidth returns the width of f in columns, or 80 when it is not a
+// terminal or the size cannot be determined. Used to lay out a listing in
+// columns the way ls does.
+func TerminalWidth(f *os.File) int {
+	if f == nil {
+		return 80
+	}
+	if w, _, err := term.GetSize(int(f.Fd())); err == nil && w > 0 {
+		return w
+	}
+	return 80
 }
