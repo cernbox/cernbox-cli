@@ -161,6 +161,20 @@ cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
 cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
 ```
 
+### Mirroring a directory
+
+`sync` makes the destination match the source, one way only, comparing size and modification time so unchanged files are not sent again.
+
+```bash
+cernbox sync ./data cb:/eos/project/c/cernbox/data
+cernbox sync cb:/eos/project/c/cernbox/data ./data --delete --dry-run
+cernbox sync ./src cb:/eos/project/c/cernbox/src --exclude '*.o' --exclude build
+```
+
+`--dry-run` reports the whole plan — created, updated, deleted — and changes nothing, which is the rehearsal worth doing before a `--delete` run against a path typed by hand.
+
+`--exclude` is repeatable. A pattern without a slash matches any path component at any depth, so `--exclude build` skips every `build` directory and everything in it; a pattern with a slash matches the whole relative path, so `--exclude 'build/*'` skips only what is directly inside a top-level `build`. An excluded entry is invisible to the mirror on **both** sides: it is not copied, and `--delete` will not remove it for being absent from the source.
+
 ### Downloading a directory as one file
 
 `archive` asks the server to pack a tree and streams the result out. The walk happens server-side, so a directory of many small files costs one request instead of one per file.

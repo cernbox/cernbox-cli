@@ -388,3 +388,92 @@ func TestSyncPushStillRequiresTheSource(t *testing.T) {
 		t.Error("pushing from a missing directory should fail, not create it and mirror nothing")
 	}
 }
+
+// ── exclude ──────────────────────────────────────────────────────────────────
+
+func TestExcludedMatching(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, rel string
+		want         bool
+	}{
+		// A pattern without a slash matches any component, at any depth.
+		{"*.o", "main.o", true},
+		{"*.o", "sub/main.o", true},
+		{"*.o", "main.c", false},
+		{"build", "build", true},
+		{"build", "build/app", true},
+		{"build", "sub/build/app", true},
+		{"build", "rebuild", false},
+		// A pattern with a slash matches the whole relative path.
+		{"build/*", "build/app", true},
+		{"build/*", "sub/build/app", false},
+		{"build/*", "build", false},
+		{"sub/*.o", "sub/main.o", true},
+		// A malformed pattern excludes nothing rather than everything: the
+		// alternative is a sync that silently copies no files at all.
+		{"[", "anything", false},
+	} {
+		t.Run(tc.pattern+" vs "+tc.rel, func(t *testing.T) {
+			opts := SyncOptions{Exclude: []string{tc.pattern}}
+			if got := opts.Excluded(tc.rel); got != tc.want {
+				t.Errorf("Excluded(%q) with --exclude %q = %v, want %v",
+					tc.rel, tc.pattern, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSyncExcludeLeavesFilesOut(t *testing.T) {
+	f := newSyncFixture(t, Options{})
+	f.writeLocal("main.c", "source")
+	f.writeLocal("main.o", "object")
+	f.writeLocal("sub/other.o", "object")
+	f.writeLocal("build/app", "binary")
+
+	f.push(SyncOptions{Exclude: []string{"*.o", "build"}})
+
+	f.box.requireContent(syncRemote+"/main.c", []byte("source"))
+	for _, rel := range []string{"/main.o", "/sub/other.o", "/build/app"} {
+		if _, ok := f.box.fileContent(syncRemote + rel); ok {
+			t.Errorf("%s was synced despite being excluded", rel)
+		}
+	}
+}
+
+// TestSyncExcludeProtectsFromDelete is the property that makes --exclude safe
+// to combine with --delete: an excluded entry is invisible on both sides, so it
+// is neither copied nor removed. Were it invisible only on the source side,
+// --delete would take it as an entry the source does not have.
+func TestSyncExcludeProtectsFromDelete(t *testing.T) {
+	f := newSyncFixture(t, Options{})
+	f.box.putFile(syncRemote+"/notes.o", []byte("not mine to delete"))
+	f.box.putFile(syncRemote+"/stale.txt", []byte("delete me"))
+	f.writeLocal("main.c", "source")
+
+	stats := f.push(SyncOptions{Delete: true, Exclude: []string{"*.o"}})
+
+	if _, ok := f.box.fileContent(syncRemote + "/notes.o"); !ok {
+		t.Error("--delete removed an excluded file")
+	}
+	if _, ok := f.box.fileContent(syncRemote + "/stale.txt"); ok {
+		t.Error("--delete kept a file that is not in the source")
+	}
+	if stats.Deleted != 1 {
+		t.Errorf("Deleted = %d, want 1: only the unexcluded extra", stats.Deleted)
+	}
+}
+
+func TestSyncExcludeAppliesWhenPulling(t *testing.T) {
+	f := newSyncFixture(t, Options{})
+	f.box.putFile(syncRemote+"/a.txt", []byte("alpha"))
+	f.box.putFile(syncRemote+"/scratch/big.tmp", []byte("temporary"))
+
+	f.pull(SyncOptions{Exclude: []string{"*.tmp"}})
+
+	if f.readLocal("a.txt") != "alpha" {
+		t.Error("the unexcluded file was not pulled")
+	}
+	if f.localExists("scratch/big.tmp") {
+		t.Error("an excluded file was pulled")
+	}
+}
