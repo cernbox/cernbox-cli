@@ -290,7 +290,14 @@ func (a *App) streamPaste(ctx context.Context, root string, m *clipboard.Manifes
 	}
 	a.out.Msg("Receiving %s from %s...", e.Name, m.Origin)
 
-	received, err := a.drainStream(ctx, root, m.Slot, out, opts.wait)
+	// A handover of a pipe has no length until it ends, so the bar may have no
+	// total to work against. It shows bytes and a rate in that case rather than
+	// inventing a percentage.
+	bar := a.newMeter(e.Name, e.Size)
+	defer bar.Stop()
+
+	received, err := a.drainStream(ctx, root, m.Slot, bar.Writer(out), opts.wait)
+	bar.Stop()
 	if ferr := finish(err); err == nil {
 		err = ferr
 	}

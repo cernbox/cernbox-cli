@@ -36,6 +36,7 @@ type globalFlags struct {
 	quiet        bool
 	debug        bool
 	stream       bool
+	noProgress   bool
 
 	token        string
 	method       string
@@ -138,6 +139,7 @@ func newRootCmd(app *App) *cobra.Command {
 	pf.BoolVarP(&f.quiet, "quiet", "q", false, "suppress headers and informational messages")
 	pf.BoolVar(&f.debug, "debug", false, "show underlying errors and request detail")
 	pf.BoolVar(&f.stream, "stream", false, "with --output json, emit newline-delimited JSON")
+	pf.BoolVar(&f.noProgress, "no-progress", false, "do not draw transfer progress")
 
 	pf.StringVar(&f.token, "token", "", "use this token instead of authenticating")
 	pf.StringVar(&f.method, "method", "", "authentication method: kerberos, device, app-token, basic, token")
@@ -370,6 +372,19 @@ func (a *App) resolveSpec(ctx context.Context, spec pathspec.Spec) (string, erro
 	return spec.Resolve(ctx, a.client)
 }
 
+// transferEngineWith builds the transfer engine, reporting progress through pf
+// instead of the default per-file lines. A paste draws a bar, which needs the
+// incremental events rather than the completion ones.
+func (a *App) transferEngineWith(o transferFlags, pf transfer.ProgressFunc) (*transfer.Engine, error) {
+	e, err := a.transferEngine(o)
+	if err != nil {
+		return nil, err
+	}
+	opts := e.Options()
+	opts.Progress = pf
+	return transfer.New(a.client, opts), nil
+}
+
 // transferEngine builds the transfer engine from configuration and flags.
 func (a *App) transferEngine(o transferFlags) (*transfer.Engine, error) {
 	chunk, err := ParseSize(a.cfg.Transfer.ChunkSize)
@@ -396,7 +411,7 @@ func (a *App) transferEngine(o transferFlags) (*transfer.Engine, error) {
 // in a log file is noise, and under --output json it would corrupt nothing but
 // still waste the reader's attention.
 func (a *App) progressFunc() transfer.ProgressFunc {
-	if a.out.IsQuiet() || !output.IsTerminal(os.Stderr) || a.out.Format() == output.FormatJSON {
+	if !a.showProgress() {
 		return nil
 	}
 	return func(ev transfer.Event) {
@@ -409,6 +424,27 @@ func (a *App) progressFunc() transfer.ProgressFunc {
 		}
 		fmt.Fprintf(os.Stderr, "  %s (%s)\n", ev.Path, output.HumanSize(ev.Transferred))
 	}
+}
+
+// showProgress reports whether progress may be drawn at all.
+//
+// The test is on stderr, not stdout: "cernbox paste -" writes the payload to
+// stdout, which is usually a pipe, and the bar belongs on the stream a person is
+// watching. Under --output json nothing is drawn, so a parseable stream stays
+// parseable.
+func (a *App) showProgress() bool {
+	return !a.flags.noProgress && !a.out.IsQuiet() &&
+		a.out.Format() != output.FormatJSON && output.IsTerminal(os.Stderr)
+}
+
+// newMeter returns a progress meter for a transfer, or nil when progress is not
+// being drawn. A nil meter is usable: every method on it is a no-op, so callers
+// need no special case.
+func (a *App) newMeter(label string, total int64) *meter {
+	if !a.showProgress() {
+		return nil
+	}
+	return &meter{Meter: output.NewMeter(os.Stderr, label, total)}
 }
 
 // ctx returns the command's context, honouring --timeout.
