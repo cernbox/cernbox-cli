@@ -53,6 +53,18 @@ const (
 	payloadName  = "payload"
 )
 
+// Mode distinguishes the two ways a slot can carry something.
+const (
+	// ModeStore is the default: the copy is on the server, and the machine that
+	// made it can go away. Paste can happen a week later.
+	ModeStore = ""
+	// ModeStream is a live handover: the sender is still running and holding the
+	// source open, and the bytes move only while the receiver is pulling them.
+	// Nothing is stored — the server holds a small window in flight and the
+	// receiver deletes each piece as it consumes it.
+	ModeStream = "stream"
+)
+
 // Manifest is what one clipboard slot holds.
 type Manifest struct {
 	// Version is the format version this was written with.
@@ -60,6 +72,11 @@ type Manifest struct {
 	// Slot is the slot name, repeated inside the file so a manifest read on its
 	// own still says where it belongs.
 	Slot string `json:"slot"`
+	// Mode is ModeStore or ModeStream. It is omitted for a stored copy so that
+	// the ordinary manifest is unchanged.
+	Mode string `json:"mode,omitempty"`
+	// Stream describes a live handover, and is present only in ModeStream.
+	Stream *StreamInfo `json:"stream,omitempty"`
 	// Created is when the copy was made.
 	Created time.Time `json:"created"`
 	// Expires is when the slot becomes eligible for collection. Zero means it
@@ -105,6 +122,34 @@ type Entry struct {
 	// saying out loud rather than silently handing over different bytes.
 	ETag string `json:"etag,omitempty"`
 }
+
+// StreamInfo describes a handover that is happening now rather than something
+// sitting on the server.
+//
+// The sender writes it, blocks until a receiver claims the slot, and then feeds
+// pieces through a window this size. The receiver deletes each piece as it reads
+// it, so what the server holds at any moment is bounded by Window pieces rather
+// than by the size of whatever is being sent — a hundred gigabytes can cross
+// through a slot that never holds more than a few dozen megabytes.
+type StreamInfo struct {
+	// ChunkSize is how much of the stream travels in each piece.
+	ChunkSize int64 `json:"chunk_size"`
+	// Window is how many pieces the sender will run ahead of the receiver. It is
+	// what stops a fast sender from turning the slot into storage after all.
+	Window int `json:"window"`
+}
+
+// Done is what the sender writes when the source is exhausted, so the receiver
+// can tell "no more pieces yet" from "no more pieces ever".
+type Done struct {
+	// Parts is how many pieces were sent in total.
+	Parts int `json:"parts"`
+	// Size is the total number of bytes, for the receiver to check against.
+	Size int64 `json:"size"`
+}
+
+// IsStream reports whether the slot is a live handover rather than a stored copy.
+func (m *Manifest) IsStream() bool { return m.Mode == ModeStream }
 
 // Origin is the machine a copy was made on.
 //
@@ -307,3 +352,44 @@ func IsManifest(name string) bool { return name == manifestName }
 func PartPath(base string, n int) string {
 	return path.Join(base, fmt.Sprintf("%05d", n))
 }
+
+// Layout of a live handover. These are the only things the two machines say to
+// each other, and every one of them is a plain file, because PUT, GET, PROPFIND
+// and DELETE are the whole vocabulary reva gives two clients for talking.
+const (
+	streamName = "stream"
+	readerName = "reader"
+	doneName   = "done"
+)
+
+// StreamDir is where the pieces of a live handover appear and are consumed.
+func StreamDir(root, slot string) string { return path.Join(root, slot, streamName) }
+
+// ChunkPath is the n-th piece in flight.
+func ChunkPath(root, slot string, n int) string {
+	return path.Join(StreamDir(root, slot), fmt.Sprintf("%05d", n))
+}
+
+// ChunkIndex recovers a piece's number from its name, reporting false for
+// anything else in the directory.
+func ChunkIndex(name string) (int, bool) {
+	if len(name) != 5 {
+		return 0, false
+	}
+	n := 0
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n, true
+}
+
+// ReaderPath is how the receiver says it has arrived. The sender blocks until
+// this exists, which is what makes copy wait rather than upload.
+func ReaderPath(root, slot string) string { return path.Join(root, slot, readerName) }
+
+// DonePath is how the sender says the source is exhausted. Without it the
+// receiver could not tell a pause in a slow stream from the end of it.
+func DonePath(root, slot string) string { return path.Join(root, slot, doneName) }
