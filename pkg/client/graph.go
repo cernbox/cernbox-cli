@@ -2,11 +2,13 @@ package client
 
 import (
 	"context"
+	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -309,6 +311,42 @@ func SpaceAlias(s Space) string {
 }
 
 // ── shares and links ─────────────────────────────────────────────────────────
+
+// SpacePathOfID recovers the path of the space a resource belongs to, from the
+// resource id the graph reports.
+//
+// The id is "storage$space!item", and the space part is the base32 of the
+// space's path: "localhome$F5SW64ZPOVZWK4RPMUXWK2LOON2GK2LO!3857" is an item in
+// the space rooted at /eos/user/e/einstein. That encoding is reva's, not
+// something this client invented, and the alternative is worse: a received share
+// carries no path of its own, so without decoding this there is no way to reach
+// what somebody has shared with you except by guessing at the layout of their
+// home directory.
+//
+// A path that does not decode is reported rather than guessed at, since acting
+// on a wrong one would mean reading somebody else's directory.
+func SpacePathOfID(resourceID string) (string, bool) {
+	spaceID, _, ok := splitResourceID(resourceID)
+	if !ok {
+		return "", false
+	}
+	_, encoded, ok := strings.Cut(spaceID, "$")
+	if !ok || encoded == "" {
+		return "", false
+	}
+	// reva writes the padding sometimes and omits it elsewhere, so decode
+	// without it and trim whatever is there.
+	raw, err := base32.StdEncoding.WithPadding(base32.NoPadding).
+		DecodeString(strings.TrimRight(encoded, "="))
+	if err != nil {
+		return "", false
+	}
+	p := string(raw)
+	if !strings.HasPrefix(p, "/") {
+		return "", false
+	}
+	return path.Clean(p), true
+}
 
 // splitResourceID splits a stringified resource id, "storage$space!item", into
 // the space id the Graph route needs and the item id.

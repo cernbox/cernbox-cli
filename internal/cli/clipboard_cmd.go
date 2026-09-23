@@ -51,15 +51,19 @@ func newCopyCmd(app *App) *cobra.Command {
 			"you can paste on several computers. 'cernbox clipboard clear' frees the\n" +
 			"space.\n\n" +
 			"With --stream nothing is stored: this command waits for the paste and\n" +
-			"sends the file straight to it.",
+			"sends the file straight to it.\n\n" +
+			"With --to somebody else collects it instead, on their own account. That\n" +
+			"slot becomes readable by them, so keep it for what you meant to send.",
 		Example: "  cernbox copy ./report.pdf\n" +
 			"  cernbox copy cb:/eos/user/g/gdelmont/report.pdf\n" +
 			"  cernbox copy -r ./data --slot build\n" +
+			"  cernbox copy ./report.pdf --to marie\n" +
 			"  tar cz dir | cernbox copy - --name dir.tgz",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
+			opts.slotGiven = cmd.Flags().Changed("slot")
 			return app.clipboardCopy(ctx, args, opts)
 		},
 	}
@@ -78,6 +82,7 @@ func newCopyCmd(app *App) *cobra.Command {
 		"wait for a paste on another computer and send the file straight to it")
 	f.DurationVar(&opts.wait, "wait", 10*time.Minute,
 		"how long to wait for the other computer, with --stream")
+	f.StringVar(&opts.to, "to", "", "hand this to another person, who collects it with 'paste --from'")
 	return cmd
 }
 
@@ -93,6 +98,11 @@ type copyOptions struct {
 	stream bool
 	// wait bounds every step that depends on the other machine.
 	wait time.Duration
+	// to is the person this copy is for, empty for your own clipboard.
+	to string
+	// slotGiven records whether --slot was typed, which decides whether --to may
+	// pick the slot itself.
+	slotGiven bool
 }
 
 // newPasteCmd builds "cernbox paste".
@@ -108,15 +118,19 @@ func newPasteCmd(app *App) *cobra.Command {
 			"without sending any data. Use - to write a single file to standard output.\n\n" +
 			"Pasting leaves the clipboard alone, so you can paste again elsewhere.\n" +
 			"'cernbox clipboard clear' frees the space when you are done.\n\n" +
+			"Use --from to collect what somebody else copied for you. 'cernbox\n" +
+			"clipboard list' shows who has.\n\n" +
 			"A progress bar is shown on a terminal. --no-progress turns it off.",
 		Example: "  cernbox paste\n" +
 			"  cernbox paste ./incoming/\n" +
 			"  cernbox paste cb:/eos/project/c/cernbox/data/\n" +
+			"  cernbox paste --from einstein ./incoming/\n" +
 			"  cernbox paste --slot build - | tar xz",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
+			opts.slotGiven = cmd.Flags().Changed("slot")
 			return app.clipboardPaste(ctx, args, opts)
 		},
 	}
@@ -129,6 +143,7 @@ func newPasteCmd(app *App) *cobra.Command {
 	f.IntVarP(&opts.jobs, "jobs", "j", 0, "number of files to transfer at once")
 	f.DurationVar(&opts.wait, "wait", 10*time.Minute,
 		"how long to wait for a computer that is sending with --stream")
+	f.StringVar(&opts.from, "from", "", "collect what this person copied for you")
 	return cmd
 }
 
@@ -141,6 +156,11 @@ type pasteOptions struct {
 	jobs      int
 	// wait bounds how long a live handover will sit waiting for the far end.
 	wait time.Duration
+	// from is whose clipboard to read, empty for your own.
+	from string
+	// slotGiven records whether --slot was typed, since --from names the slot
+	// itself.
+	slotGiven bool
 }
 
 // newClipboardCmd builds the "cernbox clipboard" group, which manages the slots
@@ -206,6 +226,19 @@ type copySource struct {
 }
 
 func (a *App) clipboardCopy(ctx context.Context, args []string, opts copyOptions) error {
+	if opts.to != "" {
+		if opts.stream {
+			return cberr.Usagef(
+				"--stream hands a file to another of your own computers, live. To send " +
+					"something to somebody else, leave --stream off: --to stores it until they " +
+					"collect it.")
+		}
+		slot, err := handoverSlotFor(opts.to, opts.slotGiven)
+		if err != nil {
+			return err
+		}
+		opts.slot = slot
+	}
 	if err := clipboard.ValidateSlot(opts.slot); err != nil {
 		return cberr.Usagef("%v", err)
 	}
@@ -244,13 +277,16 @@ func (a *App) clipboardCopy(ctx context.Context, args []string, opts copyOptions
 	// Anything not already in CERNBox is uploaded into the slot, and a PUT into a
 	// directory that is not there answers 409, so the payload directory has to
 	// exist before the first one. A slot of pure references never needs it.
-	if anyStaged(sources) {
+	// A handover stages everything, including CERNBox paths an ordinary copy
+	// would only point at, so it always needs the payload directory.
+	if anyStaged(sources) || opts.to != "" {
 		if err := a.client.Mkdir(ctx, clipboard.PayloadDir(root, opts.slot), true); err != nil {
 			return err
 		}
 	}
 
 	m := clipboard.New(opts.slot, time.Now(), opts.ttl, clipboard.LocalOrigin(workingDir()))
+	m.To = opts.to
 	for _, src := range sources {
 		entry, err := a.copyOne(ctx, root, src, opts)
 		if err != nil {
@@ -275,6 +311,20 @@ func (a *App) clipboardCopy(ctx context.Context, args []string, opts copyOptions
 	// that creates the quota pressure, so it is the natural place to give some
 	// back, and there is nothing running on a schedule to do it instead.
 	a.collectExpired(ctx, root)
+
+	if opts.to != "" {
+		// Sharing last, so a copy that failed leaves nothing readable behind.
+		if err := a.shareHandover(ctx, clipboard.SlotDir(root, opts.slot), opts.to); err != nil {
+			return err
+		}
+		a.out.Msg("Copied %s (%s) for %s.", itemCount(len(m.Entries)), proseSize(m.Size()), opts.to)
+		a.out.Msg("They collect it with 'cernbox paste --from %s'. It stays on your quota until "+
+			"'cernbox clipboard clear %s'.", a.username(ctx), opts.slot)
+		if a.out.Format() == output.FormatJSON {
+			return a.out.Object(m)
+		}
+		return nil
+	}
 
 	a.out.Msg("Copied %s (%s) to the %q clipboard slot", itemCount(len(m.Entries)),
 		proseSize(m.Size()), opts.slot)
@@ -359,9 +409,37 @@ func (a *App) copyOne(ctx context.Context, root string, src copySource, opts cop
 	}
 
 	if src.spec.IsRemote() {
+		if opts.to != "" {
+			return a.copyRemoteIntoSlot(ctx, src, staged)
+		}
 		return a.referenceRemote(ctx, src, opts)
 	}
 	return a.stageLocal(ctx, src, staged, opts)
+}
+
+// copyRemoteIntoSlot duplicates a CERNBox path into the slot, server-side.
+//
+// A handover cannot point at the sender's own path the way an ordinary copy
+// does: the recipient has no access to it, and granting them some would share
+// far more than the one thing being handed over. The duplicate costs a request
+// rather than a transfer — the bytes never leave the server — and clearing the
+// slot deletes it, which is what Staged means.
+func (a *App) copyRemoteIntoSlot(ctx context.Context, src copySource, staged string) (clipboard.Entry, error) {
+	from, err := a.resolveSpec(ctx, src.spec)
+	if err != nil {
+		return clipboard.Entry{}, err
+	}
+	info, err := a.client.Stat(ctx, from)
+	if err != nil {
+		return clipboard.Entry{}, err
+	}
+	if err := a.client.Copy(ctx, from, staged, true); err != nil {
+		return clipboard.Entry{}, err
+	}
+	return clipboard.Entry{
+		Name: src.name, Path: staged, IsDir: info.IsDir,
+		Size: info.Size, Staged: true, ETag: info.ETag,
+	}, nil
 }
 
 // referenceRemote records a path that is already in CERNBox, without moving a
@@ -549,11 +627,16 @@ func looksLikeCERNBoxMount(p string) bool {
 // ── paste ────────────────────────────────────────────────────────────────────
 
 func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptions) error {
+	if opts.from != "" && opts.slotGiven {
+		return cberr.Usagef(
+			"--from reads the slot the sender staged for you, which is named after you, " +
+				"so it cannot be combined with --slot")
+	}
 	if err := clipboard.ValidateSlot(opts.slot); err != nil {
 		return cberr.Usagef("%v", err)
 	}
 
-	root, err := a.clipboardRoot(ctx)
+	root, err := a.pasteRoot(ctx, &opts)
 	if err != nil {
 		return err
 	}
@@ -580,6 +663,14 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 	// A live handover is a different thing from a stored copy: there is a process
 	// on the other side waiting to be told somebody arrived, and nothing to
 	// download until it has been.
+	if m.IsStream() && opts.from != "" {
+		// Claiming a live stream means writing into the slot, and a handover is
+		// shared read-only. This cannot happen from this CLI, which refuses
+		// --stream with --to, but a slot is a file format and the error should
+		// say what is wrong rather than fail on a permission.
+		return cberr.New(cberr.KindOther, "paste", opts.from,
+			"this slot holds a live stream, which only the sender's own computers can claim")
+	}
 	if m.IsStream() {
 		if dest != "-" {
 			if spec, err := pathspec.ParseTransfer(dest); err == nil && spec.IsRemote() {
@@ -592,7 +683,7 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 	}
 
 	if dest == "-" {
-		return a.pasteToStdout(ctx, m)
+		return a.pasteToStdout(ctx, m, opts.from)
 	}
 
 	spec, err := pathspec.ParseTransfer(dest)
@@ -676,7 +767,7 @@ func (a *App) pasteLocal(ctx context.Context, m *clipboard.Manifest, spec pathsp
 	bar.Stop()
 
 	a.out.Msg("Pasted %s (%s) into %s", itemCount(len(m.Entries)), proseSize(total), dest)
-	a.reportSlotSurvives(m)
+	a.reportSlotSurvives(m, opts.from)
 	if a.out.Format() == output.FormatJSON {
 		return a.out.Object(m)
 	}
@@ -740,7 +831,7 @@ func (a *App) pasteRemote(ctx context.Context, m *clipboard.Manifest, spec paths
 	if streamed {
 		bar.Stop()
 		a.out.Msg("Pasted %s (%s) into %s", itemCount(len(m.Entries)), proseSize(m.Size()), dest)
-		a.reportSlotSurvives(m)
+		a.reportSlotSurvives(m, opts.from)
 		if a.out.Format() == output.FormatJSON {
 			return a.out.Object(m)
 		}
@@ -749,7 +840,7 @@ func (a *App) pasteRemote(ctx context.Context, m *clipboard.Manifest, spec paths
 
 	a.out.Msg("Pasted %s (%s) into %s. The server made the copy, so nothing was transferred.",
 		itemCount(len(m.Entries)), proseSize(m.Size()), dest)
-	a.reportSlotSurvives(m)
+	a.reportSlotSurvives(m, opts.from)
 	if a.out.Format() == output.FormatJSON {
 		return a.out.Object(m)
 	}
@@ -758,7 +849,7 @@ func (a *App) pasteRemote(ctx context.Context, m *clipboard.Manifest, spec paths
 
 // pasteToStdout writes a single item to standard output, which is the receiving
 // half of "tar cz dir | cernbox copy -".
-func (a *App) pasteToStdout(ctx context.Context, m *clipboard.Manifest) error {
+func (a *App) pasteToStdout(ctx context.Context, m *clipboard.Manifest, from string) error {
 	if len(m.Entries) != 1 {
 		return cberr.Usagef("the clipboard holds %s: standard output takes one at a time",
 			itemCount(len(m.Entries)))
@@ -863,7 +954,13 @@ func (a *App) pasteError(err error, e clipboard.Entry) error {
 
 // reportSlotSurvives says that pasting did not consume the clipboard, which is
 // the one thing about this feature a user is most likely to assume wrongly.
-func (a *App) reportSlotSurvives(m *clipboard.Manifest) {
+func (a *App) reportSlotSurvives(m *clipboard.Manifest, from string) {
+	if from != "" {
+		// Somebody else's slot, on somebody else's quota. Telling the recipient to
+		// clear it would be telling them to run a command that does nothing.
+		a.out.Msg("It stays on %s's clipboard until they clear it. Paste it again if you need to.", from)
+		return
+	}
 	if !m.HasStaged() {
 		a.out.Msg("Still on the clipboard. Paste it again anywhere, or 'cernbox clipboard clear' to forget it.")
 		return
@@ -873,6 +970,17 @@ func (a *App) reportSlotSurvives(m *clipboard.Manifest) {
 }
 
 // ── clipboard list and clear ─────────────────────────────────────────────────
+
+// slotView is a slot as the listing shows it: a manifest, plus who handed it
+// over when it was not the caller.
+//
+// The manifest is embedded rather than copied so that --output json keeps the
+// shape it had, with one extra key on the slots that came from somebody else.
+type slotView struct {
+	*clipboard.Manifest
+	// From is the sender of an incoming handover, empty for your own slots.
+	From string `json:"from,omitempty"`
+}
 
 func (a *App) clipboardList(ctx context.Context) error {
 	root, err := a.clipboardRoot(ctx)
@@ -885,26 +993,46 @@ func (a *App) clipboardList(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(manifests) == 0 {
+
+	slots := make([]slotView, 0, len(manifests))
+	for _, m := range manifests {
+		slots = append(slots, slotView{Manifest: m})
+	}
+	// What other people have staged for you is on their quota, not yours, and is
+	// pasted with --from rather than by slot name. It belongs in this listing
+	// anyway: otherwise the only way to learn somebody sent you something is for
+	// them to tell you.
+	slots = append(slots, a.incomingHandovers(ctx)...)
+
+	if len(slots) == 0 {
 		a.out.Msg("The clipboard is empty. Use 'cernbox copy PATH' to put something on it.")
 	}
 
 	now := time.Now()
 	table := output.Table{
-		Headers: []string{"SLOT", "CONTENTS", "SIZE", "ORIGIN", "COPIED", "EXPIRES"},
-		Items:   manifests,
+		Headers: []string{"SLOT", "FROM", "CONTENTS", "SIZE", "ORIGIN", "COPIED", "EXPIRES"},
+		Items:   slots,
 	}
-	for _, m := range manifests {
+	for _, s := range slots {
 		table.Rows = append(table.Rows, []string{
-			m.Slot,
-			contentsColumn(m),
-			output.HumanSize(m.Size()),
-			m.Origin.String(),
-			agoColumn(m.Created, now),
-			manifestExpiry(m),
+			s.Slot,
+			orDash(s.From),
+			contentsColumn(s.Manifest),
+			output.HumanSize(s.Size()),
+			s.Origin.String(),
+			agoColumn(s.Created, now),
+			manifestExpiry(s.Manifest),
 		})
 	}
-	return a.out.Render(table)
+	if err := a.out.Render(table); err != nil {
+		return err
+	}
+	for _, s := range slots {
+		if s.From != "" {
+			a.out.Msg("Collect what %s sent with 'cernbox paste --from %s'.", s.From, s.From)
+		}
+	}
+	return nil
 }
 
 func (a *App) clipboardClear(ctx context.Context, slots []string, all bool) error {
@@ -970,6 +1098,21 @@ func (a *App) clipboardClear(ctx context.Context, slots []string, all bool) erro
 }
 
 // ── storage ──────────────────────────────────────────────────────────────────
+
+// pasteRoot is the clipboard a paste reads from, and sets the slot when that is
+// somebody else's.
+func (a *App) pasteRoot(ctx context.Context, opts *pasteOptions) (string, error) {
+	if opts.from == "" {
+		return a.clipboardRoot(ctx)
+	}
+	me := a.username(ctx)
+	if me == "" {
+		return "", cberr.New(cberr.KindAuth, "paste", opts.from,
+			"cannot tell who you are, so cannot tell which slot was staged for you")
+	}
+	opts.slot = clipboard.HandoverSlot(me)
+	return a.senderClipboard(ctx, opts.from, opts.slot)
+}
 
 // clipboardRoot is where the clipboard lives: the caller's home space, which is
 // the one space every account has and the one both machines can agree on

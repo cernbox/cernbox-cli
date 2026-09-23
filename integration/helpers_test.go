@@ -36,6 +36,9 @@ const (
 	// A second local user, so shares can be checked from the receiving side.
 	otherUser     = "marie"
 	otherPassword = "radioactivity"
+	// otherHomeRoot is that user's home space, for the tests that need to write
+	// somewhere on the receiving side.
+	otherHomeRoot = "/eos/user/m/marie"
 
 	// The federation partner: a second provider, so the OCM commands have a
 	// real far end rather than only an error path.

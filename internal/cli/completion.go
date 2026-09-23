@@ -313,6 +313,28 @@ func (a *App) completeApp(_ *cobra.Command, _ []string, toComplete string) ([]st
 	return out, cobra.ShellCompDirectiveNoFileComp
 }
 
+// completeSender completes the people who have handed something over to the
+// caller, for "paste --from".
+func (a *App) completeSender(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if !a.ready() {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	ctx, cancel := completionContext()
+	defer cancel()
+
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range a.incomingHandovers(ctx) {
+		if s.From == "" || seen[s.From] || !strings.HasPrefix(s.From, toComplete) {
+			continue
+		}
+		seen[s.From] = true
+		out = append(out, s.From)
+	}
+	sort.Strings(out)
+	return out, cobra.ShellCompDirectiveNoFileComp
+}
+
 // ── plumbing ─────────────────────────────────────────────────────────────────
 
 // byPosition routes completion by argument position: the first function
@@ -482,11 +504,17 @@ func registerCompletions(root *cobra.Command, app *App) {
 // registerDynamicFlagCompletions covers the flags whose values have to be
 // looked up on the server.
 func (a *App) registerDynamicFlagCompletions(root *cobra.Command) {
-	if open, _, err := root.Find([]string{"open"}); err == nil && open.Name() == "open" {
-		if err := open.RegisterFlagCompletionFunc("app", a.completeApp); err != nil {
-			panic("completion for --app on open: " + err.Error())
+	register := func(command, flag string, fn completeFunc) {
+		cmd, _, err := root.Find([]string{command})
+		if err != nil || cmd.Name() != command {
+			panic("completion for --" + flag + " on unknown command " + command)
+		}
+		if err := cmd.RegisterFlagCompletionFunc(flag, fn); err != nil {
+			panic("completion for --" + flag + " on " + command + ": " + err.Error())
 		}
 	}
+	register("open", "app", a.completeApp)
+	register("paste", "from", a.completeSender)
 }
 
 // walkCommands visits every runnable command in the tree, with the path a user

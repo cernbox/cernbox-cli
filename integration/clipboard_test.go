@@ -864,3 +864,142 @@ type clipEntry struct {
 	// Parts is non-zero when the entry was streamed in and stored as pieces.
 	Parts int `json:"parts"`
 }
+
+// ── the clipboard between two people ─────────────────────────────────────────
+
+// A handover is the same clipboard, shared: the sender stages into a slot named
+// after the recipient and shares that one directory. Only a real server can say
+// whether the recipient can then read the sender's paths, whether the rest of
+// the sender's clipboard stays private, and whether a CERNBox path handed over
+// this way really is copied without the bytes passing through either client.
+
+// recipientDir is a directory in the recipient's own space, for the handovers
+// that are pasted into CERNBox rather than onto a disk.
+func (e *env) recipientDir() string {
+	e.t.Helper()
+	p := otherHomeRoot + "/it-" + randHex()
+	e.mustRunAs(e.other(), "mkdir", "-p", p)
+	e.t.Cleanup(func() { e.runAs(e.other(), "rm", "-r", "-f", p) })
+	return p
+}
+
+// clearHandoverTo removes the slot a handover to user is staged in, whatever
+// happens to the test.
+func (e *env) clearHandoverTo(user string) {
+	e.t.Helper()
+	e.t.Cleanup(func() {
+		e.run("clipboard", "clear", "to-"+user)
+	})
+}
+
+func TestHandoverReachesTheOtherPerson(t *testing.T) {
+	e := setup(t)
+	e.clearHandoverTo(otherUser)
+
+	local := e.writeLocal("handover.txt", []byte("for marie"))
+	e.mustRun("copy", local, "--to", otherUser)
+
+	// The recipient sees it in their own listing, which is how they learn it is
+	// there at all, and collects it by naming the sender.
+	var slots []struct {
+		Slot string `json:"slot"`
+		From string `json:"from"`
+	}
+	e.runJSONAs(e.other(), &slots, "clipboard", "list")
+	found := false
+	for _, s := range slots {
+		if s.From == username && s.Slot == "to-"+otherUser {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the handover is not in the recipient's listing: %+v", slots)
+	}
+
+	dest := filepath.Join(e.localDir, "inbox")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRunAs(e.other(), "paste", "--from", username, dest+"/")
+
+	got, err := os.ReadFile(filepath.Join(dest, "handover.txt"))
+	if err != nil {
+		t.Fatalf("the recipient did not get the file: %v", err)
+	}
+	if string(got) != "for marie" {
+		t.Errorf("the recipient read %q", got)
+	}
+}
+
+func TestHandoverOfACERNBoxPathMovesNoData(t *testing.T) {
+	e := setup(t)
+	e.clearHandoverTo(otherUser)
+
+	// A CERNBox path is duplicated into the shared slot rather than pointed at,
+	// because a pointer to the sender's own path is unreadable to anybody else.
+	// The duplicate is made by the server.
+	source := e.remotePath("shared.txt")
+	e.mustRun("put", e.writeLocal("shared.txt", []byte("server side")), source)
+	e.mustRun("copy", "cb:"+source, "--to", otherUser)
+
+	recipient := e.recipientDir()
+	_, stderr, code := e.runAs(e.other(), "paste", "--from", username, "cb:"+recipient+"/")
+	if code != 0 {
+		t.Fatalf("paste --from into CERNBox exited %d: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "nothing was transferred") {
+		t.Errorf("the paste did not use a server-side copy:\n%s", stderr)
+	}
+
+	if out := e.mustRunAs(e.other(), "cat", recipient+"/shared.txt"); out != "server side" {
+		t.Errorf("the recipient's copy reads %q", out)
+	}
+}
+
+func TestHandoverExposesNothingElse(t *testing.T) {
+	e := setup(t)
+	e.clearHandoverTo(otherUser)
+	e.clearSlot("it-private")
+
+	// Something for the recipient, and something that is none of their business.
+	e.mustRun("copy", e.writeLocal("theirs.txt", []byte("theirs")), "--to", otherUser)
+	e.mustRun("copy", e.writeLocal("mine.txt", []byte("mine")), "--slot", "it-private")
+
+	root := homeRoot + "/.cernbox/clipboard"
+	for _, p := range []string{root, root + "/it-private"} {
+		if _, _, code := e.runAs(e.other(), "ls", p); code == 0 {
+			t.Errorf("the recipient can read %s, which was not handed over", p)
+		}
+	}
+	// What was handed over, they can read.
+	if _, _, code := e.runAs(e.other(), "ls", root+"/to-"+otherUser); code != 0 {
+		t.Error("the recipient cannot read the slot that was handed to them")
+	}
+}
+
+func TestHandoverRefusesTheCombinationsThatWouldShareTooMuch(t *testing.T) {
+	e := setup(t)
+
+	local := e.writeLocal("a.txt", []byte("x"))
+	for _, args := range [][]string{
+		{"copy", local, "--to", otherUser, "--slot", "build"},
+		{"copy", local, "--to", otherUser, "--stream"},
+		{"paste", "--from", username, "--slot", "build"},
+	} {
+		if _, _, code := e.run(args...); code != 2 {
+			t.Errorf("%v exited %d, want a usage error", args, code)
+		}
+	}
+}
+
+func TestPasteFromSomebodyWhoSentNothing(t *testing.T) {
+	e := setup(t)
+
+	_, stderr, code := e.runAs(e.other(), "paste", "--from", "nosuchuser")
+	if code != 5 {
+		t.Errorf("exit code = %d, want 5", code)
+	}
+	if !strings.Contains(stderr, "copy --to") {
+		t.Errorf("the error does not say what the sender has to do: %s", stderr)
+	}
+}

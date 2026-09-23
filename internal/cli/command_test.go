@@ -3,6 +3,7 @@ package cli
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,6 +55,13 @@ type testBox struct {
 
 	// appMethod is the HTTP method the fake application session advertises.
 	appMethod string
+
+	// handoverFrom is a user who has staged a clipboard handover for the test
+	// user, reported through the received-shares listing the way a real one is.
+	handoverFrom string
+	// handoverSpace is the space path the handover's resource id encodes, which
+	// is how the recipient finds a shared slot: a received share carries no path.
+	handoverSpace string
 
 	// archiver turns on the archiver service. It is off by default because the
 	// transfer engine prefers an archiver whenever one is advertised, and every
@@ -172,15 +180,23 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/me/drive/sharedWithMe"):
 		// One local share and one federated one: only the remoteItem id prefix
 		// tells them apart, which is what ocm received filters on.
-		fmt.Fprint(w, `{"value":[
+		handover := ""
+		if b.handoverFrom != "" {
+			handover = fmt.Sprintf(`,
+		  {"id":%q,"name":"to-einstein","@client.synchronize":true,
+		   "createdBy":{"user":{"id":%q,"displayName":%q}},
+		   "permissions":[{"id":"p3","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]}`,
+				spaceIDOf(b.handoverSpace), b.handoverFrom, b.handoverFrom)
+		}
+		fmt.Fprintf(w, `{"value":[
 		  {"id":"item-1","name":"Shared","@client.synchronize":true,
 		   "createdBy":{"user":{"id":"marie","displayName":"Marie Curie"}},
 		   "permissions":[{"id":"p1","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]},
 		  {"id":"item-2","name":"shared-data","@client.synchronize":true,
 		   "remoteItem":{"id":"ocm-received$ABC","name":"shared-data"},
 		   "createdBy":{"user":{"id":"alice@other-lab.org","displayName":"Alice"}},
-		   "permissions":[{"id":"p2","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]}
-		]}`)
+		   "permissions":[{"id":"p2","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"]}]}%s
+		]}`, handover)
 
 	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/drives/"):
 		b.serveGraphItem(w, r)
@@ -197,6 +213,14 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// spaceIDOf builds the resource id the graph reports for an item in the space
+// rooted at p. The space half is the base32 of the space path, which is what
+// lets a recipient turn a received share into a path it can read.
+func spaceIDOf(p string) string {
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(p))
+	return "localhome$" + encoded + "!1"
 }
 
 // serveArchive packs the requested paths into one tar stream, the way the
@@ -253,6 +277,15 @@ func (b *testBox) serveGraphItem(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/createLink"):
 		fmt.Fprint(w, `{"id":"link-1","link":{"type":"view","webUrl":"https://cernbox.test/s/abc"}}`)
 	case strings.HasSuffix(r.URL.Path, "/permissions"):
+		// A path the clipboard made has no shares until one is asked for, and the
+		// fixed pair stands in for shares that were already there on an ordinary
+		// path. Without the distinction, every path in the fake looks like it is
+		// already shared with marie, and code that checks before sharing can never
+		// be seen to share at all.
+		if strings.Contains(r.URL.Path, "_.cernbox_") {
+			fmt.Fprint(w, `{"value":[]}`)
+			return
+		}
 		fmt.Fprint(w, `{"value":[
 		  {"id":"share-1","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"],"grantedToV2":{"user":{"id":"marie"}}},
 		  {"id":"link-1","link":{"type":"view","webUrl":"https://cernbox.test/s/abc"}}]}`)
