@@ -41,6 +41,12 @@ var coveredCommands = map[string]string{
 	"put":  "TestPutAndGetRoundTrip, TestLargeFileUsesResumableUpload",
 	"sync": "TestSyncPushAndPull, TestSyncDelete",
 
+	// The cross-machine clipboard.
+	"copy":            "TestClipboardRoundTrip, TestClipboardReferencesARemotePathWithoutUploading, TestClipboardCarriesADirectory",
+	"paste":           "TestClipboardRoundTrip, TestClipboardPasteInsideCERNBoxMovesNoData, TestClipboardRefusesToOverwriteWithoutForce",
+	"clipboard list":  "TestClipboardListShowsTheSlot",
+	"clipboard clear": "TestClipboardClearReleasesStagedBytes, TestClipboardClearLeavesTheOriginalAlone",
+
 	// Sharing.
 	"share create":   "TestShareLifecycle, TestShareIsVisibleToTheRecipient, TestShareWithGroup",
 	"share list":     "TestShareLifecycle, TestShareListWithoutPathShowsEverythingShared",

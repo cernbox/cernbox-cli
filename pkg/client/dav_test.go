@@ -279,6 +279,78 @@ func TestUploadSendsChecksum(t *testing.T) {
 	}
 }
 
+// TestUploadIfUnchangedSendsAQuotedETag: reva honours If-Match on PUT, which is
+// the only precondition it does honour, so the header has to be spelled the way
+// RFC 9110 wants it. The ETags the rest of the CLI carries have had their quotes
+// stripped by the PROPFIND parser, so they have to be put back here.
+func TestUploadIfUnchangedSendsAQuotedETag(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	err := f.client().UploadIfUnchanged(context.Background(), "/eos/user/e/einstein/a.txt",
+		openerOf("hello"), 5, "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.lastRequest(http.MethodPut).Header.Get("If-Match"); got != `"abc123"` {
+		t.Errorf("If-Match = %q, want %q", got, `"abc123"`)
+	}
+}
+
+// TestUploadIfUnchangedToleratesAnAlreadyQuotedETag: callers should not have to
+// know which form they are holding.
+func TestUploadIfUnchangedToleratesAnAlreadyQuotedETag(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := f.client().UploadIfUnchanged(context.Background(), "/eos/user/e/einstein/a.txt",
+		openerOf("hello"), 5, `"abc123"`); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.lastRequest(http.MethodPut).Header.Get("If-Match"); got != `"abc123"` {
+		t.Errorf("If-Match = %q, want %q", got, `"abc123"`)
+	}
+}
+
+// TestUploadIfUnchangedReportsAMismatchAsAConflict: 412 is how the caller learns
+// somebody else got there first, so it must not read as a generic failure.
+func TestUploadIfUnchangedReportsAMismatchAsAConflict(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "etag mismatch", http.StatusPreconditionFailed)
+	})
+
+	err := f.client().UploadIfUnchanged(context.Background(), "/eos/user/e/einstein/a.txt",
+		openerOf("hello"), 5, "abc123")
+	if err == nil {
+		t.Fatal("a precondition failure should be an error")
+	}
+	if cberr.KindOf(err) != cberr.KindConflict {
+		t.Errorf("kind = %v, want KindConflict", cberr.KindOf(err))
+	}
+}
+
+// TestUploadSendsNoPreconditionByDefault: the unconditional path must stay
+// unconditional, or every ordinary upload would start failing on a stale ETag.
+func TestUploadSendsNoPreconditionByDefault(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	if err := f.client().Upload(context.Background(), "/eos/user/e/einstein/a.txt",
+		openerOf("hello"), 5, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.lastRequest(http.MethodPut).Header.Get("If-Match"); got != "" {
+		t.Errorf("If-Match = %q, want it absent", got)
+	}
+}
+
 func TestMkdir(t *testing.T) {
 	f := newFakeServer(t)
 	f.on(MethodMkcol, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
