@@ -211,6 +211,35 @@ Two consequences worth knowing. Pasting a streamed copy to another CERNBox path 
 
 None of this applies to an ordinary file. A file's length is known from a single `stat`, so it is sent as one request streamed straight off disk, with no pieces and nothing buffered: a 512 MB `cernbox put` runs in about 17 MB of resident memory. Splitting exists only because a pipe cannot be measured without reading it.
 
+### Handing a file over live
+
+Everything above is store-and-forward: `copy` finishes, and `paste` can happen next week. `--stream` is the other shape — the two commands run at the same time and the bytes move between them, with nothing left on the server at all.
+
+```bash
+# on the machine with the file: this blocks, holding the file open
+cernbox copy --stream ./hugefile.root
+```
+
+```bash
+# on the other machine, whenever you get there
+cernbox paste ./hugefile.root
+```
+
+```console
+$ cernbox copy --stream ./hugefile.root
+Waiting for 'cernbox paste' on another machine...
+Receiver connected, streaming hugefile.root...
+Streamed 200.0M to the receiver in 25 pieces, storing nothing
+```
+
+Nothing is uploaded until somebody pastes. Afterwards `cernbox clipboard list` is empty: no quota consumed, nothing to clear, nothing in your trash. The two halves overlap, so the wall-clock is roughly one transfer rather than two in sequence. `--wait` bounds how long either side will hang around, ten minutes by default, and a sender that gives up cleans its slot up on the way out.
+
+**The bytes still pass through CERNBox.** That is worth being plain about, because it is the one thing `--stream` cannot fix. A direct connection between the two machines is what you would want, and it does not work here: a laptop is behind NAT so nothing can dial into it, and lxplus does not accept inbound connections on arbitrary ports. There is no path between the two except the server they both already talk to. What `--stream` avoids is the *storage* — the sender runs only four pieces ahead of the receiver, which deletes each one as it reads it, so the slot holds a few tens of megabytes no matter whether you are sending a gigabyte or a hundred.
+
+The constraint that comes with it: both machines have to be running the command at once. That is the trade against the default, where the sending machine can close its laptop lid and the file is still there on Monday. Neither is better; they are for different situations.
+
+Two things `--stream` will not do. It refuses a source that is already in CERNBox, because referencing it is strictly better — `cernbox copy cb:/eos/...` transfers nothing at all and pasting it to another CERNBox path is a server-side copy. And a live stream can only be received to a local path or a pipe, since there is nothing on the server for the graph to copy from. For a directory, tar it: `tar cz ./dir | cernbox copy --stream -`.
+
 ### Slots
 
 One slot is used unless you name another, so the two-command case stays two commands. `--slot` keeps several copies in flight without them treading on each other:

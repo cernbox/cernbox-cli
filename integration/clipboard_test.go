@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -352,6 +353,185 @@ func TestClipboardClearReleasesEveryPieceOfAStream(t *testing.T) {
 	}
 }
 
+// TestClipboardHandsOverLiveBetweenTwoProcesses is the live handover with two real
+// processes and a real server: one blocks holding the source, the other arrives,
+// the bytes move, and nothing is left behind.
+//
+// This is the test the feature exists for. Nothing smaller can show it, because
+// the whole mechanism is two processes signalling each other through files on a
+// server that offers no notification of any kind.
+func TestClipboardHandsOverLiveBetweenTwoProcesses(t *testing.T) {
+	e := setup(t)
+	slot := clipSlot(t)
+	e.clearSlot(slot)
+
+	cfg := e.writeLocal("small-chunk.yaml", []byte("transfer:\n  chunk_size: 64K\n"))
+	body := streamBody(512 << 10) // eight chunks through a window of four
+
+	// The sender has the whole stream ready on its standard input and must still
+	// not move a byte of it until somebody pastes.
+	sender := e.cmd("--config", cfg, "copy", "--stream", "--slot", slot, "-",
+		"--name", "live.bin", "--wait", "60s")
+	sender.Stdin = strings.NewReader(body)
+	var senderLog strings.Builder
+	sender.Stdout = &senderLog
+	sender.Stderr = &senderLog
+	if err := sender.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Process.Kill() }()
+
+	// Give it long enough that an implementation which just uploaded everything
+	// would have finished, then check it is still sitting there waiting.
+	time.Sleep(3 * time.Second)
+	if sender.ProcessState != nil {
+		t.Fatalf("the sender exited before anybody pasted:\n%s", senderLog.String())
+	}
+	var waiting []clipManifest
+	e.runJSON(&waiting, "clipboard", "list")
+	if m, ok := manifestOf(waiting, slot); !ok {
+		t.Fatalf("the waiting sender published no slot: %+v", waiting)
+	} else if m.Mode != "stream" {
+		t.Errorf("the slot says mode %q, want stream", m.Mode)
+	}
+
+	// Now the other machine turns up.
+	got := e.mustRun("--config", cfg, "paste", "--slot", slot, "--wait", "60s", "-")
+
+	if err := sender.Wait(); err != nil {
+		t.Fatalf("the sender failed: %v\n%s", err, senderLog.String())
+	}
+	if got != body {
+		t.Errorf("the receiver got %d bytes, want %d", len(got), len(body))
+	}
+	if sha256hex([]byte(got)) != sha256hex([]byte(body)) {
+		t.Error("the handover delivered the right length but the wrong bytes")
+	}
+	if !strings.Contains(senderLog.String(), "Receiver connected") {
+		t.Errorf("the sender should report the receiver arriving:\n%s", senderLog.String())
+	}
+
+	// A handover stores nothing: the slot is gone, so there is no quota to reclaim
+	// and nothing to clear.
+	var after []clipManifest
+	e.runJSON(&after, "clipboard", "list")
+	if _, ok := manifestOf(after, slot); ok {
+		t.Errorf("the handover left the slot behind: %+v", after)
+	}
+}
+
+// TestClipboardHandsOverLiveToAFile: the receiving end can be a path as well as a
+// pipe, and an interrupted handover must not leave a plausible partial file.
+func TestClipboardHandsOverLiveToAFile(t *testing.T) {
+	e := setup(t)
+	slot := clipSlot(t)
+	e.clearSlot(slot)
+
+	cfg := e.writeLocal("small-chunk.yaml", []byte("transfer:\n  chunk_size: 64K\n"))
+	body := streamBody(200 << 10)
+
+	sender := e.cmd("--config", cfg, "copy", "--stream", "--slot", slot, "-",
+		"--name", "landed.bin", "--wait", "60s")
+	sender.Stdin = strings.NewReader(body)
+	var senderLog strings.Builder
+	sender.Stdout = &senderLog
+	sender.Stderr = &senderLog
+	if err := sender.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Process.Kill() }()
+
+	// The sender publishes its slot a moment after starting, and a real user types
+	// the second command later still. Waiting for it keeps the test about the
+	// handover rather than about who won a startup race.
+	e.waitForSlot(slot)
+
+	dest := t.TempDir()
+	e.mustRun("--config", cfg, "paste", "--slot", slot, "--wait", "60s", dest)
+	if err := sender.Wait(); err != nil {
+		t.Fatalf("the sender failed: %v\n%s", err, senderLog.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(dest, "landed.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Errorf("the file holds %d bytes, want %d", len(got), len(body))
+	}
+	if _, err := os.Stat(filepath.Join(dest, "landed.bin.part")); err == nil {
+		t.Error("the partial file was left behind")
+	}
+}
+
+// TestClipboardStreamSenderGivesUpAndCleansUp: copy waits, but not for ever, and a
+// sender that gives up must not leave a slot nobody will ever collect.
+func TestClipboardStreamSenderGivesUpAndCleansUp(t *testing.T) {
+	e := setup(t)
+	slot := clipSlot(t)
+	e.clearSlot(slot)
+
+	cmd := e.cmd("copy", "--stream", "--slot", slot, "-", "--wait", "2s")
+	cmd.Stdin = strings.NewReader("nobody is coming")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the sender should give up when nobody pastes:\n%s", out)
+	}
+	if !strings.Contains(string(out), "nobody pasted") {
+		t.Errorf("the error should say what it waited for:\n%s", out)
+	}
+
+	var after []clipManifest
+	e.runJSON(&after, "clipboard", "list")
+	if _, ok := manifestOf(after, slot); ok {
+		t.Errorf("the abandoned handover left its slot behind: %+v", after)
+	}
+}
+
+// TestClipboardStreamRefusesARemoteSource: a file already on the server has a
+// strictly better path, so streaming it is refused rather than quietly wasteful.
+func TestClipboardStreamRefusesARemoteSource(t *testing.T) {
+	e := setup(t)
+
+	remote := e.remotePath("already.txt")
+	e.mustRun("put", e.writeLocal("already.txt", []byte("on the server")), remote)
+
+	_, stderr, code := e.run("copy", "--stream", "--slot", clipSlot(t), "cb:"+remote)
+	if code == 0 {
+		t.Fatal("streaming something already in CERNBox should be refused")
+	}
+	if !strings.Contains(stderr, "already in CERNBox") {
+		t.Errorf("the error should explain why:\n%s", stderr)
+	}
+}
+
+// waitForSlot blocks until a streaming sender has published its slot.
+func (e *env) waitForSlot(slot string) {
+	e.t.Helper()
+	e.waitFor("the sender to publish the "+slot+" slot", func() bool {
+		out, _, code := e.run("--output", "json", "clipboard", "list")
+		if code != 0 {
+			return false
+		}
+		var listed []clipManifest
+		if json.Unmarshal([]byte(out), &listed) != nil {
+			return false
+		}
+		_, ok := manifestOf(listed, slot)
+		return ok
+	})
+}
+
+// manifestOf finds a slot in a listing.
+func manifestOf(listed []clipManifest, slot string) (clipManifest, bool) {
+	for _, m := range listed {
+		if m.Slot == slot {
+			return m, true
+		}
+	}
+	return clipManifest{}, false
+}
+
 // streamBody is content whose every offset is identifiable, so a piece joined out
 // of order fails on content rather than passing on length.
 func streamBody(n int) string {
@@ -664,7 +844,9 @@ func stagedPathOf(listed []clipManifest, slot, name string) string {
 type clipManifest struct {
 	Version int    `json:"version"`
 	Slot    string `json:"slot"`
-	Origin  struct {
+	// Mode is "stream" for a live handover and absent for a stored copy.
+	Mode   string `json:"mode"`
+	Origin struct {
 		Host string `json:"host"`
 		User string `json:"user"`
 		Dir  string `json:"dir"`

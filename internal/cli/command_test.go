@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
@@ -37,6 +39,16 @@ type testBox struct {
 	// between a read and the write that depends on it — a race no test could
 	// otherwise reach reliably.
 	beforePut func(path string)
+
+	// afterRequest runs once every request has been served, with the lock still
+	// held, so a test can observe the server's state as it changes rather than
+	// only at the end. The live-handover tests use it to watch how much is in
+	// flight at any moment.
+	afterRequest func(*testBox)
+
+	// mu guards everything above. A live handover has two clients talking to one
+	// box at the same time, which is the only way to test it at all.
+	mu sync.Mutex
 
 	// appMethod is the HTTP method the fake application session advertises.
 	appMethod string
@@ -80,6 +92,25 @@ func newTestBox(t *testing.T) *testBox {
 }
 
 func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
+	// The request body is read before the lock is taken, and this is not an
+	// optimisation. One request to this box can be fed by another: pasting a split
+	// entry into CERNBox pipes GETs of the pieces straight into a PUT. A handler
+	// that drained the body while holding the lock would be waiting for bytes that
+	// only a request needing the same lock could produce.
+	if r.Body != nil {
+		buffered, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(buffered))
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	defer func() {
+		if b.afterRequest != nil {
+			b.afterRequest(b)
+		}
+	}()
+
 	b.requests = append(b.requests, r.Method+" "+r.URL.Path)
 
 	switch {
@@ -520,6 +551,14 @@ func (b *testBox) mkdir(p string) {
 	for d := p; d != "/" && d != "."; d = path.Dir(d) {
 		b.dirs[d] = true
 	}
+}
+
+// snapshotFiles copies what the box holds, for a test that wants to look while
+// clients may still be running.
+func (b *testBox) snapshotFiles() map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return maps.Clone(b.files)
 }
 
 // lastPostBody returns the body of the most recent POST the box received.

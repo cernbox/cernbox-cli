@@ -73,6 +73,10 @@ func newCopyCmd(app *App) *cobra.Command {
 	f.StringVar(&opts.name, "name", "", `name to store standard input under (default "stdin")`)
 	f.BoolVar(&opts.verify, "verify", false, "compute and check checksums when staging")
 	f.IntVarP(&opts.jobs, "jobs", "j", 0, "number of files to transfer at once")
+	f.BoolVar(&opts.stream, "stream", false,
+		"hand the file over live: wait for a paste on another machine, then stream to it")
+	f.DurationVar(&opts.wait, "wait", 10*time.Minute,
+		"how long to wait for the other machine, with --stream")
 	return cmd
 }
 
@@ -84,6 +88,10 @@ type copyOptions struct {
 	name      string
 	verify    bool
 	jobs      int
+	// stream hands the source over live instead of leaving a copy on the server.
+	stream bool
+	// wait bounds every step that depends on the other machine.
+	wait time.Duration
 }
 
 // newPasteCmd builds "cernbox paste".
@@ -118,6 +126,8 @@ func newPasteCmd(app *App) *cobra.Command {
 	f.BoolVar(&opts.verify, "verify", false, "compute and check checksums")
 	f.BoolVar(&opts.noArchive, "no-archive", false, "download a directory file by file instead of as one archive")
 	f.IntVarP(&opts.jobs, "jobs", "j", 0, "number of files to transfer at once")
+	f.DurationVar(&opts.wait, "wait", 10*time.Minute,
+		"how long to wait on a sender that is streaming")
 	return cmd
 }
 
@@ -128,6 +138,8 @@ type pasteOptions struct {
 	verify    bool
 	noArchive bool
 	jobs      int
+	// wait bounds how long a live handover will sit waiting for the far end.
+	wait time.Duration
 }
 
 // newClipboardCmd builds the "cernbox clipboard" group, which manages the slots
@@ -201,6 +213,17 @@ func (a *App) clipboardCopy(ctx context.Context, args []string, opts copyOptions
 	sources, err := classifyCopySources(args, opts)
 	if err != nil {
 		return err
+	}
+
+	if opts.stream {
+		// A handover is one source by construction: it is a live pipe between two
+		// machines, and there is nothing sensible for a second one to do while the
+		// first is being read.
+		if len(sources) != 1 {
+			return cberr.Usagef("--stream hands over one thing at a time, and %d were given",
+				len(sources))
+		}
+		return a.streamCopy(ctx, sources[0], opts)
 	}
 
 	root, err := a.clipboardRoot(ctx)
@@ -552,6 +575,21 @@ func (a *App) clipboardPaste(ctx context.Context, args []string, opts pasteOptio
 	if len(args) == 1 {
 		dest = args[0]
 	}
+
+	// A live handover is a different thing from a stored copy: there is a process
+	// on the other side waiting to be told somebody arrived, and nothing to
+	// download until it has been.
+	if m.IsStream() {
+		if dest != "-" {
+			if spec, err := pathspec.ParseTransfer(dest); err == nil && spec.IsRemote() {
+				return cberr.Usagef(
+					"this slot is a live stream from %s, so it can only be received to a local path "+
+						"or to standard output — there is nothing on the server to copy", m.Origin)
+			}
+		}
+		return a.streamPaste(ctx, root, m, dest, dest == "-", opts)
+	}
+
 	if dest == "-" {
 		return a.pasteToStdout(ctx, m)
 	}
