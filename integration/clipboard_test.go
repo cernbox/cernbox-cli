@@ -983,7 +983,6 @@ func TestHandoverRefusesTheCombinationsThatWouldShareTooMuch(t *testing.T) {
 	local := e.writeLocal("a.txt", []byte("x"))
 	for _, args := range [][]string{
 		{"copy", local, "--to", otherUser, "--slot", "build"},
-		{"copy", local, "--to", otherUser, "--stream"},
 		{"paste", "--from", username, "--slot", "build"},
 	} {
 		if _, _, code := e.run(args...); code != 2 {
@@ -1001,5 +1000,123 @@ func TestPasteFromSomebodyWhoSentNothing(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "copy --to") {
 		t.Errorf("the error does not say what the sender has to do: %s", stderr)
+	}
+}
+
+// TestHandoverStreamsLiveToAnotherPerson is the same live handover as between two
+// of your own machines, across two accounts.
+//
+// Only a real server can show this works, because it rests entirely on what a
+// share permits: the recipient has to be able to write an arrival marker into the
+// sender's space and delete each piece as it consumes it, while still being unable
+// to touch anything else. The payload is deliberately several pieces long so the
+// window fills and the sender has to wait for those deletions — if they were
+// refused, this would hang rather than fail.
+func TestHandoverStreamsLiveToAnotherPerson(t *testing.T) {
+	e := setup(t)
+	e.clearHandoverTo(otherUser)
+
+	cfg := e.writeLocal("small-chunk.yaml", []byte("transfer:\n  chunk_size: 64K\n"))
+	body := streamBody(512 << 10) // eight pieces through a window of four
+
+	sender := e.cmd("--config", cfg, "copy", "--stream", "-", "--to", otherUser, "--wait", "60s")
+	sender.Stdin = strings.NewReader(body)
+	var senderLog strings.Builder
+	sender.Stdout = &senderLog
+	sender.Stderr = &senderLog
+	if err := sender.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Process.Kill() }()
+
+	// Long enough that an implementation which simply uploaded everything would
+	// have finished.
+	time.Sleep(3 * time.Second)
+	if sender.ProcessState != nil {
+		t.Fatalf("the sender exited before the recipient pasted:\n%s", senderLog.String())
+	}
+	if !strings.Contains(senderLog.String(), otherUser) {
+		t.Errorf("the sender does not say who it is waiting for:\n%s", senderLog.String())
+	}
+
+	got := e.mustRunAs(e.other(), "--config", cfg, "paste", "--from", username, "--wait", "60s", "-")
+
+	if err := sender.Wait(); err != nil {
+		t.Fatalf("the sender failed: %v\n%s", err, senderLog.String())
+	}
+	if sha256hex([]byte(got)) != sha256hex([]byte(body)) {
+		t.Errorf("the recipient got %d bytes of %d, and not the same ones", len(got), len(body))
+	}
+	if !strings.Contains(senderLog.String(), "Nothing was stored") {
+		t.Errorf("the sender does not report a handover:\n%s", senderLog.String())
+	}
+
+	// Nothing is left: no slot, and no share naming one.
+	var after []clipManifest
+	e.runJSON(&after, "clipboard", "list")
+	if _, ok := manifestOf(after, "to-"+otherUser); ok {
+		t.Errorf("the handover left the slot behind: %+v", after)
+	}
+}
+
+// TestHandoverTakesBackItsSharesWhenItEnds guards a leak that is invisible until
+// somebody looks at their share list: a share made on a path survives the path
+// being deleted, and then names a trashed directory for ever.
+func TestHandoverTakesBackItsSharesWhenItEnds(t *testing.T) {
+	e := setup(t)
+
+	slotPath := homeRoot + "/.cernbox/clipboard/to-" + otherUser
+
+	// The listing of everything you have shared does not show a live share on a
+	// clipboard slot — but it does show what is left of one whose directory has
+	// been deleted, under the mangled name the path now has in the trash. That
+	// makes it exactly the witness for the leak being guarded: a share that
+	// outlives the directory it was made on and names a trashed path for ever.
+	countLeftovers := func() int {
+		var items []struct {
+			Name string `json:"name"`
+		}
+		e.runJSON(&items, "share", "list")
+		n := 0
+		for _, it := range items {
+			if strings.Contains(it.Name, "to-"+otherUser) {
+				n++
+			}
+		}
+		return n
+	}
+
+	before := countLeftovers()
+	e.mustRun("copy", e.writeLocal("theirs.txt", []byte("theirs")), "--to", otherUser)
+
+	// The slot really is shared, which the slot's own permissions do report.
+	var perms []struct {
+		GrantedTo *struct {
+			ID string `json:"id"`
+		} `json:"granted_to"`
+	}
+	e.runJSON(&perms, "share", "list", slotPath)
+	shared := false
+	for _, p := range perms {
+		if p.GrantedTo != nil && p.GrantedTo.ID == otherUser {
+			shared = true
+		}
+	}
+	if !shared {
+		t.Fatalf("the handover did not share the slot with %s: %+v", otherUser, perms)
+	}
+
+	e.mustRun("clipboard", "clear", "to-"+otherUser)
+
+	// Growth is the leak: before this was fixed, every handover added one row here
+	// and they never went away. The count can also fall — the trash these rows name
+	// is emptied by things outside this test — so only an increase is a failure.
+	if after := countLeftovers(); after > before {
+		t.Errorf("clearing the handover left %d share(s) behind naming a deleted slot", after-before)
+	}
+	// And the grant is really gone, not merely hidden: the recipient can no longer
+	// reach the path it was made on.
+	if _, _, code := e.runAs(e.other(), "ls", slotPath); code == 0 {
+		t.Error("the recipient can still read the slot after it was cleared")
 	}
 }

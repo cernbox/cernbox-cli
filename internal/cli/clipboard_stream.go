@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/clipboard"
 	"github.com/cernbox/cernbox-cli/pkg/output"
 )
@@ -74,6 +75,7 @@ func (a *App) streamCopy(ctx context.Context, src copySource, opts copyOptions) 
 
 	m := clipboard.New(opts.slot, time.Now(), opts.ttl, clipboard.LocalOrigin(workingDir()))
 	m.Mode = clipboard.ModeStream
+	m.To = opts.to
 	m.Stream = &clipboard.StreamInfo{ChunkSize: chunk, Window: streamWindow}
 	m.Entries = []clipboard.Entry{{
 		Name:   src.name,
@@ -94,8 +96,16 @@ func (a *App) streamCopy(ctx context.Context, src copySource, opts copyOptions) 
 	// clean up, so the slot is torn down however this ends.
 	defer a.teardownStream(root, opts.slot)
 
-	a.out.Msg("Waiting for '%s' on another computer...", pasteHint(opts.slot))
-	if err := a.waitForReader(ctx, root, opts.slot, opts.wait); err != nil {
+	// The recipient has to be able to see the slot before this blocks on them, and
+	// to write in the pieces directory before they can announce themselves.
+	if opts.to != "" {
+		if err := a.shareStreamHandover(ctx, root, opts.slot, opts.to); err != nil {
+			return err
+		}
+	}
+
+	a.out.Msg("Waiting for %s...", a.streamPeer(ctx, opts))
+	if err := a.waitForReader(ctx, root, m, opts.wait); err != nil {
 		return err
 	}
 	a.out.Msg("Connected. Sending %s...", src.name)
@@ -122,6 +132,31 @@ func (a *App) streamCopy(ctx context.Context, src copySource, opts copyOptions) 
 		return a.out.Object(m)
 	}
 	return nil
+}
+
+// streamPeer names who the sender is waiting for, since "another computer" is
+// wrong when it is another person.
+func (a *App) streamPeer(ctx context.Context, opts copyOptions) string {
+	if opts.to != "" {
+		return fmt.Sprintf("%s to run 'cernbox paste --from %s'", opts.to, a.username(ctx))
+	}
+	return fmt.Sprintf("'%s' on another computer", pasteHint(opts.slot))
+}
+
+// shareStreamHandover gives the recipient what a live handover needs, and no
+// more: the slot to read, and the pieces directory to write in.
+//
+// The two grants are deliberately different. Everything that describes the
+// handover — the manifest, the done marker — stays read-only, so the recipient
+// cannot rewrite what they are being sent. Only the directory that holds the
+// bytes in flight is writable, because the protocol needs them to announce
+// themselves there and to delete each piece as they consume it. That deletion is
+// the flow control: it is what keeps a slot a pipe rather than storage.
+func (a *App) shareStreamHandover(ctx context.Context, root, slot, user string) error {
+	if err := a.shareHandover(ctx, clipboard.SlotDir(root, slot), user, client.RoleViewer); err != nil {
+		return err
+	}
+	return a.shareHandover(ctx, clipboard.StreamDir(root, slot), user, client.RoleEditor)
 }
 
 // openStreamSource opens what is being handed over, and reports its length when
@@ -153,18 +188,23 @@ func (a *App) openStreamSource(src copySource) (io.ReadCloser, int64, error) {
 }
 
 // waitForReader blocks until somebody pastes, or until the wait runs out.
-func (a *App) waitForReader(ctx context.Context, root, slot string, wait time.Duration) error {
+func (a *App) waitForReader(ctx context.Context, root string, m *clipboard.Manifest, wait time.Duration) error {
+	slot := m.Slot
 	deadline := time.Now().Add(wait)
 	for {
-		if _, err := a.client.Stat(ctx, clipboard.ReaderPath(root, slot)); err == nil {
+		if _, err := a.client.Stat(ctx, m.ReaderPath(root)); err == nil {
 			return nil
 		} else if cberr.KindOf(err) != cberr.KindNotFound {
 			return err
 		}
 		if time.Now().After(deadline) {
+			hint := pasteHint(slot)
+			if m.To != "" {
+				hint = "cernbox paste --from " + a.username(ctx)
+			}
 			return cberr.New(cberr.KindOther, "stream", slot,
 				fmt.Sprintf("nobody pasted within %s. Run '%s' on the other computer while "+
-					"this one waits, or use --wait to give it longer.", wait, pasteHint(slot)))
+					"this one waits, or use --wait to give it longer.", wait, hint))
 		}
 		if err := sleepCtx(ctx, streamPoll); err != nil {
 			return err
@@ -213,7 +253,7 @@ func (a *App) awaitWindow(ctx context.Context, root, slot string, wait time.Dura
 		if err != nil {
 			return err
 		}
-		if len(pending) < streamWindow {
+		if pendingChunks(pending) < streamWindow {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -224,6 +264,23 @@ func (a *App) awaitWindow(ctx context.Context, root, slot string, wait time.Dura
 			return err
 		}
 	}
+}
+
+// pendingChunks counts the pieces still in flight, ignoring anything else in the
+// directory.
+//
+// The directory is not only pieces: a handover's arrival marker lives there too,
+// because it is the one place the recipient can write. Counting entries rather
+// than pieces would make the window permanently one short and the drain never
+// finish.
+func pendingChunks(entries []client.ResourceInfo) int {
+	n := 0
+	for _, e := range entries {
+		if _, ok := clipboard.ChunkIndex(e.Name); ok {
+			n++
+		}
+	}
+	return n
 }
 
 // waitForDrain blocks until the receiver has taken everything.
@@ -237,7 +294,7 @@ func (a *App) waitForDrain(ctx context.Context, root, slot string, wait time.Dur
 			}
 			return err
 		}
-		if len(pending) == 0 {
+		if pendingChunks(pending) == 0 {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -260,6 +317,10 @@ func (a *App) waitForDrain(ctx context.Context, root, slot string, wait time.Dur
 func (a *App) teardownStream(root, slot string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// Before the slot, since a share made on a path that has been deleted follows
+	// it into the trash and stays in the user's share list naming it. Both grants
+	// have to go: a live handover shares the pieces directory as well.
+	a.unshareHandover(ctx, root, slot)
 	if _, err := a.removeIfPresent(ctx, clipboard.SlotDir(root, slot)); err != nil {
 		a.out.Warn("could not clean up the %q stream slot: %v", slot, err)
 	}
@@ -283,7 +344,7 @@ func (a *App) streamPaste(ctx context.Context, root string, m *clipboard.Manifes
 
 	// Saying "I am here" is what releases the sender, which has been blocked
 	// since it started.
-	if err := a.putBytes(ctx, clipboard.ReaderPath(root, m.Slot),
+	if err := a.putBytes(ctx, m.ReaderPath(root),
 		[]byte(clipboard.LocalOrigin(workingDir()).String()+"\n")); err != nil {
 		_ = finish(err) // the sink is discarded; this error is the one to report
 		return err

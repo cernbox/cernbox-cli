@@ -416,6 +416,30 @@ func ChunkIndex(name string) (int, bool) {
 // this exists, which is what makes copy wait rather than upload.
 func ReaderPath(root, slot string) string { return path.Join(root, slot, readerName) }
 
+// ScratchReaderPath is the arrival marker for a handover, inside the one
+// directory the recipient can write in.
+func ScratchReaderPath(root, slot string) string {
+	return path.Join(StreamDir(root, slot), readerName)
+}
+
+// ReaderPath is where this manifest's receiver announces itself, which depends
+// on who the receiver is.
+//
+// Another of your own machines writes the marker at the top of the slot. Someone
+// else cannot: a handover shares the slot read-only, and only the pieces
+// directory is writable by them, precisely so that the manifest and everything
+// else stays theirs to read and nothing more. So their marker goes in there,
+// next to the pieces.
+//
+// Both sides read this from the same manifest, so there is no negotiation and
+// nothing to get out of step.
+func (m *Manifest) ReaderPath(root string) string {
+	if m.To != "" {
+		return ScratchReaderPath(root, m.Slot)
+	}
+	return ReaderPath(root, m.Slot)
+}
+
 // DonePath is how the sender says the source is exhausted. Without it the
 // receiver could not tell a pause in a slow stream from the end of it.
 func DonePath(root, slot string) string { return path.Join(root, slot, doneName) }

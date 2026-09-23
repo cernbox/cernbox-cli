@@ -48,12 +48,14 @@ func handoverSlotFor(user string, slotGiven bool) (string, error) {
 	return slot, nil
 }
 
-// shareHandover makes the slot readable by the recipient, and says so only when
-// it had to do something.
+// shareHandover grants the recipient one directory at the given role, and does
+// nothing when they already have it.
 //
-// Read-only is the whole grant. A stored handover needs nothing else: the
-// recipient downloads, and the sender's own 'clipboard clear' is what ends it.
-func (a *App) shareHandover(ctx context.Context, slotDir, user string) error {
+// A stored handover grants viewer and nothing else: the recipient downloads, and
+// the sender's own 'clipboard clear' is what ends it. A live one also grants
+// editor on the pieces directory, which is the only thing the streaming protocol
+// needs the far end to be able to write in.
+func (a *App) shareHandover(ctx context.Context, slotDir, user, role string) error {
 	info, err := a.client.Stat(ctx, slotDir)
 	if err != nil {
 		return err
@@ -76,11 +78,58 @@ func (a *App) shareHandover(ctx context.Context, slotDir, user string) error {
 	}
 
 	_, err = a.client.Share(ctx, info.ID,
-		[]client.Recipient{{ID: user, Type: "user"}}, client.RoleViewer, nil)
+		[]client.Recipient{{ID: user, Type: "user"}}, role, nil)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// unshareHandover takes back the grants a handover made, before the slot they
+// were made on is removed.
+//
+// This has to happen first, and it has to happen at all. A share outlives the
+// path it was made on: the directory goes to the trash and the share follows it
+// there, where it shows up in "share list" for ever as a row naming a recycle-bin
+// path. Twelve handovers made twelve of those before this existed.
+//
+// Failures are warnings rather than errors. The caller is on its way to deleting
+// the slot, and refusing to do that because a share could not be tidied would
+// leave the payload behind as well.
+func (a *App) unshareHandover(ctx context.Context, root, slot string) {
+	user, ok := clipboard.HandoverRecipient(slot)
+	if !ok {
+		return // an ordinary slot: nothing was ever shared
+	}
+	// Both directories. A live handover shares the pieces directory too, and its
+	// grant is the one that outlives everything else if it is forgotten here:
+	// nothing else ever looks at that path again.
+	for _, dir := range []string{
+		clipboard.StreamDir(root, slot),
+		clipboard.SlotDir(root, slot),
+	} {
+		a.revokeAccess(ctx, dir, user)
+	}
+}
+
+// revokeAccess removes one user's permissions on one directory, if it has any.
+func (a *App) revokeAccess(ctx context.Context, dir, user string) {
+	info, err := a.client.Stat(ctx, dir)
+	if err != nil || info.ID == "" {
+		return // already gone, or never there
+	}
+	perms, err := a.client.ListPermissions(ctx, info.ID)
+	if err != nil {
+		return
+	}
+	for _, p := range perms {
+		if p.GrantedTo == nil || !strings.EqualFold(p.GrantedTo.ID, user) {
+			continue
+		}
+		if err := a.client.RemovePermission(ctx, info.ID, p.ID); err != nil {
+			a.out.Warn("could not take back %s's access to %s: %v", user, dir, err)
+		}
+	}
 }
 
 // senderClipboard is the clipboard root of somebody who has handed something
