@@ -48,6 +48,8 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 | OCS `remote_shares` is an empty handler that writes nothing | `ocm received` reads the graph `sharedWithMe` endpoint, filtering on the OCM id prefix |
 | App-token creation is not exposed publicly | `token create` explains where to create one; `list` and `revoke` work normally |
 | Reva's demo app provider advertises no mime types, so nothing can open anything | `open --web` works regardless; the application link needs a real provider such as Collabora |
+| `If-None-Match: *` on PUT is ignored, so a "create only" write silently overwrites | `touch` checks for an existing path before writing, rather than trusting the precondition |
+| Downloading a directory answers 501 | `cat` reports "is a directory", as `cat(1)` does |
 
 **Two-way sync** is a deliberate omission rather than a gap. `sync` is a one-way mirror: genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there", and without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
 
@@ -156,6 +158,15 @@ cernbox cp -r cb:/eos/project/c/cernbox/data ./data
 cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
 cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
 ```
+
+### Unix conventions
+
+The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.
+
+Two places where this CLI is deliberately more cautious than the original, both because the target is remote and a mistake is not local:
+
+- **`touch` never rewrites an existing file.** `touch(1)` would update its timestamp; CERNBox offers no way to do that without rewriting the contents, so an existing path is reported and left alone.
+- **`mv` and `cp` refuse to overwrite** unless given `-f`. The originals overwrite silently.
 
 ## Sharing
 

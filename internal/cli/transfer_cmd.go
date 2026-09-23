@@ -27,6 +27,9 @@ type transferFlags struct {
 func (t *transferFlags) register(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.BoolVarP(&t.recursive, "recursive", "r", false, "copy directories and their contents")
+	// coreutils cp accepts -R too.
+	f.BoolVarP(&t.recursive, "recursive-upper", "R", false, "same as --recursive")
+	_ = f.MarkHidden("recursive-upper")
 	f.BoolVarP(&t.force, "force", "f", false, "overwrite existing destinations")
 	f.BoolVar(&t.dryRun, "dry-run", false, "report what would be transferred without doing it")
 	f.BoolVar(&t.verify, "verify", false, "compute and check checksums")
