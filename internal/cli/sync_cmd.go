@@ -11,6 +11,7 @@ import (
 func newSyncCmd(app *App) *cobra.Command {
 	flags := &transferFlags{}
 	var del, hidden bool
+	var exclude []string
 
 	cmd := &cobra.Command{
 		Use:   "sync SOURCE DEST",
@@ -20,10 +21,13 @@ func newSyncCmd(app *App) *cobra.Command {
 			"the CERNBox desktop client if you need that.\n\n" +
 			"Mark the CERNBox side with cb:, as for cp. Files are compared by size and\n" +
 			"time, so unchanged files are not sent again. Without --delete, sync only\n" +
-			"adds and updates.",
+			"adds and updates.\n\n" +
+			"--dry-run shows what would happen and changes nothing, which is worth\n" +
+			"doing first with --delete.",
 		Example: "  cernbox sync ./data cb:/eos/project/c/cernbox/data\n" +
 			"  cernbox sync cb:/eos/project/c/cernbox/data ./data --delete\n" +
-			"  cernbox sync ./data cb:/eos/project/c/cernbox/data --delete --dry-run",
+			"  cernbox sync ./data cb:/eos/project/c/cernbox/data --delete --dry-run\n" +
+			"  cernbox sync ./src cb:/eos/project/c/cernbox/src --exclude '*.o' --exclude build",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -38,7 +42,7 @@ func newSyncCmd(app *App) *cobra.Command {
 					"so exactly one side must be a CERNBox path")
 			}
 
-			opts := transfer.SyncOptions{Delete: del, IncludeHidden: hidden}
+			opts := transfer.SyncOptions{Delete: del, IncludeHidden: hidden, Exclude: exclude}
 			var localPath string
 			var remoteSpec pathspec.Spec
 			if src.IsLocal() {
@@ -88,5 +92,7 @@ func newSyncCmd(app *App) *cobra.Command {
 	flags.register(cmd)
 	cmd.Flags().BoolVar(&del, "delete", false, "remove destination entries the source does not have")
 	cmd.Flags().BoolVar(&hidden, "hidden", false, "include entries whose name starts with a dot")
+	cmd.Flags().StringSliceVar(&exclude, "exclude", nil,
+		"leave out entries matching this pattern, such as '*.o' or build (repeatable)")
 	return cmd
 }

@@ -39,7 +39,7 @@ var coveredCommands = map[string]string{
 	"cp":      "TestServerSideCopy, TestCpRefusesAmbiguousPaths",
 	"get":     "TestPutAndGetRoundTrip, TestRecursiveUploadAndDownload",
 	"put":     "TestPutAndGetRoundTrip, TestLargeFileUsesResumableUpload",
-	"sync":    "TestSyncPushAndPull, TestSyncDelete",
+	"sync":    "TestSyncPushAndPull, TestSyncDelete, TestSyncDryRunChangesNothing, TestSyncExcludeIsInvisibleToBothSides",
 	"archive": "TestArchiveDownloadsATreeAsOneFile, TestArchiveCanProduceAZip, TestArchiveWritesToAPipe",
 
 	// The cross-machine clipboard.

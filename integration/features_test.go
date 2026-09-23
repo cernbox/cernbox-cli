@@ -190,6 +190,66 @@ func TestSyncDelete(t *testing.T) {
 	}
 }
 
+func TestSyncDryRunChangesNothing(t *testing.T) {
+	e := setup(t)
+	remote := e.remotePath("mirror")
+
+	e.writeLocal("tree/keep.txt", []byte("keep"))
+	e.writeLocal("tree/drop.txt", []byte("drop"))
+	e.mustRun("sync", e.localPath("tree"), "cb:"+remote)
+
+	if err := os.Remove(e.localPath("tree/drop.txt")); err != nil {
+		t.Fatal(err)
+	}
+	e.writeLocal("tree/new.txt", []byte("new"))
+
+	// The plan is reported in full, and nothing happens. This is the rehearsal
+	// worth doing before a --delete run against a path typed by hand.
+	_, stderr, code := e.run("sync", e.localPath("tree"), "cb:"+remote, "--delete", "--dry-run")
+	if code != 0 {
+		t.Fatalf("dry run exited %d: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "Would mirror") {
+		t.Errorf("a dry run should say it is one:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "1 created") || !strings.Contains(stderr, "1 deleted") {
+		t.Errorf("the dry run did not report the plan:\n%s", stderr)
+	}
+	if _, _, code := e.run("stat", remote+"/drop.txt"); code != 0 {
+		t.Error("the dry run deleted a file")
+	}
+	if _, _, code := e.run("stat", remote+"/new.txt"); code != cberr.ExitNotFound {
+		t.Error("the dry run uploaded a file")
+	}
+}
+
+func TestSyncExcludeIsInvisibleToBothSides(t *testing.T) {
+	e := setup(t)
+	remote := e.remotePath("mirror")
+
+	e.writeLocal("tree/main.c", []byte("source"))
+	e.writeLocal("tree/main.o", []byte("object"))
+	e.writeLocal("tree/build/app", []byte("binary"))
+	e.mustRun("sync", e.localPath("tree"), "cb:"+remote, "--exclude", "*.o", "--exclude", "build")
+
+	if _, _, code := e.run("stat", remote+"/main.c"); code != 0 {
+		t.Error("the unexcluded file was not synced")
+	}
+	for _, rel := range []string{"/main.o", "/build"} {
+		if _, _, code := e.run("stat", remote+rel); code != cberr.ExitNotFound {
+			t.Errorf("%s was synced despite being excluded", rel)
+		}
+	}
+
+	// An excluded entry on the destination is protected from --delete: it is not
+	// "missing from the source", it is outside the mirror altogether.
+	e.mustRun("put", e.writeLocal("theirs.o", []byte("not mine")), remote+"/theirs.o")
+	e.mustRun("sync", e.localPath("tree"), "cb:"+remote, "--delete", "--exclude", "*.o", "--exclude", "build")
+	if _, _, code := e.run("stat", remote+"/theirs.o"); code != 0 {
+		t.Error("--delete removed an excluded file")
+	}
+}
+
 // ── open ─────────────────────────────────────────────────────────────────────
 
 func TestOpenWebLink(t *testing.T) {

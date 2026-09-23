@@ -40,6 +40,45 @@ type SyncOptions struct {
 	Delete bool
 	// IncludeHidden syncs entries whose name begins with a dot.
 	IncludeHidden bool
+	// Exclude holds glob patterns for entries to leave out of the mirror
+	// altogether. See Excluded for how a pattern is matched.
+	Exclude []string
+}
+
+// Excluded reports whether rel, a slash-separated path relative to the sync
+// root, matches any of the exclude patterns.
+//
+// A pattern containing a slash is matched against the whole relative path, and
+// one without against each component, so "*.tmp" excludes a temporary file
+// wherever it appears while "build/*" excludes only what is directly under a
+// top-level build directory. Matching a component also excludes everything
+// below it: a pattern that names a directory means the directory.
+func (o SyncOptions) Excluded(rel string) bool {
+	for _, pattern := range o.Exclude {
+		if pattern == "" {
+			continue
+		}
+		if strings.Contains(pattern, "/") {
+			if ok, err := path.Match(pattern, rel); err == nil && ok {
+				return true
+			}
+			continue
+		}
+		for part := range strings.SplitSeq(rel, "/") {
+			if ok, err := path.Match(pattern, part); err == nil && ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// skip reports whether an entry is not part of the mirror at all, in either
+// direction. An excluded entry is invisible rather than merely not copied: were
+// it visible on the destination side, --delete would remove it for not being in
+// the source, which is the opposite of what excluding something means.
+func (o SyncOptions) skip(rel string) bool {
+	return (!o.IncludeHidden && hasHiddenComponent(rel)) || o.Excluded(rel)
 }
 
 // SyncStats reports what a mirror did.
@@ -310,7 +349,7 @@ func (e *Engine) scanLocal(root string, opts SyncOptions) (map[string]syncEntry,
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if !opts.IncludeHidden && hasHiddenComponent(rel) {
+		if opts.skip(rel) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -361,7 +400,7 @@ func (e *Engine) scanRemote(ctx context.Context, root string, opts SyncOptions) 
 		if rel == "" {
 			return nil
 		}
-		if !opts.IncludeHidden && hasHiddenComponent(rel) {
+		if opts.skip(rel) {
 			return nil
 		}
 		out[rel] = syncEntry{rel: rel, isDir: item.IsDir, size: item.Size, modified: item.Modified}
