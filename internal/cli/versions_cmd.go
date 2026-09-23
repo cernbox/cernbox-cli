@@ -15,10 +15,9 @@ func newVersionsCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "versions",
 		Aliases: []string{"version-history"},
-		Short:   "List, restore and download previous versions of a file",
-		Long: "Work with a file's version history.\n\n" +
-			"Versions are addressed by the file's identity rather than its path, so\n" +
-			"history survives a rename.",
+		Short:   "List, restore and download earlier versions of a file",
+		Long: "Work with a file's earlier versions.\n\n" +
+			"Versions follow the file itself, so the history survives a rename.",
 	}
 	cmd.AddCommand(newVersionsListCmd(app), newVersionsRestoreCmd(app), newVersionsDownloadCmd(app))
 	return cmd
@@ -27,7 +26,7 @@ func newVersionsCmd(app *App) *cobra.Command {
 func newVersionsListCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:     "list PATH",
-		Short:   "List the previous versions of a file",
+		Short:   "List the earlier versions of a file",
 		Example: "  cernbox versions list /eos/user/g/gdelmont/report.pdf",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -47,7 +46,7 @@ func newVersionsListCmd(app *App) *cobra.Command {
 				return err
 			}
 			if len(versions) == 0 {
-				app.out.Msg("%s has no previous versions.", info.Path)
+				app.out.Msg("%s has no earlier versions.", info.Path)
 			}
 
 			now := time.Now()
@@ -65,10 +64,10 @@ func newVersionsListCmd(app *App) *cobra.Command {
 func newVersionsRestoreCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "restore PATH VERSION",
-		Short: "Make a previous version current",
-		Long: "Restore a previous version.\n\n" +
-			"This is not destructive: the version being replaced becomes a version in\n" +
-			"its own right, so a restore can itself be undone.",
+		Short: "Make an earlier version the current one",
+		Long: "Make an earlier version the current one.\n\n" +
+			"Nothing is lost. The version you replace becomes a version too, so you can\n" +
+			"undo it.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -92,10 +91,10 @@ func newVersionsDownloadCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "download PATH VERSION",
-		Short: "Download a previous version without restoring it",
-		Long: "Download a previous version to a local file, leaving the current version\n" +
-			"untouched. With no --output the file is written to the current directory\n" +
-			"as NAME.VERSION.",
+		Short: "Download an earlier version without restoring it",
+		Long: "Download an earlier version and leave the current one alone.\n\n" +
+			"With no --output the file is written to the current directory as\n" +
+			"NAME.VERSION.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)

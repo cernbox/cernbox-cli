@@ -139,7 +139,7 @@ func TestClipboardPasteInsideCERNBoxMovesNoData(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("paste exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stderr, "no data crossed the wire") {
+	if !strings.Contains(stderr, "nothing was transferred") {
 		t.Errorf("a paste inside CERNBox should report itself as server-side:\n%s", stderr)
 	}
 
@@ -407,7 +407,7 @@ func TestClipboardHandsOverLiveBetweenTwoProcesses(t *testing.T) {
 	if sha256hex([]byte(got)) != sha256hex([]byte(body)) {
 		t.Error("the handover delivered the right length but the wrong bytes")
 	}
-	if !strings.Contains(senderLog.String(), "Receiver connected") {
+	if !strings.Contains(senderLog.String(), "Connected.") {
 		t.Errorf("the sender should report the receiver arriving:\n%s", senderLog.String())
 	}
 

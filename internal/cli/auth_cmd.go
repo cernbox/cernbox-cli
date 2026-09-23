@@ -13,11 +13,11 @@ import (
 func newLoginCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "login",
-		Short: "Authenticate to CERNBox",
-		Long: "Authenticate to CERNBox and cache the session.\n\n" +
-			"You rarely need this. On lxplus the CLI uses your Kerberos ticket\n" +
-			"automatically; run login only to pick a specific method with --method,\n" +
-			"or to sign in from a machine with no ticket.",
+		Short: "Sign in to CERNBox",
+		Long: "Sign in and remember the session.\n\n" +
+			"You usually do not need this. The CLI signs you in on its own when it\n" +
+			"can. Use login to pick a method with --method, or on a computer where\n" +
+			"that does not work.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -80,9 +80,9 @@ func newLogoutCmd(app *App) *cobra.Command {
 func newStatusCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show the endpoint, credentials and server capabilities",
-		Long: "Show which credential the CLI would use, what the server supports, and\n" +
-			"where the token cache lives. Run this first when something is not working.",
+		Short: "Show how you are signed in and what the server supports",
+		Long: "Show the server, how you are signed in, and where the session is kept.\n" +
+			"Run this first when something does not work.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -158,7 +158,7 @@ type statusResult struct {
 func newWhoamiCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "whoami",
-		Short: "Show the authenticated identity",
+		Short: "Show who you are signed in as",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)

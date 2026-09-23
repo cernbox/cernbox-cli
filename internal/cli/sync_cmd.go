@@ -14,16 +14,13 @@ func newSyncCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "sync SOURCE DEST",
-		Short: "Mirror a directory onto CERNBox, or CERNBox onto a directory",
-		Long: "Make one directory look like another.\n\n" +
-			"This is a one-way mirror, not two-way synchronisation. Real bidirectional\n" +
-			"sync needs per-file state to tell \"changed here\" from \"deleted there\";\n" +
-			"without it the two are indistinguishable, which is how a sync tool deletes\n" +
-			"data it should have uploaded. If you want that, use the CERNBox desktop\n" +
-			"client, which keeps the state this command deliberately does not.\n\n" +
-			"The CERNBox side is marked with cb:, as it is for cp. Files are compared\n" +
-			"by size and modification time, so nothing is re-sent that has not changed.\n" +
-			"Without --delete, sync only adds and updates.",
+		Short: "Make one directory match another",
+		Long: "Copy a directory so the destination matches the source.\n\n" +
+			"This is one way only. It cannot merge changes made on both sides, so use\n" +
+			"the CERNBox desktop client if you need that.\n\n" +
+			"Mark the CERNBox side with cb:, as for cp. Files are compared by size and\n" +
+			"time, so unchanged files are not sent again. Without --delete, sync only\n" +
+			"adds and updates.",
 		Example: "  cernbox sync ./data cb:/eos/project/c/cernbox/data\n" +
 			"  cernbox sync cb:/eos/project/c/cernbox/data ./data --delete\n" +
 			"  cernbox sync ./data cb:/eos/project/c/cernbox/data --delete --dry-run",
@@ -37,7 +34,7 @@ func newSyncCmd(app *App) *cobra.Command {
 				return cberr.Usagef("%v", err)
 			}
 			if src.IsRemote() && dst.IsRemote() {
-				return cberr.Usagef("sync mirrors between the local filesystem and CERNBox, " +
+				return cberr.Usagef("sync copies between your computer and CERNBox, " +
 					"so exactly one side must be a CERNBox path")
 			}
 
@@ -65,7 +62,7 @@ func newSyncCmd(app *App) *cobra.Command {
 			// --delete can remove a lot of data on the strength of one
 			// mistyped path, so say what is about to happen before doing it.
 			if del && !flags.dryRun {
-				app.out.Msg("Mirroring with --delete: entries missing from the source will be removed from the destination.")
+				app.out.Msg("--delete: files not in the source will be deleted from the destination.")
 			}
 
 			stats, err := engine.Sync(ctx, localPath, remotePath, opts)

@@ -375,7 +375,7 @@ func TestDeviceFlowWithoutServerSupport(t *testing.T) {
 
 	p := &DeviceProvider{SSO: ssoConfig(idp), HTTPClient: idp.ts.Client(), Interactive: true}
 	_, err := p.Token(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "does not support the device flow") {
+	if err == nil || !strings.Contains(err.Error(), "does not support signing in with a browser code") {
 		t.Errorf("got %v, want a clear explanation and an alternative", err)
 	}
 }

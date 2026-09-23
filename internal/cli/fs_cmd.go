@@ -24,9 +24,9 @@ func newLsCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ls [PATH...]",
 		Short: "List a directory",
-		Long: "List a CERNBox directory.\n\n" +
-			"With no argument, lists your home space. Paths are CERNBox paths:\n" +
-			"/eos/user/g/gdelmont, home:Documents, or project/cernbox:data.",
+		Long: "List a directory. With no path, lists your home space.\n\n" +
+			"Works like ls: no header, columns on a terminal, one name per line when\n" +
+			"the output is piped.",
 		Example: "  cernbox ls /eos/user/g/gdelmont\n" +
 			"  cernbox ls -l home:Documents\n" +
 			"  cernbox ls --output json /eos/project/c/cernbox | jq '.[].name'",
@@ -423,10 +423,9 @@ func newFindCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "find PATH",
 		Short: "Search for files by name",
-		Long: "Search a CERNBox subtree by name.\n\n" +
-			"The search is asked of the server first, which answers in one round trip.\n" +
-			"Servers that do not implement it — reva's handler is currently a stub —\n" +
-			"get a client-side walk instead, which is slower but works.",
+		Long: "Search a directory and everything under it.\n\n" +
+			"Pass --name with the text to look for. The server searches when it can,\n" +
+			"otherwise the CLI walks the tree, which is slower but always works.",
 		Example: "  cernbox find /eos/user/g/gdelmont --name report",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -442,7 +441,7 @@ func newFindCmd(app *App) *cobra.Command {
 			}
 			results, err := app.client.Search(ctx, p, client.SearchOptions{Pattern: pattern, Limit: limit})
 			if errors.Is(err, client.ErrSearchUnsupported) {
-				app.out.Msg("This server cannot search, walking the tree instead...")
+				app.out.Msg("The server cannot search. Looking through the files instead...")
 				results, err = app.walkSearch(ctx, p, pattern, limit)
 			}
 			if err != nil {
@@ -495,12 +494,10 @@ func newDuCmd(app *App) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "du [PATH...]",
-		Short: "Show space used by a directory",
-		Long: "Show space used, in the shape du(1) uses: a size, a tab, and a path.\n\n" +
-			"Only the total for each argument is reported unless --max-depth asks for\n" +
-			"more. That is du -s rather than du's own default, because descending a\n" +
-			"whole tree here means one request per directory against the server, and\n" +
-			"the totals CERNBox reports for a directory are already recursive.",
+		Short: "Show how much space a directory uses",
+		Long: "Show space used: a size, a tab, and a path, like du.\n\n" +
+			"Only the total for each path is shown. Pass -d to also list the\n" +
+			"directories below it.",
 		Example: "  cernbox du -h /eos/user/g/gdelmont\n" +
 			"  cernbox du -h -d 1 /eos/user/g/gdelmont",
 		Args: cobra.ArbitraryArgs,
@@ -694,10 +691,8 @@ func newTouchCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "touch PATH...",
 		Short: "Create an empty file",
-		Long: "Create an empty file, leaving an existing one alone.\n\n" +
-			"touch(1) would update the timestamp of a file that already exists.\n" +
-			"CERNBox offers no way to do that without rewriting the file, so an\n" +
-			"existing path is left untouched and reported rather than emptied.",
+		Long: "Create an empty file. A file that already exists is left alone, never\n" +
+			"emptied.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -740,9 +735,7 @@ func newRmCmd(app *App) *cobra.Command {
 		Use:   "rm PATH...",
 		Short: "Delete a file or directory",
 		Long: "Delete files or directories.\n\n" +
-			"Deleting a directory requires -r. WebDAV DELETE on a directory is always\n" +
-			"recursive, so the flag is the only thing standing between a typo and the\n" +
-			"whole subtree.",
+			"Deleting a directory needs -r, which also deletes everything inside it.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -787,8 +780,8 @@ func newMvCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mv SOURCE DEST",
 		Short: "Move or rename a file or directory",
-		Long: "Move or rename within CERNBox. The data never leaves the server, so this\n" +
-			"is fast regardless of size.",
+		Long: "Move or rename inside CERNBox. The file does not travel through your\n" +
+			"computer, so it is fast whatever the size.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)

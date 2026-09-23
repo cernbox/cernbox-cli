@@ -94,11 +94,11 @@ func (a *App) streamCopy(ctx context.Context, src copySource, opts copyOptions) 
 	// clean up, so the slot is torn down however this ends.
 	defer a.teardownStream(root, opts.slot)
 
-	a.out.Msg("Waiting for '%s' on another machine...", pasteHint(opts.slot))
+	a.out.Msg("Waiting for '%s' on another computer...", pasteHint(opts.slot))
 	if err := a.waitForReader(ctx, root, opts.slot, opts.wait); err != nil {
 		return err
 	}
-	a.out.Msg("Receiver connected, streaming %s...", src.name)
+	a.out.Msg("Connected. Sending %s...", src.name)
 
 	sent, parts, err := a.feedStream(ctx, root, opts.slot, body, chunk, opts.wait)
 	if err != nil {
@@ -117,7 +117,7 @@ func (a *App) streamCopy(ctx context.Context, src copySource, opts copyOptions) 
 		return err
 	}
 
-	a.out.Msg("Streamed %s to the receiver in %d pieces, storing nothing", proseSize(sent), parts)
+	a.out.Msg("Sent %s. Nothing was stored in CERNBox.", proseSize(sent))
 	if a.out.Format() == output.FormatJSON {
 		return a.out.Object(m)
 	}
@@ -132,8 +132,8 @@ func (a *App) openStreamSource(src copySource) (io.ReadCloser, int64, error) {
 	}
 	if src.spec.IsRemote() {
 		return nil, 0, cberr.Usagef(
-			"%s is already in CERNBox, so there is nothing to stream: copy it without --stream and "+
-				"pasting it is a server-side copy that moves no data at all", src.spec.Raw)
+			"%s is already in CERNBox, so there is nothing to send. Copy it without "+
+				"--stream: pasting it then costs no transfer at all.", src.spec.Raw)
 	}
 
 	info, err := os.Stat(src.spec.Path)
@@ -163,8 +163,8 @@ func (a *App) waitForReader(ctx context.Context, root, slot string, wait time.Du
 		}
 		if time.Now().After(deadline) {
 			return cberr.New(cberr.KindOther, "stream", slot,
-				fmt.Sprintf("nobody pasted within %s: run '%s' on the other machine while this one waits, "+
-					"or use --wait to give it longer", wait, pasteHint(slot)))
+				fmt.Sprintf("nobody pasted within %s. Run '%s' on the other computer while "+
+					"this one waits, or use --wait to give it longer.", wait, pasteHint(slot)))
 		}
 		if err := sleepCtx(ctx, streamPoll); err != nil {
 			return err
@@ -218,7 +218,7 @@ func (a *App) awaitWindow(ctx context.Context, root, slot string, wait time.Dura
 		}
 		if time.Now().After(deadline) {
 			return cberr.New(cberr.KindOther, "stream", slot,
-				fmt.Sprintf("the receiver stopped reading for %s: it may have been interrupted", wait))
+				fmt.Sprintf("the other computer stopped reading for %s. It may have been interrupted.", wait))
 		}
 		if err := sleepCtx(ctx, streamPoll); err != nil {
 			return err
@@ -242,7 +242,7 @@ func (a *App) waitForDrain(ctx context.Context, root, slot string, wait time.Dur
 		}
 		if time.Now().After(deadline) {
 			return cberr.New(cberr.KindOther, "stream", slot,
-				fmt.Sprintf("the receiver did not finish reading within %s", wait))
+				fmt.Sprintf("the other computer did not finish reading within %s", wait))
 		}
 		if err := sleepCtx(ctx, streamPoll); err != nil {
 			return err
@@ -272,7 +272,7 @@ func (a *App) teardownStream(root, slot string) {
 func (a *App) streamPaste(ctx context.Context, root string, m *clipboard.Manifest, dest string, toStdout bool, opts pasteOptions) error {
 	if len(m.Entries) != 1 {
 		return cberr.New(cberr.KindOther, "paste", m.Slot,
-			"this stream is malformed: it names no single item")
+			"this clipboard slot is damaged: it does not name a single file")
 	}
 	e := m.Entries[0]
 
@@ -398,13 +398,13 @@ func (a *App) drainStream(ctx context.Context, root, slot string, out io.Writer,
 		if done != nil && next >= done.Parts {
 			if done.Size != received {
 				return received, cberr.New(cberr.KindOther, "receive", slot,
-					fmt.Sprintf("the sender sent %d bytes but %d arrived", done.Size, received))
+					fmt.Sprintf("%d bytes were sent but %d arrived", done.Size, received))
 			}
 			return received, nil
 		}
 		if time.Now().After(deadline) {
 			return received, cberr.New(cberr.KindOther, "receive", slot,
-				fmt.Sprintf("nothing arrived for %s: the sender may have been interrupted", wait))
+				fmt.Sprintf("nothing arrived for %s. The other computer may have been interrupted.", wait))
 		}
 		if err := sleepCtx(ctx, streamPoll); err != nil {
 			return received, err

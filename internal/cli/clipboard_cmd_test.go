@@ -177,7 +177,7 @@ func TestCopyDetectsAConcurrentCopyToTheSameSlot(t *testing.T) {
 	if err == nil {
 		t.Fatal("a concurrent copy to the same slot should be reported, not silently overwritten")
 	}
-	if !strings.Contains(err.Error(), "another machine") {
+	if !strings.Contains(err.Error(), "another computer") {
 		t.Errorf("the error should say what happened: %v", err)
 	}
 	if got := box.files[manifestPath(clipboard.DefaultSlot)]; got != before {
@@ -384,7 +384,7 @@ func TestPasteLeavesTheClipboardIntact(t *testing.T) {
 	second := t.TempDir()
 	if _, stderr, err := run(t, box, "paste", first); err != nil {
 		t.Fatal(err)
-	} else if !strings.Contains(stderr, "still holds") {
+	} else if !strings.Contains(stderr, "Still on the clipboard") {
 		t.Errorf("paste should say the clipboard survives:\n%s", stderr)
 	}
 	if _, _, err := run(t, box, "paste", second); err != nil {
@@ -427,7 +427,7 @@ func TestPasteToARemotePathMovesNoData(t *testing.T) {
 	if got := box.files[clipHome+"/incoming/notes.txt"]; got != "already in cernbox" {
 		t.Errorf("the destination holds %q", got)
 	}
-	if !strings.Contains(stderr, "no data crossed the wire") {
+	if !strings.Contains(stderr, "nothing was transferred") {
 		t.Errorf("paste should say the transfer was server-side:\n%s", stderr)
 	}
 }
@@ -913,7 +913,7 @@ func TestClipboardClearIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clearing an empty slot is not an error: %v", err)
 	}
-	if !strings.Contains(stderr, "Nothing") {
+	if !strings.Contains(stderr, "already empty") {
 		t.Errorf("it should say there was nothing there:\n%s", stderr)
 	}
 }
