@@ -14,7 +14,7 @@ func TestColumniseFillsDownThenAcross(t *testing.T) {
 	names := []string{"a", "b", "c", "d", "e", "f"}
 
 	// Width for three columns of one character plus two-space gaps.
-	lines := columnise(names, 9, false)
+	lines := columnise(names, names, 9, false)
 	if len(lines) != 2 {
 		t.Fatalf("got %d lines, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
@@ -31,8 +31,8 @@ func TestColumniseFillsDownThenAcross(t *testing.T) {
 func TestColumniseOnePerLineWhenPiped(t *testing.T) {
 	names := []string{"a", "b", "c"}
 	for _, lines := range [][]string{
-		columnise(names, 0, false),
-		columnise(names, 200, true),
+		columnise(names, names, 0, false),
+		columnise(names, names, 200, true),
 	} {
 		if len(lines) != len(names) {
 			t.Fatalf("got %d lines, want one per name: %v", len(lines), lines)
@@ -48,7 +48,8 @@ func TestColumniseOnePerLineWhenPiped(t *testing.T) {
 // TestColumniseNoTrailingWhitespace: trailing padding is invisible but ends up
 // in anything that captures the output.
 func TestColumniseNoTrailingWhitespace(t *testing.T) {
-	for _, l := range columnise([]string{"short", "muchlongername", "mid"}, 40, false) {
+	plain := []string{"short", "muchlongername", "mid"}
+	for _, l := range columnise(plain, plain, 40, false) {
 		if l != strings.TrimRight(l, " ") {
 			t.Errorf("line %q has trailing whitespace", l)
 		}
@@ -112,4 +113,45 @@ func TestSortEntries(t *testing.T) {
 			t.Errorf("sortEntries(%+v) = %s, want %s", tt.opts, got, tt.want)
 		}
 	}
+}
+
+// TestColumniseAlignsDespiteColour is the trap this arrangement exists to
+// avoid: escape sequences make a name longer as a Go string while occupying no
+// width on screen, so padding computed from the decorated name shears every
+// column after the first.
+func TestColumniseAlignsDespiteColour(t *testing.T) {
+	plain := []string{"aa", "b", "cc", "d"}
+	shown := []string{"\033[01;34maa\033[0m", "b", "\033[01;31mcc\033[0m", "d"}
+
+	lines := columnise(plain, shown, 10, false)
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2: %q", len(lines), lines)
+	}
+
+	// Strip the escapes and the layout must be exactly what the plain names
+	// would have produced.
+	want := columnise(plain, plain, 10, false)
+	for i, l := range lines {
+		if got := stripANSI(l); got != want[i] {
+			t.Errorf("line %d with colour = %q, want the same layout as %q", i, got, want[i])
+		}
+	}
+}
+
+// stripANSI removes SGR sequences, so a coloured line can be compared with the
+// plain layout it must match.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '\033' {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			i++ // skip the m
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
 }

@@ -97,25 +97,31 @@ cernbox ls -l /eos/user/g/gdelmont     # long listing
 cernbox ls -lt                          # newest first
 cernbox ls -lSr                         # smallest first
 cernbox ls -aF                          # include dotfiles, mark directories
+cernbox ls -lh                          # human-readable sizes
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `-l` | long listing: rights, size, modification time |
+| `-h` | human-readable sizes (`1.2K`) instead of bytes |
 | `-a` | include entries beginning with a dot |
 | `-R` | recurse into subdirectories |
 | `-1` | one entry per line, even on a terminal |
 | `-t` `-S` `-r` | sort by time, by size, or reverse the order |
 | `-F` | append `/` to directory names |
-| `--bytes` | exact byte counts instead of `1.2K` |
+| `--sort` | `name`, `time` or `size` |
 
-Two deliberate differences from `ls`. Sizes are human-readable by default, because `-h` is not available: cobra reserves it for `--help`, and claiming it panics at startup. And the long listing shows **one** rights column rather than owner/group/other:
+`-h` means human-readable, as in `ls` and `du`, so on those two commands help is `--help` only. Every other command keeps `-h` for help.
+
+Colours come from **`LS_COLORS`**, the same variable `ls` reads, so whatever you configured with `dircolors` applies here too — directories, and per-extension rules like `*.pdf`. With the variable unset, the built-in defaults `ls` uses apply. Colour is emitted only to a terminal: piping gives clean text, as `ls` does. The BSD `LSCOLORS` variable is a different syntax and is deliberately not read.
+
+One deliberate difference from `ls`: the long listing shows **one** rights column rather than owner/group/other:
 
 ```
-total 2.9K
--rw-   3B Sep 23 08:58 notes.txt
--rw- 2.9K Sep 23 08:58 report.pdf
-drwx   0B Sep 23 08:58 sub
+total 3003
+-rw-    3 Sep 23 08:58 notes.txt
+-rw- 3000 Sep 23 08:58 report.pdf
+drwx    0 Sep 23 08:58 sub
 ```
 
 CERNBox reports the rights *you* have on an entry, and has no owner/group/other split to show — nor a POSIX mode, an owner, or a link count. Those columns are absent rather than invented. `????` in place of the rights means the server reported none, which is not the same as reporting none granted.

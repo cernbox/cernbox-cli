@@ -136,13 +136,37 @@ func TestLsSortFlags(t *testing.T) {
 	}
 }
 
-func TestLsBytesShowsExactSizes(t *testing.T) {
+// TestLsSizesMatchLs: bytes by default, 1.2K under -h — the way ls does it,
+// so a habit formed on ls carries over.
+func TestLsSizesMatchLs(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("a.txt", []byte("12345")), e.remotePath("a.txt"))
+	// 2048 bytes is 2.0K, so the two renderings cannot be confused.
+	e.mustRun("put", e.writeLocal("a.txt", make([]byte, 2048)), e.remotePath("a.txt"))
 
-	out := e.mustRun("ls", "-l", "--bytes", e.remote)
-	if !strings.Contains(out, "5") {
-		t.Errorf("--bytes should print the exact count:\n%s", out)
+	plain := e.mustRun("ls", "-l", e.remote)
+	if !strings.Contains(plain, "2048") {
+		t.Errorf("a long listing should print exact bytes by default:\n%s", plain)
+	}
+
+	human := e.mustRun("ls", "-lh", e.remote)
+	if !strings.Contains(human, "2.0K") {
+		t.Errorf("-h should print a human-readable size:\n%s", human)
+	}
+	if strings.Contains(human, "2048") {
+		t.Errorf("-h should replace the byte count, not add to it:\n%s", human)
+	}
+}
+
+// TestLsHelpIsStillReachable: -h is human-readable on ls, so --help has to
+// carry the weight, and -h must not be swallowed as an unknown flag.
+func TestLsHelpIsStillReachable(t *testing.T) {
+	e := setup(t)
+	out, _, code := e.run("ls", "--help")
+	if code != 0 {
+		t.Fatalf("ls --help exited %d", code)
+	}
+	if !strings.Contains(out, "human-readable") {
+		t.Errorf("ls --help should document the flags:\n%s", out)
 	}
 }
 
