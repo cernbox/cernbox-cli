@@ -27,7 +27,7 @@ RPM and deb packages are built by the release pipeline and attached to each rele
 | Identity | `login` `logout` `status` `whoami` |
 | Browse | `ls` `stat` `find` `du` `cat` |
 | Namespace | `mkdir` `touch` `rm` `mv` |
-| Transfer | `cp` `get` `put` `sync` |
+| Transfer | `cp` `get` `put` `sync` `archive` |
 | Clipboard | `copy` `paste` `clipboard list/clear` |
 | Sharing | `share create/list/update/remove/received` |
 | Links | `link create/list/remove/password` |
@@ -160,6 +160,20 @@ cernbox cp -r cb:/eos/project/c/cernbox/data ./data
 cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
 cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
 ```
+
+### Downloading a directory as one file
+
+`archive` asks the server to pack a tree and streams the result out. The walk happens server-side, so a directory of many small files costs one request instead of one per file.
+
+```bash
+cernbox archive /eos/project/c/cernbox/data          # writes ./data.tar
+cernbox archive --format zip --to notes.zip Documents
+cernbox archive --to - Documents | tar -x -C /scratch # straight into another program
+```
+
+With no `--to` the archive lands in the working directory, named after what you asked for; several paths land in `archive.tar`. An existing file is never overwritten without `--force`. A server that cannot build archives, or cannot build the format you asked for, says so before anything is downloaded — the formats come from the capabilities it advertises.
+
+`get -r` already uses the archiver behind the scenes and unpacks as it goes. `archive` is for when you want the archive itself — to keep, to move, or to hand to another program.
 
 ### Unix conventions
 

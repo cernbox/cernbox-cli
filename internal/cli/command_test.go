@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -52,6 +54,12 @@ type testBox struct {
 
 	// appMethod is the HTTP method the fake application session advertises.
 	appMethod string
+
+	// archiver turns on the archiver service. It is off by default because the
+	// transfer engine prefers an archiver whenever one is advertised, and every
+	// test of a recursive download would otherwise be testing a different code
+	// path than it was written for.
+	archiver bool
 
 	acceptedInvite string
 	removedContact string
@@ -115,12 +123,20 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/ocs/v1.php/cloud/capabilities"):
-		fmt.Fprint(w, `{"ocs":{"data":{"version":{"string":"10.0.11"},"capabilities":{
+		archivers := ""
+		if b.archiver {
+			archivers = `,"archivers":[{"enabled":true,"formats":["tar","zip"],` +
+				`"archiver_url":"/archiver","max_num_files":"1000","max_size":"1073741824"}]`
+		}
+		fmt.Fprintf(w, `{"ocs":{"data":{"version":{"string":"10.0.11"},"capabilities":{
 		  "core":{"webdav-root":"remote.php/webdav","status":{"productname":"reva","versionstring":"10.0.11"}},
 		  "checksums":{"supportedTypes":["md5"],"preferredUploadType":"md5"},
-		  "files":{"versioning":true,"undelete":"1"},
+		  "files":{"versioning":true,"undelete":"1"%s},
 		  "files_sharing":{"api_enabled":1,"public":{"enabled":true}},
-		  "spaces":{"enabled":true}}}}}`)
+		  "spaces":{"enabled":true}}}}}`, archivers)
+
+	case r.URL.Path == "/archiver":
+		b.serveArchive(w, r)
 
 	case r.URL.Path == "/ocs/v1.php/cloud/user/clients":
 		fmt.Fprint(w, `{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[
@@ -180,6 +196,51 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
+// serveArchive packs the requested paths into one tar stream, the way the
+// archiver service does: every entry is named relative to the path's parent, so
+// a request for /a/b yields "b/..." and the client has to strip the wrapper.
+func (b *testBox) serveArchive(w http.ResponseWriter, r *http.Request) {
+	if !b.archiver {
+		http.Error(w, "no archiver", http.StatusNotFound)
+		return
+	}
+	if r.URL.Query().Get("arch_type") == "zip" {
+		// The tests only read tar. A zip would need a different reader and
+		// proves nothing more about the command.
+		http.Error(w, "zip not implemented in the fake", http.StatusNotImplemented)
+		return
+	}
+
+	tw := tar.NewWriter(w)
+	defer tw.Close()
+
+	for _, p := range r.URL.Query()["path"] {
+		root := path.Base(p)
+		var names []string
+		for f := range b.files {
+			if f == p || strings.HasPrefix(f, p+"/") {
+				names = append(names, f)
+			}
+		}
+		sort.Strings(names)
+		for _, f := range names {
+			body := b.files[f]
+			hdr := &tar.Header{
+				Name:     root + strings.TrimPrefix(f, p),
+				Mode:     0o644,
+				Size:     int64(len(body)),
+				Typeflag: tar.TypeReg,
+			}
+			if err := tw.WriteHeader(hdr); err != nil {
+				return
+			}
+			if _, err := tw.Write([]byte(body)); err != nil {
+				return
+			}
+		}
 	}
 }
 
@@ -445,8 +506,8 @@ func (b *testBox) serveTrash(w http.ResponseWriter, r *http.Request) {
 		}
 		dst := "/" + item.location
 		if h := r.Header.Get("Destination"); h != "" {
-			if i := strings.Index(h, testDavPrefix); i >= 0 {
-				dst = path.Clean(h[i+len(testDavPrefix):])
+			if _, after, ok := strings.Cut(h, testDavPrefix); ok {
+				dst = path.Clean(after)
 			}
 		}
 		b.files[dst] = item.body
