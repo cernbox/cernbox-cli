@@ -58,6 +58,7 @@ var coveredCommands = map[string]string{
 	// Public links.
 	"link create":   "TestPublicLinkLifecycle, TestLinkWithExpiryAndName",
 	"link list":     "TestPublicLinkLifecycle",
+	"link update":   "TestLinkUpdateKeepsTheSameAddress, TestLinkUpdateNeedsSomethingToChange",
 	"link remove":   "TestPublicLinkLifecycle",
 	"link password": "TestLinkPasswordNeedsATerminal",
 

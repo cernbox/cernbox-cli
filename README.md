@@ -30,7 +30,7 @@ RPM and deb packages are built by the release pipeline and attached to each rele
 | Transfer | `cp` `get` `put` `sync` `archive` |
 | Clipboard | `copy` `paste` `clipboard list/clear` |
 | Sharing | `share create/list/update/remove/received` |
-| Links | `link create/list/remove/password` |
+| Links | `link create/list/update/remove/password` |
 | Federated | `ocm invite/contacts/providers/received` |
 | History | `trash list/restore/purge`, `versions list/restore/download` |
 | Spaces | `space list/info` |
@@ -328,6 +328,16 @@ cernbox share create /eos/user/g/gdelmont/Documents --with marie --role editor
 cernbox link create /eos/user/g/gdelmont/report.pdf --expiry 2026-12-31
 cernbox share received
 ```
+
+A share or a link can be changed after the fact, and a link keeps its address when it changes, so everybody already holding it keeps working:
+
+```bash
+cernbox share update /eos/user/g/gdelmont/Documents SHARE_ID --role viewer
+cernbox link update /eos/user/g/gdelmont/report.pdf LINK_ID --role viewer --expiry 2026-12-31
+cernbox link update /eos/user/g/gdelmont/report.pdf LINK_ID --no-expiry
+```
+
+`link list` shows the ids, and TAB completes them.
 
 To share with someone at another institution, exchange an invitation first, then share as usual:
 

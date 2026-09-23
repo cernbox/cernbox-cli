@@ -415,6 +415,7 @@ func (a *App) argCompletions() map[string]completeFunc {
 
 		"link create":   byPosition(remote),
 		"link list":     byPosition(remote),
+		"link update":   byPosition(remote, a.completeShareID(true)),
 		"link remove":   byPosition(remote, a.completeShareID(true)),
 		"link password": byPosition(remote, a.completeShareID(true)),
 
@@ -458,6 +459,7 @@ var flagCompletions = map[string]map[string][]string{
 	"share create": {"role": {"viewer", "editor", "collab", "denied"}},
 	"share update": {"role": {"viewer", "editor", "collab", "denied"}},
 	"link create":  {"role": {"viewer", "editor"}},
+	"link update":  {"role": {"viewer", "editor"}},
 	"space list":   {"type": {"personal", "project"}},
 	"token create": {"permission": {"read", "write"}},
 	"open":         {"view-mode": {"read", "write"}},

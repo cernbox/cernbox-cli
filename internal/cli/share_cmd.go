@@ -253,6 +253,7 @@ func newLinkCmd(app *App) *cobra.Command {
 	cmd.AddCommand(
 		newLinkCreateCmd(app),
 		newLinkListCmd(app),
+		newLinkUpdateCmd(app),
 		newLinkRemoveCmd(app),
 		newLinkPasswordCmd(app),
 	)
@@ -272,14 +273,9 @@ func newLinkCreateCmd(app *App) *cobra.Command {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
 
-			var linkType string
-			switch role {
-			case "viewer", "view", "read":
-				linkType = "view"
-			case "editor", "edit", "write":
-				linkType = "edit"
-			default:
-				return cberr.Usagef("unknown link role %q: want viewer or editor", role)
+			linkType, err := linkTypeOf(role)
+			if err != nil {
+				return err
 			}
 
 			exp, err := parseExpiry(expiry)
@@ -320,6 +316,71 @@ func newLinkCreateCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "label shown next to the link")
 	cmd.Flags().StringVar(&expiry, "expiry", "", "expiry date, YYYY-MM-DD")
 	cmd.Flags().BoolVar(&withPassword, "password", false, "protect the link with a password, prompted for")
+	return cmd
+}
+
+// linkTypeOf maps what a user types for --role onto the two link types the
+// server knows. The spellings are accepted rather than corrected because
+// "--role read" and "--role view" are the same intention.
+func linkTypeOf(role string) (string, error) {
+	switch role {
+	case "viewer", "view", "read":
+		return "view", nil
+	case "editor", "edit", "write":
+		return "edit", nil
+	default:
+		return "", cberr.Usagef("unknown link role %q: want viewer or editor", role)
+	}
+}
+
+func newLinkUpdateCmd(app *App) *cobra.Command {
+	var role, name, expiry string
+	var noExpiry bool
+
+	cmd := &cobra.Command{
+		Use:   "update PATH LINK_ID",
+		Short: "Change the role, name or expiry of a public link",
+		Long: "Change a public link that already exists, leaving its address alone.\n\n" +
+			"Anybody holding the link keeps the same address, so use this to tighten\n" +
+			"a link rather than replacing one you have already sent out. Use 'link\n" +
+			"password' for the password.",
+		Example: "  cernbox link update /eos/user/g/gdelmont/report.pdf link-1 --role viewer\n" +
+			"  cernbox link update /eos/user/g/gdelmont/report.pdf link-1 --expiry 2026-12-31\n" +
+			"  cernbox link update /eos/user/g/gdelmont/report.pdf link-1 --no-expiry",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			update := client.LinkUpdate{DisplayName: name, ClearExpiry: noExpiry}
+			if role != "" {
+				var err error
+				if update.Type, err = linkTypeOf(role); err != nil {
+					return err
+				}
+			}
+			exp, err := parseExpiry(expiry)
+			if err != nil {
+				return err
+			}
+			update.Expiry = exp
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			perm, err := app.client.UpdateLink(ctx, info.ID, args[1], update)
+			if err != nil {
+				return err
+			}
+			return app.renderLinks([]client.Permission{*perm})
+		},
+	}
+
+	cmd.Flags().StringVar(&role, "role", "", "new role: viewer or editor")
+	cmd.Flags().StringVar(&name, "name", "", "new label shown next to the link")
+	cmd.Flags().StringVar(&expiry, "expiry", "", "new expiry date, YYYY-MM-DD")
+	cmd.Flags().BoolVar(&noExpiry, "no-expiry", false, "let the link stay usable indefinitely")
 	return cmd
 }
 
@@ -439,16 +500,17 @@ func (a *App) statResolved(ctx context.Context, arg string) (*client.ResourceInf
 // has no grantee to name and carries its role as the link type, so the share
 // table left one column empty and repeated the URL in another.
 func (a *App) renderLinks(links []client.Permission) error {
-	table := output.Table{Headers: []string{"ID", "TYPE", "PASSWORD", "EXPIRES", "URL"}, Items: links}
+	table := output.Table{Headers: []string{"ID", "NAME", "TYPE", "PASSWORD", "EXPIRES", "URL"}, Items: links}
 	for _, p := range links {
-		kind, url, locked := "-", "-", false
+		kind, url, name, locked := "-", "-", "-", false
 		if p.Link != nil {
 			kind = orDash(p.Link.Type)
 			url = orDash(p.Link.URL)
+			name = orDash(p.Link.Name)
 			locked = p.Link.HasPassword
 		}
 		table.Rows = append(table.Rows, []string{
-			p.ID, kind, yesNo(locked), expiresColumn(p.ExpiresAt), url,
+			p.ID, name, kind, yesNo(locked), expiresColumn(p.ExpiresAt), url,
 		})
 	}
 	return a.out.Render(table)
