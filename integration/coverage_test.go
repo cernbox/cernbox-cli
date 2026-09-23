@@ -36,10 +36,11 @@ var coveredCommands = map[string]string{
 	"mv":    "TestMoveAndCat",
 
 	// Transfers.
-	"cp":   "TestServerSideCopy, TestCpRefusesAmbiguousPaths",
-	"get":  "TestPutAndGetRoundTrip, TestRecursiveUploadAndDownload",
-	"put":  "TestPutAndGetRoundTrip, TestLargeFileUsesResumableUpload",
-	"sync": "TestSyncPushAndPull, TestSyncDelete",
+	"cp":      "TestServerSideCopy, TestCpRefusesAmbiguousPaths",
+	"get":     "TestPutAndGetRoundTrip, TestRecursiveUploadAndDownload",
+	"put":     "TestPutAndGetRoundTrip, TestLargeFileUsesResumableUpload",
+	"sync":    "TestSyncPushAndPull, TestSyncDelete",
+	"archive": "TestArchiveDownloadsATreeAsOneFile, TestArchiveCanProduceAZip, TestArchiveWritesToAPipe",
 
 	// The cross-machine clipboard.
 	"copy":            "TestClipboardRoundTrip, TestClipboardReferencesARemotePathWithoutUploading, TestClipboardCarriesADirectory",
