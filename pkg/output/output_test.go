@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -317,4 +318,97 @@ func TestIsTerminal(t *testing.T) {
 	if IsTerminal(devNull) {
 		t.Errorf("%s must not be reported as a terminal", os.DevNull)
 	}
+}
+
+// TestRenderTableAlignsWithColour is the regression this renderer exists for.
+// The header is emitted bold, and text/tabwriter counted the bytes of the ANSI
+// escape as column width — so a coloured header sat four columns short of its
+// own data and "space list" looked broken on any terminal.
+//
+// No test caught it because colour is off when stdout is not a terminal, which
+// it never is under go test. So colour is forced on here.
+func TestRenderTableAlignsWithColour(t *testing.T) {
+	table := Table{
+		Headers: []string{"ALIAS", "TYPE", "PATH"},
+		Rows: [][]string{
+			{"project/storage-ci", "project", "/eos/project/s/storage-ci"},
+			{"home", "personal", "/eos/user/g/gdelmont"},
+		},
+	}
+
+	var coloured, plain bytes.Buffer
+	if err := New(&coloured, FormatTable, Color(true)).Render(table); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(&plain, FormatTable).Render(table); err != nil {
+		t.Fatal(err)
+	}
+
+	// Strip the styling and the two must be identical: colour may change how a
+	// cell looks, never where it sits.
+	if got, want := stripSGR(coloured.String()), plain.String(); got != want {
+		t.Errorf("colour changed the layout:\n got %q\nwant %q", got, want)
+	}
+
+	// And every row must start its columns at the same offsets as the header.
+	// Searching for cell text would not do: "project" also occurs inside the
+	// alias "project/storage-ci".
+	lines := strings.Split(strings.TrimRight(plain.String(), "\n"), "\n")
+	want := columnStarts(lines[0])
+	for _, l := range lines[1:] {
+		if got := columnStarts(l); !slices.Equal(got, want) {
+			t.Errorf("columns start at %v in %q, but the header has %v", got, l, want)
+		}
+	}
+}
+
+// columnStarts returns the offset at which each column begins, a column being
+// what follows the two-space gap the renderer writes.
+func columnStarts(line string) []int {
+	starts := []int{0}
+	for i := 0; i+1 < len(line); i++ {
+		if line[i] == ' ' && line[i+1] == ' ' {
+			j := i
+			for j < len(line) && line[j] == ' ' {
+				j++
+			}
+			if j < len(line) {
+				starts = append(starts, j)
+			}
+			i = j
+		}
+	}
+	return starts
+}
+
+// TestRenderTableNoTrailingWhitespace: padding the final column leaves invisible
+// spaces in anything that captures the output.
+func TestRenderTableNoTrailingWhitespace(t *testing.T) {
+	var buf bytes.Buffer
+	if err := New(&buf, FormatTable, Color(true)).Render(sampleTable()); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if l != strings.TrimRight(l, " ") {
+			t.Errorf("line has trailing whitespace: %q", l)
+		}
+	}
+}
+
+// stripSGR removes ANSI styling so a coloured rendering can be compared against
+// the plain one it must match.
+func stripSGR(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '\033' {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
 }

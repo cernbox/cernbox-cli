@@ -16,7 +16,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"golang.org/x/term"
@@ -197,22 +196,61 @@ func (w *Writer) Warn(format string, args ...any) {
 }
 
 func (w *Writer) renderTable(t Table) error {
-	tw := tabwriter.NewWriter(w.out, 0, 4, 2, ' ', 0)
-	if len(t.Headers) > 0 && !w.quiet {
-		header := strings.Join(t.Headers, "\t")
-		if w.color {
-			header = "\033[1m" + header + "\033[0m"
-		}
-		if _, err := fmt.Fprintln(tw, header); err != nil {
+	// Widths are computed here rather than by text/tabwriter because the header
+	// is emitted bold: tabwriter counts the bytes of an ANSI escape as width, so
+	// a coloured header was padded four columns short and every column after the
+	// first sat out of line with its heading.
+	rows := make([][]string, 0, len(t.Rows)+1)
+	showHeader := len(t.Headers) > 0 && !w.quiet
+	if showHeader {
+		rows = append(rows, t.Headers)
+	}
+	rows = append(rows, t.Rows...)
+
+	widths := columnWidths(rows)
+	for i, row := range rows {
+		bold := showHeader && i == 0
+		if _, err := fmt.Fprintln(w.out, w.formatRow(row, widths, bold)); err != nil {
 			return err
 		}
 	}
-	for _, row := range t.Rows {
-		if _, err := fmt.Fprintln(tw, strings.Join(row, "\t")); err != nil {
-			return err
+	return nil
+}
+
+// columnWidths returns the width each column needs, measured on the text as
+// written — no cell here carries styling, which is what makes this safe.
+func columnWidths(rows [][]string) []int {
+	var widths []int
+	for _, row := range rows {
+		for i, cell := range row {
+			for len(widths) <= i {
+				widths = append(widths, 0)
+			}
+			widths[i] = max(widths[i], len([]rune(cell)))
 		}
 	}
-	return tw.Flush()
+	return widths
+}
+
+// formatRow pads a row to the column widths, styling after measuring. The last
+// cell is not padded, so nothing carries trailing whitespace into a capture.
+func (w *Writer) formatRow(row []string, widths []int, bold bool) string {
+	const gap = 2
+	var b strings.Builder
+	for i, cell := range row {
+		if i > 0 {
+			b.WriteString(strings.Repeat(" ", gap))
+		}
+		text := cell
+		if bold && w.color {
+			text = "\033[1m" + cell + "\033[0m"
+		}
+		b.WriteString(text)
+		if i < len(row)-1 && i < len(widths) {
+			b.WriteString(strings.Repeat(" ", max(widths[i]-len([]rune(cell)), 0)))
+		}
+	}
+	return b.String()
 }
 
 func (w *Writer) renderCSV(t Table) error {
