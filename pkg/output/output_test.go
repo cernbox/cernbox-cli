@@ -240,8 +240,9 @@ func TestHumanSize(t *testing.T) {
 		in   int64
 		want string
 	}{
-		{0, "0B"},
-		{999, "999B"},
+		// A bare number below 1K, exactly as ls -lh and du -h print it.
+		{0, "0"},
+		{999, "999"},
 		{1024, "1.0K"},
 		{1536, "1.5K"},
 		{1048576, "1.0M"},

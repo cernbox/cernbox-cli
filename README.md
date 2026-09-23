@@ -128,6 +128,19 @@ CERNBox reports the rights *you* have on an entry, and has no owner/group/other 
 
 `--output json` and `--output csv` are unchanged by any of this: they keep their labelled columns, and directories keep their trailing slash there, so existing scripts are unaffected.
 
+### Disk usage
+
+`du` prints what `du(1)` prints: a size, a tab, a path, with a directory reported after everything it contains.
+
+```console
+$ cernbox du -h -d 2 /eos/user/g/gdelmont/data
+2.9K	/eos/user/g/gdelmont/data/raw/2026
+2.9K	/eos/user/g/gdelmont/data/raw
+5.9K	/eos/user/g/gdelmont/data
+```
+
+`-h`, `-s`, `-a` and `-d`/`--max-depth` carry their usual meanings. One deliberate difference: only the total for each argument is reported unless `--max-depth` asks for more — that is `du -s` rather than `du`'s own default, because descending a whole tree here costs one request per directory, and the totals CERNBox reports are already recursive. Sizes are apparent bytes, not disk blocks, which the server does not report.
+
 ### Why transfer commands need `cb:`
 
 On lxplus `/eos/user/g/gdelmont` is *both* a CERNBox path and a local FUSE mount, so `cernbox cp /eos/... /eos/...` would be genuinely ambiguous. Commands that only ever touch the remote (`ls`, `rm`, `share`, …) take bare paths. Commands that move data between local and remote need the remote side marked:

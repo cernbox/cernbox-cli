@@ -491,57 +491,137 @@ func (a *App) walkSearch(ctx context.Context, root, pattern string, limit int) (
 var errSearchLimit = errors.New("search limit reached")
 
 func newDuCmd(app *App) *cobra.Command {
-	var depth int
-	var humanSizes bool
+	var opts duOptions
 
 	cmd := &cobra.Command{
-		Use:   "du PATH",
+		Use:   "du [PATH...]",
 		Short: "Show space used by a directory",
-		Args:  cobra.ExactArgs(1),
+		Long: "Show space used, in the shape du(1) uses: a size, a tab, and a path.\n\n" +
+			"Only the total for each argument is reported unless --max-depth asks for\n" +
+			"more. That is du -s rather than du's own default, because descending a\n" +
+			"whole tree here means one request per directory against the server, and\n" +
+			"the totals CERNBox reports for a directory are already recursive.",
+		Example: "  cernbox du -h /eos/user/g/gdelmont\n" +
+			"  cernbox du -h -d 1 /eos/user/g/gdelmont",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
 
-			p, err := app.resolve(ctx, args[0])
-			if err != nil {
-				return err
+			if len(args) == 0 {
+				args = []string{"home:"}
 			}
-			info, err := app.client.Stat(ctx, p)
-			if err != nil {
-				return err
+			if opts.Summarize {
+				opts.MaxDepth = 0
 			}
 
-			type usage struct {
-				Path string `json:"path"`
-				Size int64  `json:"size"`
-			}
-			items := []usage{}
-
-			if info.IsDir && depth > 0 {
-				children, err := app.client.List(ctx, p)
+			var items []duEntry
+			for _, arg := range args {
+				got, err := app.usage(ctx, arg, opts)
 				if err != nil {
 					return err
 				}
-				for _, c := range children {
-					items = append(items, usage{Path: c.Path, Size: c.Size})
-				}
+				items = append(items, got...)
 			}
-			items = append(items, usage{Path: info.Path, Size: info.Size})
 
-			table := output.Table{Headers: []string{"SIZE", "PATH"}, Items: items}
-			for _, it := range items {
-				table.Rows = append(table.Rows, []string{formatSize(it.Size, humanSizes), it.Path})
+			// json and csv keep their labelled columns for scripts; the human
+			// rendering is du's.
+			if app.out.Format() != output.FormatTable {
+				table := output.Table{Headers: []string{"SIZE", "PATH"}, Items: items}
+				for _, it := range items {
+					table.Rows = append(table.Rows, []string{formatSize(it.Size, opts.Human), it.Path})
+				}
+				return app.out.Render(table)
 			}
-			return app.out.Render(table)
+			for _, it := range items {
+				// A tab, as du does: it keeps "cut -f2" working whatever the
+				// size column happens to be.
+				app.out.Line("%s\t%s", formatSize(it.Size, opts.Human), it.Path)
+			}
+			return nil
 		},
 	}
 
-	cmd.Flags().IntVar(&depth, "depth", 0, "also show entries this many levels below PATH")
-	// Same arrangement as ls, and for the same reason: -h means human-readable
-	// in du(1), so declaring --help first keeps cobra from taking the shorthand.
-	cmd.Flags().Bool("help", false, "show help for du")
-	cmd.Flags().BoolVarP(&humanSizes, "human-readable", "h", false, "print sizes as 1.2K, 34M")
+	f := cmd.Flags()
+	// -h means human-readable in du(1), so declaring --help first keeps cobra
+	// from taking the shorthand for help.
+	f.Bool("help", false, "show help for du")
+	f.BoolVarP(&opts.Human, "human-readable", "h", false, "print sizes as 1.2K, 34M")
+	f.IntVarP(&opts.MaxDepth, "max-depth", "d", 0, "also report directories this many levels down")
+	f.BoolVarP(&opts.Summarize, "summarize", "s", false, "report only the total for each argument")
+	f.BoolVarP(&opts.All, "all", "a", false, "report files as well as directories")
+	// The old name for --max-depth, kept so existing invocations keep working.
+	f.IntVar(&opts.MaxDepth, "depth", 0, "deprecated alias for --max-depth")
+	_ = f.MarkHidden("depth")
 	return cmd
+}
+
+// duOptions is what the du flags select.
+type duOptions struct {
+	Human     bool
+	MaxDepth  int
+	Summarize bool
+	All       bool
+}
+
+// duEntry is one line of du output.
+type duEntry struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// usage reports the space used at arg, and below it when asked.
+//
+// Sizes come from what the server reports for each directory, which is already
+// recursive, so a depth of N costs one listing per directory in the first N
+// levels rather than a walk of everything underneath.
+func (a *App) usage(ctx context.Context, arg string, opts duOptions) ([]duEntry, error) {
+	root, err := a.resolve(ctx, arg)
+	if err != nil {
+		return nil, err
+	}
+	info, err := a.client.Stat(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+
+	// Deepest first, then the argument last: du reports a directory after
+	// everything it contains.
+	levels := make([][]duEntry, 0, max(opts.MaxDepth, 0)+1)
+	frontier := []client.ResourceInfo{*info}
+	for depth := 1; depth <= opts.MaxDepth && info.IsDir; depth++ {
+		var next []client.ResourceInfo
+		var level []duEntry
+		for _, dir := range frontier {
+			if !dir.IsDir {
+				continue
+			}
+			children, err := a.client.List(ctx, dir.Path)
+			if err != nil {
+				return nil, err
+			}
+			for _, c := range children {
+				if c.IsDir || opts.All {
+					level = append(level, duEntry{Path: c.Path, Size: c.Size})
+				}
+				if c.IsDir {
+					next = append(next, c)
+				}
+			}
+		}
+		if len(level) == 0 {
+			break
+		}
+		sort.Slice(level, func(i, j int) bool { return level[i].Path < level[j].Path })
+		levels = append(levels, level)
+		frontier = next
+	}
+
+	out := make([]duEntry, 0, len(levels)+1)
+	for i := len(levels) - 1; i >= 0; i-- {
+		out = append(out, levels[i]...)
+	}
+	return append(out, duEntry{Path: info.Path, Size: info.Size}), nil
 }
 
 func newCatCmd(app *App) *cobra.Command {

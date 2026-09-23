@@ -654,3 +654,53 @@ func TestStatusJSON(t *testing.T) {
 		t.Error("status did not report where the token cache lives")
 	}
 }
+
+// TestDuLooksLikeDu: a size, a tab, a path — no header, and a directory
+// reported after everything it contains.
+func TestDuLooksLikeDu(t *testing.T) {
+	e := setup(t)
+	e.mustRun("mkdir", "-p", e.remotePath("tree/inner"))
+	e.mustRun("put", e.writeLocal("a.txt", make([]byte, 2048)), e.remotePath("tree/inner/a.txt"))
+
+	out := e.mustRun("du", "-d", "2", e.remotePath("tree"))
+	if strings.Contains(out, "SIZE") || strings.Contains(out, "PATH") {
+		t.Errorf("du should print no header:\n%s", out)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for _, l := range lines {
+		if !strings.Contains(l, "\t") {
+			t.Errorf("each line should be size<TAB>path, got %q", l)
+		}
+	}
+	// The argument itself is reported last, after what it contains.
+	if last := lines[len(lines)-1]; !strings.HasSuffix(last, "/tree") {
+		t.Errorf("the argument should come last, got %q", last)
+	}
+	if first := lines[0]; !strings.Contains(first, "/tree/inner") {
+		t.Errorf("the deepest entry should come first, got %q", first)
+	}
+}
+
+// TestDuSummarizeAndHuman: -s collapses to one line per argument, and -h is
+// human-readable as in du(1) — bytes otherwise.
+func TestDuSummarizeAndHuman(t *testing.T) {
+	e := setup(t)
+	e.mustRun("mkdir", "-p", e.remotePath("tree/inner"))
+	e.mustRun("put", e.writeLocal("a.txt", make([]byte, 2048)), e.remotePath("tree/inner/a.txt"))
+
+	summary := strings.TrimSpace(e.mustRun("du", "-s", "-d", "2", e.remotePath("tree")))
+	if strings.Contains(summary, "\n") {
+		t.Errorf("-s should report one line per argument, got:\n%s", summary)
+	}
+
+	// EOS accounts a directory's recursive size asynchronously, so the total
+	// is 0 for a moment after the upload. Wait for it rather than race it.
+	e.waitFor("du to account the upload", func() bool {
+		return strings.Contains(e.mustRun("du", "-s", e.remotePath("tree")), "2048")
+	})
+
+	if h := e.mustRun("du", "-hs", e.remotePath("tree")); !strings.Contains(h, "2.0K") {
+		t.Errorf("-h should print a human-readable size:\n%s", h)
+	}
+}
