@@ -1,6 +1,6 @@
 # cernbox-cli
 
-Command-line client for CERNBox. Browse, transfer, and share files from your terminal, with Kerberos single sign-on on lxplus.
+Work with your CERNBox files from the command line: browse them, move them between your computer and CERNBox, move them between two computers, and share them.
 
 ```console
 $ cernbox ls /eos/user/g/gdelmont
@@ -8,432 +8,186 @@ $ cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
 $ cernbox share create /eos/user/g/gdelmont/Documents --with marie --role editor
 ```
 
-On lxplus there is nothing to configure and nothing to log into: the CLI picks up the Kerberos ticket from your session, exactly like the `eos` command.
-
 ## Install
 
 ```bash
 curl cli.cernbox.cern.ch | sh
 ```
 
-That fetches the release built for your system, checks it against the published checksum, and installs it into `/usr/local/bin` if you can write there or `~/.local/bin` otherwise — telling you what to add to `PATH` if it is not already there. It never asks for a password: a script piped from the network is the last thing that should be running `sudo`. `CERNBOX_VERSION` pins a version, `CERNBOX_INSTALL_DIR` chooses where it goes, and `CERNBOX_BASE_URL` points it at a mirror. The script is [install.sh](install.sh) in this repository.
+That fetches the release built for your system, checks it against the published checksum, and installs it where you can write — `/usr/local/bin` if that is yours, otherwise `~/.local/bin`, telling you what to add to `PATH`. It never asks for a password. `CERNBOX_VERSION` pins a version and `CERNBOX_INSTALL_DIR` chooses where it goes.
 
-From source:
+From source, or from a package:
 
 ```bash
 go install github.com/cernbox/cernbox-cli/cmd/cernbox@latest
 ```
 
-RPM and deb packages are built by the release pipeline and attached to each release. Once the package is in the CERN repositories, `dnf install cernbox-cli` will be the way in on AlmaLinux.
+RPM and deb packages are attached to each release.
 
-## What works today
+## Signing in
 
-| Area | Commands |
-| --- | --- |
-| Identity | `login` `logout` `status` `whoami` |
-| Browse | `ls` `stat` `find` `du` `cat` |
-| Namespace | `mkdir` `touch` `rm` `mv` |
-| Transfer | `cp` `get` `put` `sync` `archive` |
-| Clipboard | `copy` `paste` `clipboard list/clear` |
-| Sharing | `share create/list/update/remove/received` |
-| Links | `link create/list/update/remove/password` |
-| Federated | `ocm invite/contacts/providers/received` |
-| History | `trash list/restore/purge`, `versions list/restore/download` |
-| Spaces | `space list/info` |
-| Apps | `open` `apps` |
-| Tokens | `token list/revoke` |
-| Shell | `version` `completion` |
+Usually nothing: the client finds your credentials and uses them. On a machine where you already have a CERN ticket it signs in silently. Elsewhere it prints a link to open and a code to enter, once, and remembers the session afterwards.
 
-### Server-side gaps this client works around
+```bash
+cernbox status     # how you are signed in, and to which server
+cernbox login      # sign in now, rather than on the next command
+cernbox logout
+```
 
-Running the CLI against a real reva turned up several endpoints that exist but do nothing. Each is handled deliberately rather than left to fail:
-
-| Gap | What the CLI does |
-| --- | --- |
-| `LOCK` returns a hardcoded token and records nothing; `UNLOCK` returns 501 | No `lock` command at all. One built on this would report success and lock nothing |
-| `search-files` REPORT is a stub returning 501 | `find` asks the server first, then falls back to walking the tree client-side |
-| OCS `remote_shares` is an empty handler that writes nothing | `ocm received` reads the graph `sharedWithMe` endpoint, filtering on the OCM id prefix |
-| App-token creation is not exposed publicly | `token create` explains where to create one; `list` and `revoke` work normally |
-| Reva's demo app provider advertises no mime types, so nothing can open anything | `open --web` works regardless; the application link needs a real provider such as Collabora |
-| `If-None-Match: *` on PUT is ignored, so a "create only" write silently overwrites | `touch` checks for an existing path before writing, rather than trusting the precondition. `If-Match` *is* honoured, and the clipboard uses it |
-| No upload accepts a body of unknown length: `PUT` requires `Content-Length`, and TUS does not offer `creation-defer-length` | `copy -` splits a stream into known-length pieces rather than spooling it to disk to measure it |
-| Downloading a directory answers 501 | `cat` reports "is a directory", as `cat(1)` does |
-
-**Two-way sync** is a deliberate omission rather than a gap. `sync` is a one-way mirror: genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there", and without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
-
-## Authentication
-
-`cernbox` resolves credentials through an ordered chain and uses the first one that works. `cernbox status` tells you which one it picked.
-
-| Order | Method | When it applies |
-| --- | --- | --- |
-| 1 | `--token` / `$CERNBOX_TOKEN` | Explicit token, mostly for CI |
-| 2 | Cached session | A previous login that has not expired |
-| 3 | Kerberos | A TGT is present — the lxplus path, silent |
-| 4 | App token | `$CERNBOX_APP_TOKEN`, for batch jobs and cron |
-| 5 | OIDC device flow | Laptops and accounts without a Kerberos principal |
-| 6 | Basic auth | Dev instances only, and only with `--method basic` |
-
-Basic authentication is never reached automatically. Against a server that expects Kerberos, falling through to a password prompt would be the wrong thing to do, so it joins the chain only when asked for by name.
-
-Kerberos is native: the ticket is presented straight to CERNBox, which verifies it against its own keytab. Nothing stands between the ticket and the service, so a login depends on nothing being up but CERNBox itself.
-
-Native Kerberos needs the server side that ships with this work: the `kerberos` auth manager and the `spnego` credential strategy, both in reva. `dev/revad/cernbox.toml` is a working configuration of the pair, against the realm the `kdc` container serves.
-
-The ticket is presented to `/graph/v1.0/me` rather than to an endpoint built for the purpose. Every authenticated reva response already carries the issued token in `x-access-token`, so a dedicated one would only return a header the server already sends — and this one returns the user's identity too, so the login costs a single request.
-
-If the endpoint is a DNS alias, the client may ask the KDC for a ticket under the node's name rather than the alias, and the KDC will refuse it. `--kerberos-spn` names the service principal explicitly; `rdns = false` in your `krb5.conf` fixes it for every Kerberos client on the machine.
-
-Tokens are cached in `/tmp/cernbox_cc_$(id -u)` at mode `0600`, not in your home directory: on lxplus home is shared across every node in the cluster, and a bearer token there has a wider blast radius than one in node-local `/tmp`. Override with `$CERNBOX_TOKEN_CACHE`.
+For scripts and scheduled jobs, use an app token: create one in the CERNBox web interface and put it in `CERNBOX_APP_TOKEN`. `cernbox token list` and `cernbox token revoke` manage the ones you have.
 
 ## Paths
 
-Absolute CERNBox paths are canonical, and look like what you already type for `eos`:
+Paths look like the ones you already use:
 
 ```bash
 cernbox ls /eos/user/g/gdelmont/Documents
 cernbox ls /eos/project/c/cernbox/data
-cernbox ls /home/Documents          # your own home space
+cernbox ls home:Documents            # your own space, by name
 ```
 
-Space-qualified aliases also work: `home:Documents`, `project/cernbox:data`.
-
-### Listing
-
-`ls` behaves like `ls(1)`: no header, one entry per line when piped, columns when a terminal is attached, and the familiar switches.
-
-```bash
-cernbox ls -l /eos/user/g/gdelmont     # long listing
-cernbox ls -lt                          # newest first
-cernbox ls -lSr                         # smallest first
-cernbox ls -aF                          # include dotfiles, mark directories
-cernbox ls -lh                          # human-readable sizes
-```
-
-| Flag | Meaning |
-| --- | --- |
-| `-l` | long listing: rights, size, modification time |
-| `-h` | human-readable sizes (`1.2K`) instead of bytes |
-| `-a` | include entries beginning with a dot |
-| `-R` | recurse into subdirectories |
-| `-1` | one entry per line, even on a terminal |
-| `-t` `-S` `-r` | sort by time, by size, or reverse the order |
-| `-F` | append `/` to directory names |
-| `--sort` | `name`, `time` or `size` |
-
-`-h` means human-readable, as in `ls` and `du`, so on those two commands help is `--help` only. Every other command keeps `-h` for help.
-
-Colours come from **`LS_COLORS`**, the same variable `ls` reads, so whatever you configured with `dircolors` applies here too — directories, and per-extension rules like `*.pdf`. With the variable unset, the built-in defaults `ls` uses apply. Colour is emitted only to a terminal: piping gives clean text, as `ls` does. The BSD `LSCOLORS` variable is a different syntax and is deliberately not read.
-
-One deliberate difference from `ls`: the long listing shows **one** rights column rather than owner/group/other:
-
-```
-total 3003
--rw-    3 Sep 23 08:58 notes.txt
--rw- 3000 Sep 23 08:58 report.pdf
-drwx    0 Sep 23 08:58 sub
-```
-
-CERNBox reports the rights *you* have on an entry, and has no owner/group/other split to show — nor a POSIX mode, an owner, or a link count. Those columns are absent rather than invented. `????` in place of the rights means the server reported none, which is not the same as reporting none granted.
-
-`--output json` and `--output csv` are unchanged by any of this: they keep their labelled columns, and directories keep their trailing slash there, so existing scripts are unaffected.
-
-### Disk usage
-
-`du` prints what `du(1)` prints: a size, a tab, a path, with a directory reported after everything it contains.
-
-```console
-$ cernbox du -h -d 2 /eos/user/g/gdelmont/data
-2.9K	/eos/user/g/gdelmont/data/raw/2026
-2.9K	/eos/user/g/gdelmont/data/raw
-5.9K	/eos/user/g/gdelmont/data
-```
-
-`-h`, `-s`, `-a` and `-d`/`--max-depth` carry their usual meanings. One deliberate difference: only the total for each argument is reported unless `--max-depth` asks for more — that is `du -s` rather than `du`'s own default, because descending a whole tree here costs one request per directory, and the totals CERNBox reports are already recursive. Sizes are apparent bytes, not disk blocks, which the server does not report.
-
-### Why transfer commands need `cb:`
-
-On lxplus `/eos/user/g/gdelmont` is *both* a CERNBox path and a local FUSE mount, so `cernbox cp /eos/... /eos/...` would be genuinely ambiguous. Commands that only ever touch the remote (`ls`, `rm`, `share`, …) take bare paths. Commands that move data between local and remote need the remote side marked:
+Commands that copy between your computer and CERNBox are the exception: there you mark the CERNBox side with `cb:`, because the same path can exist on both.
 
 ```bash
 cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/
-cernbox cp -r cb:/eos/project/c/cernbox/data ./data
 ```
 
-`get` and `put` are unambiguous by position and are usually what you want:
+`get` and `put` need no marker, because your computer always comes first:
 
 ```bash
 cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
 cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
 ```
 
-### Mirroring a directory
-
-`sync` makes the destination match the source, one way only, comparing size and modification time so unchanged files are not sent again.
+## Browsing
 
 ```bash
-cernbox sync ./data cb:/eos/project/c/cernbox/data
-cernbox sync cb:/eos/project/c/cernbox/data ./data --delete --dry-run
-cernbox sync ./src cb:/eos/project/c/cernbox/src --exclude '*.o' --exclude build
+cernbox ls -l /eos/user/g/gdelmont     # long listing
+cernbox ls -lt                          # newest first
+cernbox stat report.pdf                 # everything about one file
+cernbox find . --name report            # search by name
+cernbox du -h -d 2 data                 # what is taking up space
+cernbox cat notes.txt
 ```
 
-`--dry-run` reports the whole plan — created, updated, deleted — and changes nothing, which is the rehearsal worth doing before a `--delete` run against a path typed by hand.
+`mkdir`, `touch`, `rm` and `mv` work as you would expect. They follow the flags you already type — `-p`, `-r`, `-f` — and are a little more careful than the local versions: `mv` and `cp` will not overwrite without `-f`, and `touch` will not empty a file that already exists.
 
-`--exclude` is repeatable. A pattern without a slash matches any path component at any depth, so `--exclude build` skips every `build` directory and everything in it; a pattern with a slash matches the whole relative path, so `--exclude 'build/*'` skips only what is directly inside a top-level `build`. An excluded entry is invisible to the mirror on **both** sides: it is not copied, and `--delete` will not remove it for being absent from the source.
-
-### Downloading a directory as one file
-
-`archive` asks the server to pack a tree and streams the result out. The walk happens server-side, so a directory of many small files costs one request instead of one per file.
+## Copying and mirroring
 
 ```bash
-cernbox archive /eos/project/c/cernbox/data          # writes ./data.tar
-cernbox archive --format zip --to notes.zip Documents
-cernbox archive --to - Documents | tar -x -C /scratch # straight into another program
+cernbox get -r /eos/project/c/cernbox/data ./data    # a whole directory
+cernbox sync ./data cb:/eos/project/c/cernbox/data   # make the far side match
+cernbox archive /eos/project/c/cernbox/data          # download it as one .tar
 ```
 
-With no `--to` the archive lands in the working directory, named after what you asked for; several paths land in `archive.tar`. An existing file is never overwritten without `--force`. A server that cannot build archives, or cannot build the format you asked for, says so before anything is downloaded — the formats come from the capabilities it advertises.
+`sync` is one way: it copies what changed and leaves the rest alone. `--delete` also removes what the source no longer has, `--exclude` leaves things out, and `--dry-run` shows the whole plan without doing any of it — worth running first when `--delete` is involved.
 
-`get -r` already uses the archiver behind the scenes and unpacks as it goes. `archive` is for when you want the archive itself — to keep, to move, or to hand to another program.
+`archive` asks the server to pack a directory and sends it as a single file, which is much faster than fetching thousands of small ones. `--format zip` and `--to -` (straight into another program) both work.
 
-### Shell completion
+## Moving files between computers
+
+A clipboard. Copy on one computer, paste on another:
 
 ```bash
-source <(cernbox completion bash)     # or zsh, or fish
-```
-
-Completion reaches into CERNBox, not just into the command names:
-
-```console
-$ cernbox ls /eos/user/g/gdelmont/Doc<TAB>
-$ cernbox ls /eos/user/g/gdelmont/Documents/
-$ cernbox cp cb:notes/<TAB>
-cb:notes/draft.md      cb:notes/published/
-```
-
-Whatever you typed to name the directory comes back on the candidate, so `cb:` prefixes and space aliases survive completion. Directories complete without a trailing space, so the next keystroke carries on into them, and entries beginning with a dot stay hidden until you type one — the same rules your shell uses locally.
-
-It also completes the things nobody memorises: space aliases, clipboard slots, share and link ids, version keys, app token ids, and the fixed values of flags such as `--role` and `--format`. On a transfer command, only a side already marked with `cb:` or an alias is completed from the server; an unmarked path is local and left to the shell.
-
-A press of TAB is bounded at three seconds, never retries, and never prompts: with no configuration, no credentials or no network it offers nothing and exits quietly rather than printing an error into the middle of the line you are typing. Trash keys are deliberately not completed — the only way to learn them is to list the whole bin, which is far too much work to do behind a key press.
-
-### Unix conventions
-
-The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.
-
-Two places where this CLI is deliberately more cautious than the original, both because the target is remote and a mistake is not local:
-
-- **`touch` never rewrites an existing file.** `touch(1)` would update its timestamp; CERNBox offers no way to do that without rewriting the contents, so an existing path is reported and left alone.
-- **`mv` and `cp` refuse to overwrite** unless given `-f`. The originals overwrite silently.
-
-## Moving files between machines
-
-A clipboard that spans machines. Copy on one, paste on another, with CERNBox carrying whatever is in between. With `--to` it spans people as well: see [handing a file to somebody else](#handing-a-file-to-somebody-else).
-
-```bash
-# on your laptop
+# on one computer
 cernbox copy ./report.pdf
-```
 
-```bash
-# on lxplus, or any other machine you are signed in on
+# on another
 cernbox paste
 ```
 
-There is nothing to set up and nothing to name: the state lives in your CERNBox home space, which is the one thing both machines can already see. A local file is what needs the trip through the server; but a file that is *already* in CERNBox is only pointed at, and then this costs nothing at all:
+Pasting does not empty the clipboard, so the same copy reaches as many computers as you like. `cernbox clipboard list` shows what is on it and `cernbox clipboard clear` lets go of it.
 
-```bash
-cernbox copy cb:/eos/user/g/gdelmont/report.pdf   # nothing is transferred
-cernbox paste cb:/eos/project/c/cernbox/data/     # nor here: the server copies it
-```
-
-That second line is worth knowing about. With both ends inside CERNBox the paste is a WebDAV `COPY`, so a 40 GB file moves between two spaces in two requests and no data reaches your terminal. It is also how the lxplus case stays free, since `/eos` there is a real mount and `cb:` is how you say you mean the CERNBox path rather than the local one.
-
-`-` works on both ends, which makes this a pipe between machines:
+It works with pipes, which makes it a pipe between two computers:
 
 ```bash
 tar cz ./analysis | cernbox copy - --name analysis.tgz
-```
-
-```bash
 cernbox paste - | tar xz
 ```
 
-A pipe is streamed, not buffered. It never touches local disk on either machine and memory stays at one chunk however large it is — a gigabyte through the pipe above costs about 30 MB of resident memory and no temporary file. That matters most on lxplus, where `/tmp` is small and the obvious implementation (spool the stream to a file to find out how long it is) would fail on exactly the transfers worth doing.
+`--slot NAME` keeps several copies in flight at once. `--stream` stores nothing at all: the sending command waits, and the file moves only once you paste on the other side.
 
-The reason it needs mentioning at all is that reva has no way to accept a body of unknown length: its WebDAV `PUT` parses `Content-Length` and answers 400 without one, and its TUS endpoint does not implement `creation-defer-length`. So a stream larger than one chunk is stored as numbered pieces, each of a length that is known by the time it is sent, and `paste` joins them on the way out. That is visible in `--output json` as a `parts` count, and nowhere else: a small pipe stays a single ordinary object, and pasting is the same command either way.
+### Sending something to somebody else
 
-Two consequences worth knowing. Pasting a streamed copy to another CERNBox path is the one paste inside CERNBox that does move data, because a server-side `COPY` cannot join pieces: it is pulled and pushed back through a pipe, so nothing is ever whole on the client, but the bytes do make the trip. And clearing a streamed slot puts every piece in your recycle bin separately — a gigabyte at the default chunk is 128 entries — so `cernbox trash purge` after a large stream is worth the habit.
-
-None of this applies to an ordinary file. A file's length is known from a single `stat`, so it is sent as one request streamed straight off disk, with no pieces and nothing buffered: a 512 MB `cernbox put` runs in about 17 MB of resident memory. Splitting exists only because a pipe cannot be measured without reading it.
-
-### Handing a file over live
-
-Everything above is store-and-forward: `copy` finishes, and `paste` can happen next week. `--stream` is the other shape — the two commands run at the same time and the bytes move between them, with nothing left on the server at all.
-
-```bash
-# on the machine with the file: this blocks, holding the file open
-cernbox copy --stream ./hugefile.root
-```
-
-```bash
-# on the other machine, whenever you get there
-cernbox paste ./hugefile.root
-```
-
-```console
-$ cernbox copy --stream ./hugefile.root
-Waiting for 'cernbox paste' on another machine...
-Connected. Sending hugefile.root...
-Sent 200.0M. Nothing was stored in CERNBox.
-```
-
-Nothing is uploaded until somebody pastes. Afterwards `cernbox clipboard list` is empty: no quota consumed, nothing to clear, nothing in your trash. The two halves overlap, so the wall-clock is roughly one transfer rather than two in sequence. `--wait` bounds how long either side will hang around, ten minutes by default, and a sender that gives up cleans its slot up on the way out.
-
-**The bytes still pass through CERNBox.** That is worth being plain about, because it is the one thing `--stream` cannot fix. A direct connection between the two machines is what you would want, and it does not work here: a laptop is behind NAT so nothing can dial into it, and lxplus does not accept inbound connections on arbitrary ports. There is no path between the two except the server they both already talk to. What `--stream` avoids is the *storage* — the sender runs only four pieces ahead of the receiver, which deletes each one as it reads it, so the slot holds a few tens of megabytes no matter whether you are sending a gigabyte or a hundred.
-
-The constraint that comes with it: both machines have to be running the command at once. That is the trade against the default, where the sending machine can close its laptop lid and the file is still there on Monday. Neither is better; they are for different situations.
-
-Two things `--stream` will not do. It refuses a source that is already in CERNBox, because referencing it is strictly better — `cernbox copy cb:/eos/...` transfers nothing at all and pasting it to another CERNBox path is a server-side copy. And a live stream can only be received to a local path or a pipe, since there is nothing on the server for the graph to copy from. For a directory, tar it: `tar cz ./dir | cernbox copy --stream -`.
-
-### Progress
-
-`paste` draws a bar while the bytes move:
-
-```console
-report.pdf  ███████████████░░░░░░░░░░░░░░░░░░░   43%  86.1M/200.0M  10.2M/s  eta 11s
-```
-
-It is erased when the transfer finishes, leaving the summary line. `--no-progress` turns it off, and so do `--quiet` and `--output json`; it is never drawn when stderr is not a terminal, so a log file or a pipe stays clean. The gate is on **stderr**, not stdout, so `cernbox paste - | tar xz` still shows you the bar while the payload goes down the pipe.
-
-`--no-progress` is global rather than a flag on `paste` alone, because it also silences the per-file lines `cp`, `get`, `put` and `sync` print.
-
-A live handover of a pipe has no length until it ends, so there is no percentage to show and none is invented — the line becomes a byte count and a rate. On a narrow window the bar is dropped and then whole fields are, in order: the estimate, the rate, the total. Nothing is ever cut mid-number, because a figure you cannot trust is worse than one that is absent.
-
-### Slots
-
-One slot is used unless you name another, so the two-command case stays two commands. `--slot` keeps several copies in flight without them treading on each other:
-
-```bash
-cernbox copy -r ./build-logs --slot logs
-cernbox paste --slot logs ./incoming/
-cernbox clipboard list
-cernbox clipboard clear logs
-```
-
-```console
-$ cernbox clipboard list
-SLOT      FROM      CONTENTS          SIZE   ORIGIN              COPIED   EXPIRES
-default   -         report.pdf        2.1M   gdelmont@lxplus812  20m ago  2026-09-30 00:00
-logs      -         build-logs/ +2 m  118M   gdelmont@nb-042     3h ago   2026-09-30 00:00
-to-marie  -         plots.tar         14M    gdelmont@nb-042     5m ago   2026-09-30 00:00
-default   asmith    dataset.root      1.2G   asmith@lxplus701    1h ago   2026-09-30 00:00
-```
-
-Rows with a `FROM` are handovers waiting for you, on somebody else's quota rather than yours.
-
-The `ORIGIN` column is there because a clipboard shared by every machine on one account is otherwise ambiguous — knowing a copy came from lxplus twenty minutes ago is most of what you want from a listing.
-
-### Handing a file to somebody else
-
-The same clipboard works between two people. The sender names the recipient, and the recipient names the sender:
+The same clipboard, between two people:
 
 ```bash
 # you
 cernbox copy ./plots.tar --to marie
 
 # marie, on her own account
-cernbox clipboard list          # shows what is waiting, and from whom
+cernbox clipboard list                    # shows what is waiting, and from whom
 cernbox paste --from gdelmont ./incoming/
 ```
 
-The slot is named after the recipient (`to-marie`) and is never your default one, because the whole slot directory becomes readable by them — a handover left in the slot everything else goes to would hand over the next thing you copied as well. For the same reason `--to` cannot be combined with `--slot`.
-
-A CERNBox path handed over this way is *copied* into the shared slot rather than pointed at: a pointer to a path of yours is unreadable to anybody else. The copy is made by the server, so no data passes through either machine — and if the recipient pastes to a CERNBox path, none passes through theirs either. Two people, two accounts, one file, and nothing on the wire.
-
-It stays on your quota until you run `cernbox clipboard clear to-marie`, which is what ends the handover — and which also takes back the share, so it does not linger in `cernbox share list` pointing at a directory that no longer exists.
-
-The share itself keeps out of the way. Collecting a handover marks it hidden, so it stops appearing in the recipient's share list and in the web interface as something to accept or decline — neither of which means anything for a directory the sender will clear. It cannot be created hidden: that flag belongs to the recipient's own copy of the share, so only they can set it, and collecting it is the first moment they can. Hiding grants and revokes nothing — the slot stays readable, stays in `cernbox clipboard list`, and can be pasted again.
-
-`--stream` works across accounts too, and then nothing is stored at all:
-
-```bash
-# you: this blocks, holding the file open
-tar cz ./analysis | cernbox copy --stream - --name analysis.tgz --to marie
-
-# marie, whenever she gets there
-cernbox paste --from gdelmont - | tar xz
-```
-
-The sender waits (`--wait`, ten minutes by default) until she runs it, then the two halves run at once with only a few pieces on the server at any moment. Nothing is left behind and there is no quota to reclaim — though the pieces she consumes land in *your* recycle bin, so `cernbox trash purge` after a large one is worth the habit.
-
-### What it does and does not do
-
-**Pasting does not empty the clipboard.** That is deliberate: it is a clipboard, so the same copy reaches as many machines as you like, and a paste that fails halfway has not destroyed the only copy. `cernbox clipboard clear` is how you let go of it.
-
-**Uploaded copies count against your quota** until the slot is cleared or expires. `--ttl` sets the lifetime, a week by default, and `0` means "until I clear it". Nothing runs on a schedule to collect expired slots, so `copy` and `clipboard list` do it on the way past. `clipboard list` shows what each slot is costing; note that a cleared slot's bytes land in your trash first, so `cernbox trash purge` is what actually returns the quota.
-
-**Clearing never touches a referenced file.** A copy made with `cb:` points at your real file; only the duplicates the CLI uploaded for the clipboard itself are deleted. If you move or delete a referenced file, a later paste says so rather than reporting a bare "no such file".
-
-**A handover exposes one slot, and grants as little on it as the job needs.** `--to` shares the slot directory and nothing else: the recipient cannot read the rest of your clipboard, or the directory it sits in. A stored handover is read-only, so the copy stays yours to clear. A live one (`--stream --to`) additionally makes the `stream/` directory inside the slot writable, because the protocol needs the receiver to announce itself there and to delete each piece as it consumes it — that deletion is the flow control. The manifest and everything else stay read-only either way.
-
-**Two machines copying to the same slot is detected, not silently resolved.** The manifest is replaced only while its ETag is unchanged, so the second copy is told that the first one landed instead of overwriting it and orphaning its staged bytes. A copy that fails partway leaves the previous one intact and pastable, because nothing is deleted until the replacement has been committed. The one gap is two machines writing a slot for the *very first* time simultaneously: reva ignores `If-None-Match`, so there is no way to make creating a file exclusive, and that case is last-writer-wins.
+It stays on your quota until `cernbox clipboard clear to-marie`, which is what ends it. `--stream --to` works too, and then nothing is stored anywhere.
 
 ## Sharing
 
 ```bash
 cernbox share create /eos/user/g/gdelmont/Documents --with marie --role editor
-cernbox link create /eos/user/g/gdelmont/report.pdf --expiry 2026-12-31
-cernbox share received
+cernbox share list                        # everything you have shared
+cernbox share received                    # what others have shared with you
 ```
 
-A share or a link can be changed after the fact, and a link keeps its address when it changes, so everybody already holding it keeps working:
+A share can be changed or withdrawn afterwards with `share update` and `share remove`. Public links work the same way, and a link keeps its address when you change it, so anybody already holding it is unaffected:
 
 ```bash
-cernbox share update /eos/user/g/gdelmont/Documents SHARE_ID --role viewer
-cernbox link update /eos/user/g/gdelmont/report.pdf LINK_ID --role viewer --expiry 2026-12-31
-cernbox link update /eos/user/g/gdelmont/report.pdf LINK_ID --no-expiry
+cernbox link create report.pdf --expiry 2026-12-31
+cernbox link update report.pdf LINK_ID --role viewer
+cernbox link password report.pdf LINK_ID
 ```
 
-`link list` shows the ids, and TAB completes them.
-
-To share with someone at another institution, exchange an invitation first, then share as usual:
+To share with someone at another institution, exchange an invitation once and then share as usual:
 
 ```bash
 cernbox ocm invite create --recipient alice@other-lab.org
 cernbox ocm contacts
-cernbox share create /eos/user/g/gdelmont/data --with-remote alice@other-lab.org
+cernbox share create data --with-remote alice@other-lab.org
 ```
 
-## Scripting
+## Undoing things
 
-Every command takes `--output json`, and exit codes are stable:
+```bash
+cernbox trash list                    # what you have deleted
+cernbox trash restore KEY
+cernbox versions list report.pdf      # earlier versions of a file
+cernbox versions restore report.pdf VERSION
+```
 
-| Code | Meaning |
-| --- | --- |
-| 0 | Success |
-| 1 | Generic failure |
-| 2 | Usage error |
-| 3 | Authentication failure — try `kinit` |
-| 4 | Permission denied |
-| 5 | Not found |
-| 6 | Conflict (lock, etag mismatch, quota) |
+## In scripts
 
-Code 3 versus 4 is the distinction that matters in scripts: 3 is worth retrying after refreshing credentials, 4 is not.
+`--output json` and `--output csv` turn any listing into something a program can read, and informational messages go to standard error so a pipe sees only data.
+
+```bash
+cernbox --output json ls data | jq -r '.[] | select(.size > 1e9) | .name'
+```
+
+Exit codes distinguish the cases worth branching on: `0` success, `2` a mistake in the command, `3` a credentials problem, `4` not allowed, `5` not found.
+
+## Shell completion
+
+```bash
+source <(cernbox completion bash)     # or zsh, or fish
+```
+
+TAB then completes CERNBox paths as you type them, along with space names, share ids and the other things nobody remembers.
 
 ## Development
 
 ```bash
-make build              # build ./cernbox
-make test               # unit tests
-make dev-up             # revad + EOS + the federation partner, in Docker
-make test-integration   # integration tests against the dev environment
-make dev-down
-make lint
+make build            # build
+make test             # unit tests
+make dev-up           # start a local CERNBox to test against
+make test-integration # run the tests that need it
 ```
 
-The dev environment runs three containers: EOS, the CERNBox under test, and a second reva acting as a federation partner so the `ocm` commands have a real far end. Every command in the tree is exercised against it — `TestEveryCommandIsCovered` compares the binary's own command list against a map of which test covers what, and fails when a command is added without one.
+`make help` lists the rest.
 
-See [docs/design.md](docs/design.md) for the full design, including the server-side Kerberos work.
+## More
+
+- [docs/behaviour.md](docs/behaviour.md) — what the client does when the server is awkward, and what each kind of transfer actually costs
+- [docs/design.md](docs/design.md) — the architecture and the decisions behind it
 
 ## Licence
 
