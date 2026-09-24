@@ -2,6 +2,12 @@
 # Wait for the dev environment to answer. EOS takes a while to come up behind
 # revad, and the federation partner has to be reachable before the OCM tests
 # can run, so a bare "docker compose up" is not enough to start testing.
+#
+# Answering is not the same as being ready to be written to: the EOS container is
+# still creating homes and setting quota after revad starts serving. That wait
+# lives in the integration suite's own TestMain, which has the built client and so
+# can probe with the same code path the tests use rather than an approximation of
+# it here.
 set -euo pipefail
 
 ATTEMPTS="${CERNBOX_DEV_ATTEMPTS:-60}"
