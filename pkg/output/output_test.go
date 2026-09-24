@@ -372,3 +372,41 @@ func stripSGR(s string) string {
 	}
 	return b.String()
 }
+
+func TestEmptyTablePrintsNothing(t *testing.T) {
+	// A header on its own is not information. It says a listing was attempted,
+	// which the command has already said in words, and it lands underneath the
+	// message that explained the listing is empty.
+	var buf bytes.Buffer
+	w := New(&buf, FormatTable)
+	if err := w.Render(Table{Headers: []string{"SLOT", "CONTENTS", "SIZE"}}); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "" {
+		t.Errorf("an empty table printed %q", buf.String())
+	}
+}
+
+func TestEmptyJSONIsAnEmptyList(t *testing.T) {
+	// Whatever is on the other end of a pipe needs a document either way.
+	var buf bytes.Buffer
+	w := New(&buf, FormatJSON)
+	if err := w.Render(Table{Headers: []string{"SLOT"}, Items: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "[]" {
+		t.Errorf("empty JSON = %q, want []", got)
+	}
+}
+
+func TestEmptyCSVKeepsItsHeader(t *testing.T) {
+	// A parser needs the shape of what it did not get.
+	var buf bytes.Buffer
+	w := New(&buf, FormatCSV)
+	if err := w.Render(Table{Headers: []string{"SLOT", "CONTENTS"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "SLOT,CONTENTS" {
+		t.Errorf("empty CSV = %q, want just the header", got)
+	}
+}

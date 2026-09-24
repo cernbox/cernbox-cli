@@ -175,6 +175,15 @@ func (w *Writer) renderTable(t Table) error {
 	// is emitted bold: tabwriter counts the bytes of an ANSI escape as width, so
 	// a coloured header was padded four columns short and every column after the
 	// first sat out of line with its heading.
+	// Nothing to show means nothing is shown. A lone header is not information:
+	// it says a listing was attempted, which the command already said, and it
+	// arrives underneath whatever message explained that the listing is empty.
+	// CSV keeps its header, because a parser on the other end needs it to know
+	// the shape of what it did not get.
+	if len(t.Rows) == 0 {
+		return nil
+	}
+
 	rows := make([][]string, 0, len(t.Rows)+1)
 	showHeader := len(t.Headers) > 0 && !w.quiet
 	if showHeader {
