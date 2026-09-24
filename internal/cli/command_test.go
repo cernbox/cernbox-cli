@@ -66,6 +66,12 @@ type testBox struct {
 	// test can start from one that has already been hidden.
 	handoverHidden bool
 
+	// shortOnce serves the named paths truncated, that many times, before serving
+	// them whole. It is how a test reaches a piece of a stream that exists but is
+	// not yet fully written, which is a race no amount of timing can reach
+	// reliably.
+	shortOnce map[string]int
+
 	// archiver turns on the archiver service. It is off by default because the
 	// transfer engine prefers an archiver whenever one is advertised, and every
 	// test of a recursive download would otherwise be testing a different code
@@ -99,11 +105,12 @@ const (
 func newTestBox(t *testing.T) *testBox {
 	t.Helper()
 	b := &testBox{
-		files:    map[string]string{},
-		dirs:     map[string]bool{"/": true},
-		trash:    map[string]trashEntry{},
-		versions: map[string][]versionEntry{},
-		etags:    map[string]string{},
+		files:     map[string]string{},
+		dirs:      map[string]bool{"/": true},
+		trash:     map[string]trashEntry{},
+		versions:  map[string][]versionEntry{},
+		etags:     map[string]string{},
+		shortOnce: map[string]int{},
 	}
 	b.ts = httptest.NewServer(http.HandlerFunc(b.route))
 	t.Cleanup(b.ts.Close)
@@ -363,6 +370,16 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 		body, ok := b.files[p]
 		if !ok {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		// Stand in for a file that is visible before it has been written. The
+		// storage creates the entry and the bytes follow, so a reader can catch
+		// one part way through — and a short read is not an error, which is how
+		// the data went missing silently until the receiver started weighing
+		// each piece.
+		if b.shortOnce[p] > 0 {
+			b.shortOnce[p]--
+			fmt.Fprint(w, body[:len(body)/2])
 			return
 		}
 		fmt.Fprint(w, body)

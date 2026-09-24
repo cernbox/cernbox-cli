@@ -408,3 +408,44 @@ func TestStreamHandoverSharesTheSlotAndTheScratchDirectory(t *testing.T) {
 		t.Errorf("the sender never looked for the recipient's marker: %v", box.requests)
 	}
 }
+
+// TestStreamWaitsForAPieceThatIsNotFullyWrittenYet is a regression test for
+// silent data loss.
+//
+// A piece can be visible before it has been written — the storage creates the
+// entry and the bytes follow — and a receiver polling four times a second can
+// catch one mid-flight. Reading it loses whatever had not arrived, and a short
+// read is not an error, so the only sign was a total at the end that did not
+// match what the sender said it sent. CI found it as one 64K piece missing from
+// a 512K stream.
+//
+// The fake serves the second piece truncated once, which is a race no amount of
+// timing could reach reliably.
+func TestStreamWaitsForAPieceThatIsNotFullyWrittenYet(t *testing.T) {
+	box := streamBox(t)
+	cfg := smallChunkConfig(t, "1K")
+	body := streamPayload(4096) // four pieces of one kilobyte
+
+	box.beforePut = func(p string) {
+		// Arm the truncation as the piece is written, so the receiver's very next
+		// read of it sees a file that exists and is half there.
+		if strings.HasSuffix(p, "/stream/00001") {
+			box.shortOnce[p] = 1
+		}
+	}
+
+	out, sendErr, recvErr := runPair(t, box, body,
+		[]string{"--config", cfg, "copy", "--stream", "-", "--name", "live.bin", "--wait", "20s"},
+		[]string{"--config", cfg, "paste", "--wait", "20s", "-"})
+
+	if sendErr != nil {
+		t.Fatalf("the sender failed: %v", sendErr)
+	}
+	if recvErr != nil {
+		t.Fatalf("the receiver failed: %v", recvErr)
+	}
+	if out != body {
+		t.Errorf("the receiver got %d bytes, want %d: a piece was consumed before it was whole",
+			len(out), len(body))
+	}
+}

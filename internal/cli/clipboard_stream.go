@@ -357,7 +357,7 @@ func (a *App) streamPaste(ctx context.Context, root string, m *clipboard.Manifes
 	bar := a.newMeter(e.Name, e.Size)
 	defer bar.Stop()
 
-	received, err := a.drainStream(ctx, root, m.Slot, bar.Writer(out), opts.wait)
+	received, err := a.drainStream(ctx, root, m, bar.Writer(out), opts.wait)
 	bar.Stop()
 	if ferr := finish(err); err == nil {
 		err = ferr
@@ -424,18 +424,81 @@ func (a *App) openStreamSink(e clipboard.Entry, dest string, toStdout bool, opts
 // drainStream consumes pieces in order, deleting each one as it is read — which
 // is both how the sender is given room to send the next and why nothing
 // accumulates on the server.
-func (a *App) drainStream(ctx context.Context, root, slot string, out io.Writer, wait time.Duration) (int64, error) {
+//
+// Every piece is weighed before it is consumed. A piece can be visible before it
+// has been written: the storage creates the file and the bytes follow, so a
+// receiver polling every quarter second can catch one mid-flight. Reading that one
+// loses whatever had not arrived yet — silently, because a short read is not an
+// error — and the loss only shows up at the end as a total that does not match
+// what the sender says it sent. That is not a hypothetical: it is what CI caught,
+// one 64K piece short of a 512K stream.
+//
+// The expected weight is known for every piece. All but the last are one chunk;
+// the last is whatever is left over, which the sender's total gives once it has
+// finished. A piece that does not weigh what it should is left where it is and
+// looked at again, rather than read and deleted.
+func (a *App) drainStream(ctx context.Context, root string, m *clipboard.Manifest, out io.Writer, wait time.Duration) (int64, error) {
+	slot := m.Slot
+	var chunkSize int64
+	if m.Stream != nil {
+		chunkSize = m.Stream.ChunkSize
+	}
+
 	var received int64
+	var done *clipboard.Done
 	deadline := time.Now().Add(wait)
 
 	for next := 0; ; {
-		body, _, err := a.client.Download(ctx, clipboard.ChunkPath(root, slot, next), 0)
+		expect := chunkSize
+		if done != nil && next == done.Parts-1 {
+			expect = done.Size - received
+		}
+
+		body, size, err := a.client.Download(ctx, clipboard.ChunkPath(root, slot, next), 0)
 		switch {
 		case err == nil:
+			// size is -1 when the server sends no length, in which case there is
+			// nothing to check in advance and the count after the fact has to do.
+			if expect > 0 && size >= 0 && size != expect {
+				body.Close()
+
+				// A piece that weighs less than a chunk is either still being
+				// written or is the last one, and only the done marker tells those
+				// apart. It is read here rather than only when a piece is missing,
+				// because the last piece is short and present: waiting for it to
+				// grow to a full chunk would wait for ever.
+				if done == nil {
+					fresh, err := a.readDone(ctx, root, slot)
+					if err != nil {
+						return received, err
+					}
+					if fresh != nil {
+						done = fresh
+						continue // with the real length of the last piece known
+					}
+				}
+
+				if time.Now().After(deadline) {
+					return received, incompletePiece(slot, next, size, expect, wait)
+				}
+				if err := sleepCtx(ctx, streamPoll); err != nil {
+					return received, err
+				}
+				continue
+			}
+
 			n, copyErr := io.Copy(out, body)
 			body.Close()
 			if copyErr != nil {
 				return received, cberr.Wrap(cberr.KindOther, "receive", slot, copyErr)
+			}
+			// Nothing can be taken back now: whatever arrived has gone to the
+			// destination. A piece that was the right length and then delivered
+			// less of it is the storage contradicting itself, so say so rather
+			// than carry on and report a total that will not add up.
+			if expect > 0 && n != expect {
+				return received, cberr.New(cberr.KindOther, "receive", slot,
+					fmt.Sprintf("piece %d of the stream was %d bytes but %d arrived", next, expect, n))
 			}
 			received += n
 
@@ -452,7 +515,7 @@ func (a *App) drainStream(ctx context.Context, root, slot string, out io.Writer,
 
 		// No piece yet. Either the sender is still working on it, or there will
 		// never be one — and only the done marker tells those apart.
-		done, err := a.readDone(ctx, root, slot)
+		done, err = a.readDone(ctx, root, slot)
 		if err != nil {
 			return received, err
 		}
@@ -471,6 +534,14 @@ func (a *App) drainStream(ctx context.Context, root, slot string, out io.Writer,
 			return received, err
 		}
 	}
+}
+
+// incompletePiece is the error for a piece that never reached its full length,
+// which means the sender stopped part way through writing it.
+func incompletePiece(slot string, n int, got, want int64, wait time.Duration) error {
+	return cberr.New(cberr.KindOther, "receive", slot,
+		fmt.Sprintf("piece %d of the stream stopped at %d of %d bytes for %s. "+
+			"The other computer may have been interrupted.", n, got, want, wait))
 }
 
 // readDone reports the sender's end-of-stream marker, or nil while there is none.
