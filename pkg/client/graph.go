@@ -673,6 +673,14 @@ type DriveItem struct {
 	Path string `json:"path,omitempty"`
 	// SharedBy is who granted the share, for received shares.
 	SharedBy *Identity `json:"shared_by,omitempty"`
+	// SharedWith is who it was granted to, for shares you made. A resource is
+	// listed once however many shares it carries, so there can be several — and
+	// a public link has no grantee at all, which is why this can be empty on a
+	// row that is nonetheless shared.
+	SharedWith []Identity `json:"shared_with,omitempty"`
+	// Links counts the public links on the resource, for the same listing: a row
+	// with no grantee and a link is shared with whoever has the address.
+	Links int `json:"links,omitempty"`
 	// Role is the role the caller holds on the item.
 	Role string `json:"role,omitempty"`
 	// Accepted reports whether a received share has been accepted.
@@ -695,6 +703,8 @@ type graphDriveItem struct {
 	Name            *string `json:"name"`
 	Size            *int64  `json:"size"`
 	ParentReference *struct {
+		// Path is the parent's path relative to the space root, so the resource's
+		// own path is this plus its name.
 		Path *string `json:"path"`
 	} `json:"parentReference"`
 	RemoteItem *struct {
@@ -746,22 +756,36 @@ func (d graphDriveItem) toDriveItem() DriveItem {
 			// listing that holds both.
 			out.Federated = strings.HasPrefix(*d.RemoteItem.ID, OCMReceivedPrefix)
 		}
-		// The reported path is relative to the space the resource lives in, which
-		// for a received share is somebody else's. The space root is recoverable
-		// from the id, and an absolute path is the one worth showing: it is the
-		// one that can be typed into another command.
-		if d.RemoteItem.Path != nil && *d.RemoteItem.Path != "" {
-			out.Path = *d.RemoteItem.Path
-			if d.RemoteItem.ID != nil {
-				if root, ok := SpacePathOfID(*d.RemoteItem.ID); ok {
-					out.Path = path.Join(root, *d.RemoteItem.Path)
-				}
+	}
+
+	// The absolute path, which is the only kind worth showing: it is what can be
+	// typed into another command. Neither listing reports one.
+	//
+	// A received share reports a path relative to the space it lives in, which is
+	// somebody else's. A share you made reports no path for the resource at all —
+	// only its parent's, again relative to a space root — so the two are put
+	// together from different pieces. The space root itself is recoverable from
+	// the resource id in both cases.
+	switch {
+	case d.RemoteItem != nil && d.RemoteItem.Path != nil && *d.RemoteItem.Path != "":
+		out.Path = *d.RemoteItem.Path
+		if d.RemoteItem.ID != nil {
+			if root, ok := SpacePathOfID(*d.RemoteItem.ID); ok {
+				out.Path = path.Join(root, *d.RemoteItem.Path)
 			}
 		}
+	case d.ID != nil && out.Name != "":
+		parent := ""
+		if d.ParentReference != nil && d.ParentReference.Path != nil {
+			parent = *d.ParentReference.Path
+		}
+		if root, ok := SpacePathOfID(*d.ID); ok {
+			out.Path = path.Join(root, parent, out.Name)
+		} else if parent != "" {
+			out.Path = path.Join(parent, out.Name)
+		}
 	}
-	if d.ParentReference != nil && d.ParentReference.Path != nil {
-		out.Path = *d.ParentReference.Path
-	}
+
 	if d.CreatedBy != nil && d.CreatedBy.User != nil {
 		out.SharedBy = identityOf(d.CreatedBy.User, "user")
 	}
@@ -773,6 +797,17 @@ func (d graphDriveItem) toDriveItem() DriveItem {
 	}
 	if len(perms) > 0 && len(perms[0].Roles) > 0 {
 		out.Role = RoleName(perms[0].Roles[0])
+	}
+	// Who it went to. A share you made carries this and nothing else — there is
+	// no createdBy on it, since you are the one who created it — so without
+	// reading the permissions the recipient column has nothing in it at all.
+	for _, p := range perms {
+		switch converted := p.toPermission(); {
+		case converted.GrantedTo != nil:
+			out.SharedWith = append(out.SharedWith, *converted.GrantedTo)
+		case converted.Link != nil:
+			out.Links++
+		}
 	}
 	// A received share that has been accepted is synchronised and not hidden.
 	out.Accepted = d.ClientSynchronize != nil && *d.ClientSynchronize
