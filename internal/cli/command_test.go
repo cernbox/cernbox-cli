@@ -1460,6 +1460,30 @@ func TestShareReceivedRejectsAnUnknownID(t *testing.T) {
 	}
 }
 
+// TestShareReceivedShowsAbsolutePaths: a listing of names alone cannot tell two
+// files called report.pdf apart, and the path is the thing somebody would type
+// into the next command. The server reports it relative to the space it lives in,
+// which for a received share is somebody else's, so it is only useful once the
+// space root has been put back on the front.
+func TestShareReceivedShowsAbsolutePaths(t *testing.T) {
+	box := newTestBox(t)
+	box.handoverFrom = "other"
+	box.handoverSpace = "/eos/user/o/other"
+
+	stdout, _, err := run(t, box, "share", "received")
+	if err != nil {
+		t.Fatalf("share received: %v", err)
+	}
+
+	if !strings.Contains(stdout, "PATH") {
+		t.Errorf("the listing has no PATH column:\n%s", stdout)
+	}
+	want := "/eos/user/o/other/.cernbox/clipboard/to-einstein"
+	if !strings.Contains(stdout, want) {
+		t.Errorf("the listing does not show %s:\n%s", want, stdout)
+	}
+}
+
 // TestEmptyListingsPrintNoHeader covers the commands whose listings are commonly
 // empty. A header on its own says a listing was attempted, which the message
 // above it has already said.
