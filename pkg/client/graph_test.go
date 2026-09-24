@@ -451,27 +451,74 @@ func TestSharedWithMe(t *testing.T) {
 }
 
 func TestSetReceivedShareState(t *testing.T) {
+	// A received share has two ids: the resource that was shared, which the
+	// listing reports as the item's id, and the caller's own copy of the share,
+	// which is the only one the update handler accepts. Both are served here
+	// because the point of the call is to resolve between them.
+	const (
+		resourceID = "localhome$ABC!item-1"
+		shareID    = "jail$jail!42"
+	)
 	f := newFakeServer(t)
+	f.on(http.MethodGet, graphBeta+"/me/drive/sharedWithMe", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"value":[{"id":%q,"name":"shared","remoteItem":{"id":%q}}]}`,
+			shareID, resourceID)
+	})
 	f.on(http.MethodPatch, graphBeta+"/drives", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{}`)
 	})
 
 	c := f.client()
-	if err := c.SetReceivedShareState(context.Background(), "localhome$ABC!item-1", true); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name   string
+		id     string
+		accept bool
+		want   []string
+	}{
+		// The id somebody has in hand is whichever one they saw.
+		{"accept by resource id", resourceID, true, []string{`"@client.synchronize":true`, `"@UI.Hidden":false`}},
+		{"decline by resource id", resourceID, false, []string{`"@client.synchronize":false`, `"@UI.Hidden":true`}},
+		{"decline by share id", shareID, false, []string{`"@UI.Hidden":true`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := c.SetReceivedShareState(context.Background(), tc.id, tc.accept); err != nil {
+				t.Fatal(err)
+			}
+			req := f.lastRequest(http.MethodPatch)
+			// Whichever id went in, the share's own id is what goes out: the
+			// resource id answers 404.
+			if !strings.Contains(req.Path, shareID) {
+				t.Errorf("updated %q, want the share id %q", req.Path, shareID)
+			}
+			if strings.Contains(req.Path, resourceID) {
+				t.Errorf("updated with the resource id, which the server refuses: %q", req.Path)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(req.Body, want) {
+					t.Errorf("body = %s, want %s", req.Body, want)
+				}
+			}
+		})
 	}
-	body := f.lastRequest(http.MethodPatch).Body
-	if !strings.Contains(body, `"@client.synchronize":true`) || !strings.Contains(body, `"@UI.Hidden":false`) {
-		t.Errorf("accept body = %s", body)
-	}
+}
 
-	if err := c.SetReceivedShareState(context.Background(), "localhome$ABC!item-1", false); err != nil {
-		t.Fatal(err)
+// TestSetReceivedShareStateRejectsAnUnknownID: an id nobody shared resolves to
+// nothing, and saying so beats sending an update that cannot land.
+func TestSetReceivedShareStateRejectsAnUnknownID(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodGet, graphBeta+"/me/drive/sharedWithMe", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"value":[]}`)
+	})
+
+	err := f.client().SetReceivedShareState(context.Background(), "nobody$shared!this", true)
+	if err == nil || cberr.KindOf(err) != cberr.KindNotFound {
+		t.Fatalf("err = %v, want a not-found error", err)
 	}
-	body = f.lastRequest(http.MethodPatch).Body
-	if !strings.Contains(body, `"@client.synchronize":false`) || !strings.Contains(body, `"@UI.Hidden":true`) {
-		t.Errorf("decline body = %s", body)
+	for _, r := range f.recorded() {
+		if r.Method == http.MethodPatch {
+			t.Errorf("an unknown id still sent an update: %s %s", r.Method, r.Path)
+		}
 	}
 }
 

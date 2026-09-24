@@ -787,7 +787,6 @@ func (c *Client) driveItems(ctx context.Context, u, op string) ([]DriveItem, err
 	return out, nil
 }
 
-// SetReceivedShareState accepts or declines a received share.
 // HideReceivedShare takes a received share out of the caller's own listings,
 // and out of the web interface's.
 //
@@ -807,8 +806,24 @@ func (c *Client) HideReceivedShare(ctx context.Context, shareID string) error {
 		map[string]any{"@UI.Hidden": true}, nil)
 }
 
-func (c *Client) SetReceivedShareState(ctx context.Context, resourceID string, accept bool) error {
-	u, err := c.itemURL(resourceID, "")
+// SetReceivedShareState accepts or declines a received share.
+//
+// In reva's model these are the same field as hidden: accepting sets the share's
+// state to accepted and declining sets it to rejected, which is what the graph
+// reports as @UI.Hidden. Declining therefore takes the share out of the caller's
+// listings; on a deployment where sharing is done with storage ACLs it does not
+// necessarily take away their access.
+//
+// id may be either of the two ids a received share has. The listing reports the
+// resource that was shared, reva's handler accepts only the caller's own copy of
+// the share, and resolving between them is not something to make the user's
+// problem: before this, every accept and decline answered 404.
+func (c *Client) SetReceivedShareState(ctx context.Context, id string, accept bool) error {
+	shareID, err := c.receivedShareID(ctx, id)
+	if err != nil {
+		return err
+	}
+	u, err := c.itemURL(shareID, "")
 	if err != nil {
 		return err
 	}
@@ -816,7 +831,33 @@ func (c *Client) SetReceivedShareState(ctx context.Context, resourceID string, a
 		"@UI.Hidden":          !accept,
 		"@client.synchronize": accept,
 	}
-	return c.sendJSON(ctx, http.MethodPatch, u, "update received share", resourceID, body, nil)
+	return c.sendJSON(ctx, http.MethodPatch, u, "update received share", id, body, nil)
+}
+
+// receivedShareID maps whichever id the caller has onto the one an update takes.
+//
+// An id that is already a share's own id is returned untouched, so a caller that
+// has the right one costs nothing but the listing it takes to confirm it.
+func (c *Client) receivedShareID(ctx context.Context, id string) (string, error) {
+	items, err := c.SharedWithMe(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	resolved := ""
+	for _, it := range items {
+		if it.ShareID == id {
+			return id, nil
+		}
+		if it.ID == id && it.ShareID != "" {
+			resolved = it.ShareID
+		}
+	}
+	if resolved != "" {
+		return resolved, nil
+	}
+	return "", cberr.New(cberr.KindNotFound, "update received share", id,
+		"nothing with this id has been shared with you. 'cernbox share received' lists what has")
 }
 
 func toPermissions(in []graphPermission) []Permission {

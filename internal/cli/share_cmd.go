@@ -208,7 +208,12 @@ func newShareReceivedCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "received",
 		Short: "List, accept or decline shares other people made with you",
-		Args:  cobra.NoArgs,
+		Long: "List what other people have shared with you.\n\n" +
+			"Declining takes a share out of your listings; accepting puts it back.\n" +
+			"Use the id from this listing for either.",
+		Example: "  cernbox share received\n" +
+			"  cernbox share received --decline SHARE_ID",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()

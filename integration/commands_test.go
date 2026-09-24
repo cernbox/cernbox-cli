@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cernbox/cernbox-cli/pkg/cberr"
 )
 
 // This file exists to make the coverage claim checkable: every command in the
@@ -886,5 +888,64 @@ func TestShareListShowsALinkType(t *testing.T) {
 		if !strings.Contains(line, "view") {
 			t.Errorf("a link row should report its type as the role: %q", line)
 		}
+	}
+}
+
+// TestShareReceivedAcceptAndDecline exercises a pair of flags that answered 404
+// for every share until the id was resolved.
+//
+// A received share has two ids: the resource that was shared, which the listing
+// prints, and the caller's own copy of the share, which is the only one reva's
+// update handler takes. This drives it the way a person would — with the id they
+// can see — which is exactly the case that was broken.
+func TestShareReceivedAcceptAndDecline(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("decidable.txt")
+	e.mustRun("put", e.writeLocal("decidable.txt", []byte("yours to refuse")), target)
+	e.mustRun("share", "create", target, "--with", otherUser, "--role", "viewer")
+
+	type row struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Hidden bool   `json:"hidden"`
+	}
+	find := func() row {
+		var received []row
+		e.runJSONAs(e.other(), &received, "share", "received")
+		for _, s := range received {
+			if strings.Contains(s.Name, "decidable.txt") {
+				return s
+			}
+		}
+		t.Fatalf("the share did not reach %s: %+v", otherUser, received)
+		return row{}
+	}
+
+	mine := find()
+	if mine.Hidden {
+		t.Fatalf("a new share arrived already declined: %+v", mine)
+	}
+
+	// Declining is what reva calls rejecting, and it is reported as hidden.
+	e.mustRunAs(e.other(), "share", "received", "--decline", mine.ID)
+	if after := find(); !after.Hidden {
+		t.Errorf("declining did not take: %+v", after)
+	}
+
+	e.mustRunAs(e.other(), "share", "received", "--accept", mine.ID)
+	if after := find(); after.Hidden {
+		t.Errorf("accepting did not take: %+v", after)
+	}
+}
+
+func TestShareReceivedRejectsAnIDNobodyShared(t *testing.T) {
+	e := setup(t)
+
+	_, stderr, code := e.runAs(e.other(), "share", "received", "--accept", "no-such-share")
+	if code != cberr.ExitNotFound {
+		t.Errorf("exit code = %d, want %d", code, cberr.ExitNotFound)
+	}
+	if !strings.Contains(stderr, "share received") {
+		t.Errorf("the error does not say where to find the right id: %s", stderr)
 	}
 }
