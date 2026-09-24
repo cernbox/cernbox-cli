@@ -1459,3 +1459,29 @@ func TestShareReceivedRejectsAnUnknownID(t *testing.T) {
 		}
 	}
 }
+
+// TestEmptyListingsPrintNoHeader covers the commands whose listings are commonly
+// empty. A header on its own says a listing was attempted, which the message
+// above it has already said.
+func TestEmptyListingsPrintNoHeader(t *testing.T) {
+	// Listings that really are empty against a fresh box. The fake answers the
+	// app-token and share listings with fixtures, so those have rows and a header
+	// is right for them.
+	for _, args := range [][]string{
+		{"clipboard", "list"},
+		{"trash", "list"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			box := newTestBox(t)
+			stdout, _, err := run(t, box, args...)
+			if err != nil {
+				t.Fatalf("%v: %v", args, err)
+			}
+			for _, header := range []string{"SLOT", "KEY", "ORIGINAL", "CONTENTS", "EXPIRES"} {
+				if strings.Contains(stdout, header) {
+					t.Errorf("an empty listing printed the %q header:\n%s", header, stdout)
+				}
+			}
+		})
+	}
+}
