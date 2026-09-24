@@ -546,13 +546,22 @@ func (a *App) renderPermissions(perms []client.Permission) error {
 }
 
 func (a *App) renderDriveItems(items []client.DriveItem, peerHeader string) error {
-	table := output.Table{Headers: []string{"ID", "NAME", "ROLE", peerHeader, "ACCEPTED"}, Items: items}
+	// The path, not only the name. A listing of everything you have shared is a
+	// list of names otherwise, and two files called report.pdf in different
+	// directories are indistinguishable — while the path is the thing you would
+	// then type into another command.
+	table := output.Table{
+		Headers: []string{"ID", "NAME", "PATH", "ROLE", peerHeader, "ACCEPTED"},
+		Items:   items,
+	}
 	for _, it := range items {
 		peer := "-"
 		if it.SharedBy != nil {
 			peer = firstNonEmpty(it.SharedBy.DisplayName, it.SharedBy.ID)
 		}
-		table.Rows = append(table.Rows, []string{it.ID, it.Name, orDash(it.Role), peer, yesNo(it.Accepted)})
+		table.Rows = append(table.Rows, []string{
+			it.ID, it.Name, orDash(it.Path), orDash(it.Role), peer, yesNo(it.Accepted),
+		})
 	}
 	return a.out.Render(table)
 }

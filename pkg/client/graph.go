@@ -701,6 +701,9 @@ type graphDriveItem struct {
 		ID   *string `json:"id"`
 		Name *string `json:"name"`
 		Size *int64  `json:"size"`
+		// Path is where the resource sits in the space it belongs to, relative to
+		// that space's root. It is the only path a received share reports.
+		Path *string `json:"path"`
 		// The grant lives here for a received share: the top-level item is the
 		// entry in the caller's own virtual drive, and the permission belongs
 		// to the resource it points at.
@@ -742,6 +745,18 @@ func (d graphDriveItem) toDriveItem() DriveItem {
 			// it is what distinguishes a federated share from a local one in a
 			// listing that holds both.
 			out.Federated = strings.HasPrefix(*d.RemoteItem.ID, OCMReceivedPrefix)
+		}
+		// The reported path is relative to the space the resource lives in, which
+		// for a received share is somebody else's. The space root is recoverable
+		// from the id, and an absolute path is the one worth showing: it is the
+		// one that can be typed into another command.
+		if d.RemoteItem.Path != nil && *d.RemoteItem.Path != "" {
+			out.Path = *d.RemoteItem.Path
+			if d.RemoteItem.ID != nil {
+				if root, ok := SpacePathOfID(*d.RemoteItem.ID); ok {
+					out.Path = path.Join(root, *d.RemoteItem.Path)
+				}
+			}
 		}
 	}
 	if d.ParentReference != nil && d.ParentReference.Path != nil {
