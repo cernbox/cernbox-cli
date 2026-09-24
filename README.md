@@ -12,6 +12,12 @@ On lxplus there is nothing to configure and nothing to log into: the CLI picks u
 
 ## Install
 
+```bash
+curl cli.cernbox.cern.ch | sh
+```
+
+That fetches the release built for your system, checks it against the published checksum, and installs it into `/usr/local/bin` if you can write there or `~/.local/bin` otherwise — telling you what to add to `PATH` if it is not already there. It never asks for a password: a script piped from the network is the last thing that should be running `sudo`. `CERNBOX_VERSION` pins a version, `CERNBOX_INSTALL_DIR` chooses where it goes, and `CERNBOX_BASE_URL` points it at a mirror. The script is [install.sh](install.sh) in this repository.
+
 From source:
 
 ```bash
