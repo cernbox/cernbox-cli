@@ -72,7 +72,69 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	if err := waitForWrites(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "===> %v\n", err)
+		os.Exit(1)
+	}
+
 	os.Exit(m.Run())
+}
+
+// waitForWrites blocks until the storage will take a file, which is not the same
+// as revad answering.
+//
+// revad serves as soon as it can, while the EOS container is still working
+// through eos-run.sh creating each home and setting the quota on it. A write that
+// lands in that window is refused, and because the suite's very first act is a
+// write, the whole run reduces to one puzzling failure in whichever test happens
+// to sort first — with everything after it passing. That is exactly how it
+// presented in CI.
+//
+// The probe runs the built client rather than curl, so it exercises the same
+// authentication and the same WebDAV surface the tests do: a hand-rolled request
+// here can fail for reasons of its own and would then wait for a readiness that
+// had already arrived.
+//
+// touch then rm, because they need different things to be ready. Creating a file
+// needs the home and its quota; removing one needs quota on the recycle bin,
+// without which EOS refuses every delete outright.
+func waitForWrites(scratch string) error {
+	const (
+		attempts = 60
+		pause    = 2 * time.Second
+	)
+	probe := homeRoot + "/.cernbox-write-probe"
+
+	// No *testing.T here, so this drives the binary directly rather than through
+	// the helpers that fail a test.
+	e := &env{localDir: scratch, cacheDir: scratch}
+	run := func(args ...string) (string, error) {
+		out, err := e.cmdAs(e.self(), args...).CombinedOutput()
+		return string(out), err
+	}
+
+	var last string
+	for i := range attempts {
+		// An earlier run that was killed may have left the probe behind, and
+		// touch refuses to rewrite a file that exists. Clearing it first keeps
+		// that from looking like a storage that never becomes ready.
+		_, _ = run("rm", "-f", probe)
+
+		if out, err := run("touch", probe); err != nil {
+			last = fmt.Sprintf("touch: %v: %s", err, out)
+		} else if out, err := run("rm", "-f", probe); err != nil {
+			last = fmt.Sprintf("rm: %v: %s", err, out)
+		} else {
+			return nil
+		}
+
+		if i == 0 {
+			fmt.Fprintln(os.Stderr, "waiting for the storage to accept writes...")
+		}
+		time.Sleep(pause)
+	}
+	return fmt.Errorf("the storage did not accept a write within %s, last error: %s",
+		time.Duration(attempts)*pause, last)
 }
 
 func reachable() bool {
