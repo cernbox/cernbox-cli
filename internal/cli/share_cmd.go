@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -521,13 +522,50 @@ func (a *App) renderLinks(links []client.Permission) error {
 	return a.out.Render(table)
 }
 
+// peerColumn names the other party: who a share came from, or who it went to.
+//
+// Which of the two is populated depends on the listing, not on the row: a share
+// you made carries its recipients and no creator, because you are the creator,
+// while one made with you carries its creator and no recipient, because the
+// recipient is you.
+//
+// Usernames, not display names. "Marie Curie" cannot be typed into --with, and a
+// listing whose values cannot be fed back into a command is one you have to
+// translate by hand.
+func peerColumn(it client.DriveItem) string {
+	names := make([]string, 0, len(it.SharedWith)+1)
+	for _, who := range it.SharedWith {
+		names = append(names, firstNonEmpty(who.ID, who.DisplayName))
+	}
+	if it.Links > 0 {
+		names = append(names, itemsPlural(it.Links, "link"))
+	}
+	if len(names) == 0 && it.SharedBy != nil {
+		names = append(names, firstNonEmpty(it.SharedBy.ID, it.SharedBy.DisplayName))
+	}
+	if len(names) == 0 {
+		return "-"
+	}
+	return strings.Join(names, ", ")
+}
+
+// itemsPlural counts a thing in words, for a column that says "2 links" rather
+// than listing addresses nobody can act on from a table.
+func itemsPlural(n int, what string) string {
+	if n == 1 {
+		return what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
+}
+
 func (a *App) renderPermissions(perms []client.Permission) error {
 	table := output.Table{Headers: []string{"ID", "ROLE", "GRANTED TO", "TYPE", "EXPIRES"}, Items: perms}
 	for _, p := range perms {
 		grantee, kind := "-", "-"
 		switch {
 		case p.GrantedTo != nil:
-			grantee = firstNonEmpty(p.GrantedTo.DisplayName, p.GrantedTo.ID)
+			// The username, which is what --with takes.
+			grantee = firstNonEmpty(p.GrantedTo.ID, p.GrantedTo.DisplayName)
 			kind = p.GrantedTo.Type
 		case p.Link != nil:
 			grantee = p.Link.URL
@@ -555,12 +593,8 @@ func (a *App) renderDriveItems(items []client.DriveItem, peerHeader string) erro
 		Items:   items,
 	}
 	for _, it := range items {
-		peer := "-"
-		if it.SharedBy != nil {
-			peer = firstNonEmpty(it.SharedBy.DisplayName, it.SharedBy.ID)
-		}
 		table.Rows = append(table.Rows, []string{
-			it.ID, it.Name, orDash(it.Path), orDash(it.Role), peer, yesNo(it.Accepted),
+			it.ID, it.Name, orDash(it.Path), orDash(it.Role), peerColumn(it), yesNo(it.Accepted),
 		})
 	}
 	return a.out.Render(table)

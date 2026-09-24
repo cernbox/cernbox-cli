@@ -187,6 +187,20 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		  {"id":"s2","name":"cernbox","driveType":"project","driveAlias":"eos/project/c/cernbox"}
 		]}`)
 
+	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/me/drive/sharedByMe"):
+		// The shape reva actually returns for a share you made, which is not the
+		// shape of one made with you: there is no remoteItem and no createdBy —
+		// you are the creator — so the recipient is in the permissions and the
+		// resource's path has to be built from its parent's.
+		fmt.Fprintf(w, `{"value":[
+		  {"id":%q,"name":"report.pdf","size":12,
+		   "parentReference":{"path":"Documents/2026"},
+		   "permissions":[
+		     {"id":"share-9","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"],
+		      "grantedToV2":{"user":{"id":"marie","displayName":"Marie Curie"}}},
+		     {"id":"link-9","link":{"type":"view","webUrl":"https://cernbox.test/s/xyz"}}]}
+		]}`, spaceIDOf("/eos/user/e/einstein"))
+
 	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/me/drive/sharedWithMe"):
 		// One local share and one federated one: only the remoteItem id prefix
 		// tells them apart, which is what ocm received filters on.
@@ -1146,8 +1160,14 @@ func TestShareReceivedCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "Marie Curie") {
+	// The username, not the display name: "marie" is what --with takes, and a
+	// listing whose values cannot be fed back into a command has to be
+	// translated by hand.
+	if !strings.Contains(stdout, "marie") {
 		t.Errorf("received shares output:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "Marie Curie") {
+		t.Errorf("the display name is not usable as an argument:\n%s", stdout)
 	}
 }
 
@@ -1507,5 +1527,68 @@ func TestEmptyListingsPrintNoHeader(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestShareListShowsFullPathsAndUsernames covers the listing of everything you
+// have shared, which is a different shape from the listing of what others have
+// shared with you and was getting neither column right.
+//
+// The server reports no path for the resource — only its parent's, relative to a
+// space root — and no creator, because you are the creator, so the recipient
+// lives in the permissions. Reading neither left a row that named a file and
+// nothing else useful about it.
+func TestShareListShowsFullPathsAndUsernames(t *testing.T) {
+	box := newTestBox(t)
+
+	stdout, _, err := run(t, box, "share", "list")
+	if err != nil {
+		t.Fatalf("share list: %v", err)
+	}
+
+	// The full path of the shared file, which is what another command would take.
+	if want := "/eos/user/e/einstein/Documents/2026/report.pdf"; !strings.Contains(stdout, want) {
+		t.Errorf("the listing does not show %s:\n%s", want, stdout)
+	}
+	// The recipient, by username, plus the public link that is also on it.
+	if !strings.Contains(stdout, "marie") {
+		t.Errorf("the listing does not say who it was shared with:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "Marie Curie") {
+		t.Errorf("the display name cannot be typed into --with:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "link") {
+		t.Errorf("the listing does not mention the public link on the same file:\n%s", stdout)
+	}
+}
+
+func TestShareListJSONCarriesThePathAndRecipients(t *testing.T) {
+	box := newTestBox(t)
+
+	stdout, _, err := run(t, box, "--output", "json", "share", "list")
+	if err != nil {
+		t.Fatalf("share list: %v", err)
+	}
+	var items []struct {
+		Path       string `json:"path"`
+		SharedWith []struct {
+			ID string `json:"id"`
+		} `json:"shared_with"`
+		Links int `json:"links"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &items); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, stdout)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d rows, want 1: %s", len(items), stdout)
+	}
+	if items[0].Path != "/eos/user/e/einstein/Documents/2026/report.pdf" {
+		t.Errorf("path = %q", items[0].Path)
+	}
+	if len(items[0].SharedWith) != 1 || items[0].SharedWith[0].ID != "marie" {
+		t.Errorf("shared_with = %+v", items[0].SharedWith)
+	}
+	if items[0].Links != 1 {
+		t.Errorf("links = %d, want 1", items[0].Links)
 	}
 }
