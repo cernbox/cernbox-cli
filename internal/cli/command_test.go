@@ -1377,3 +1377,85 @@ func TestLinkUpdateWithNothingToChangeIsAUsageError(t *testing.T) {
 		t.Fatalf("error = %v, want a usage error for two contradictory flags", err)
 	}
 }
+
+// TestShareReceivedAcceptResolvesTheShareID is a regression test for a command
+// that could never work: a received share has two ids, the listing displays the
+// resource that was shared, and reva's update handler accepts only the caller's
+// own copy of the share. Passing the id the listing gave you answered 404 every
+// time.
+func TestShareReceivedAcceptResolvesTheShareID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag string
+		want string
+	}{
+		{"accept", "--accept", `"@UI.Hidden":false`},
+		{"decline", "--decline", `"@UI.Hidden":true`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			box := newTestBox(t)
+			box.handoverFrom = "other"
+			box.handoverSpace = "/eos/user/o/other"
+
+			// The id a user has is the one the listing printed: the resource.
+			resourceID := spaceIDOf(box.handoverSpace)
+			if _, _, err := run(t, box, "share", "received", tc.flag, resourceID); err != nil {
+				t.Fatalf("share received %s: %v", tc.flag, err)
+			}
+
+			var patched string
+			for _, r := range box.requests {
+				if strings.HasPrefix(r, "PATCH ") {
+					patched = r
+				}
+			}
+			if patched == "" {
+				t.Fatalf("nothing was updated: %v", box.requests)
+			}
+			if !strings.Contains(patched, testShareJailID) {
+				t.Errorf("the update named %q rather than the share's own id", patched)
+			}
+			if strings.Contains(patched, "localhome") {
+				t.Errorf("the update used the resource id, which the server refuses: %s", patched)
+			}
+			if body := box.lastPostBody(); !strings.Contains(body, tc.want) {
+				t.Errorf("body = %s, want %s", body, tc.want)
+			}
+		})
+	}
+}
+
+// TestShareReceivedTakesTheShareIDToo: whichever of the two ids somebody has in
+// hand, it works. A caller holding the right one must not be made to look it up.
+func TestShareReceivedTakesTheShareIDToo(t *testing.T) {
+	box := newTestBox(t)
+	box.handoverFrom = "other"
+	box.handoverSpace = "/eos/user/o/other"
+
+	if _, _, err := run(t, box, "share", "received", "--decline", testShareJailID); err != nil {
+		t.Fatalf("share received --decline: %v", err)
+	}
+	for _, r := range box.requests {
+		if strings.HasPrefix(r, "PATCH ") && strings.Contains(r, testShareJailID) {
+			return
+		}
+	}
+	t.Errorf("the share's own id was not used as given: %v", box.requests)
+}
+
+func TestShareReceivedRejectsAnUnknownID(t *testing.T) {
+	box := newTestBox(t)
+
+	_, _, err := run(t, box, "share", "received", "--accept", "no-such-share")
+	if err == nil || cberr.ExitCode(err) != cberr.ExitNotFound {
+		t.Fatalf("error = %v, want a not-found error", err)
+	}
+	if !strings.Contains(err.Error(), "share received") {
+		t.Errorf("the error does not say how to find the right id: %v", err)
+	}
+	for _, r := range box.requests {
+		if strings.HasPrefix(r, "PATCH ") {
+			t.Errorf("an unknown id still sent an update: %v", r)
+		}
+	}
+}

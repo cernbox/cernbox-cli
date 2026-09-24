@@ -53,7 +53,7 @@ var coveredCommands = map[string]string{
 	"share list":     "TestShareLifecycle, TestShareListWithoutPathShowsEverythingShared",
 	"share update":   "TestShareLifecycle",
 	"share remove":   "TestShareLifecycle",
-	"share received": "TestShareIsVisibleToTheRecipient",
+	"share received": "TestShareIsVisibleToTheRecipient, TestShareReceivedAcceptAndDecline",
 
 	// Public links.
 	"link create":   "TestPublicLinkLifecycle, TestLinkWithExpiryAndName",
