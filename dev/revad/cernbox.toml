@@ -144,7 +144,22 @@ user_space = "/eos/user/{{substr 0 1 .Username}}/{{ .Username }}"
 machine_secret = "{{ vars.machine_api_key }}"
 
 [grpc.services.spacesregistry.drivers.memory]
-# Here the project spaces
+# Here the project spaces. One is enough to give the suite a space that is not a
+# personal home: quota, trash, shares and listings all behave differently on a
+# project, and with no project configured none of that was ever exercised.
+#
+# Roles come from group membership, so the demo users cover all three: richard
+# owns it, physics-lovers holds every user and makes them writers, and
+# quantum-lovers is readers-only.
+[[grpc.services.spacesregistry.drivers.memory.spaces]]
+storage_id = "localhome"
+space_id = "cernbox"
+path = "/eos/project/c/cernbox"
+name = "cernbox"
+owner = "richard"
+readers = "quantum-lovers"
+writers = "physics-lovers"
+admins = "philosophy-haters"
 
 ### APPS ###
 

@@ -136,11 +136,23 @@ for entry in "einstein:10000" "marie:10001" "richard:10002"; do
   eos quota set -g 99 -v 100000000000 -p "$eospath"
 done
 
+# A project space, so that the suite has something that is not a personal home
+# to work against. Quota is set on the project path itself rather than inherited:
+# reva asks EOS for the quota of whichever path a space points at, so a project
+# with no quota node of its own would report the caller's own numbers and every
+# test about project quota would pass while measuring the wrong thing.
+eos mkdir -p /eos/project/c/cernbox
+eos chown -r 10002 /eos/project/c/cernbox
+eos quota set -g 99 -v 50000000000 -p /eos/project/c/cernbox
+# Writable by the physics-lovers group, which all three demo users are in.
+eos attr set sys.acl="u:10000:rwx,u:10001:rwx,u:10002:rwx" /eos/project/c/cernbox
+
 # The recycle bin, which is what the trash commands read. Two steps, and the
 # second is not optional: with a bin configured but no quota on the recycle
 # space, EOS refuses every delete outright rather than falling back to an
 # permanent one, so "rm" itself starts failing with an internal error.
 eos recycle config --add-bin /eos/user
+eos recycle config --add-bin /eos/project
 eos recycle config --lifetime 86400
 eos quota set -g 99 -v 100000000000 -i 1000000 -p /eos/dev/proc/recycle/
 
