@@ -40,6 +40,18 @@ type Space struct {
 	QuotaTotal     int64 `json:"quota_total,omitempty"`
 	QuotaUsed      int64 `json:"quota_used,omitempty"`
 	QuotaRemaining int64 `json:"quota_remaining,omitempty"`
+
+	// Owner is the account the space belongs to, which for a project is the
+	// account it was created for rather than anybody who can write to it.
+	Owner string `json:"owner,omitempty"`
+	// YourRole is the caller's own role on the space root, as a short name.
+	//
+	// It is the caller's and nobody else's: a project's root permissions carry
+	// one entry, computed by the server from the caller's group membership. The
+	// groups that membership is decided by are configuration on the server and
+	// are not published, so no client can list who else has access or with what
+	// role — only that somebody does.
+	YourRole string `json:"your_role,omitempty"`
 }
 
 // Unified role identifiers, as defined by libregraph and accepted by ocgraph.
@@ -178,8 +190,14 @@ type graphDrive struct {
 	DriveType  *string `json:"driveType"`
 	DriveAlias *string `json:"driveAlias"`
 	Root       *struct {
-		WebDavURL *string `json:"webDavUrl"`
+		WebDavURL   *string           `json:"webDavUrl"`
+		Permissions []graphPermission `json:"permissions"`
 	} `json:"root"`
+	Owner *struct {
+		User *struct {
+			ID *string `json:"id"`
+		} `json:"user"`
+	} `json:"owner"`
 	Quota *struct {
 		Total     *int64 `json:"total"`
 		Used      *int64 `json:"used"`
@@ -222,8 +240,21 @@ func (c *Client) Spaces(ctx context.Context) ([]Space, error) {
 			s.Alias = *d.DriveAlias
 			s.Path = cleanPath("/" + *d.DriveAlias)
 		}
-		if d.Root != nil && d.Root.WebDavURL != nil {
-			s.WebDavURL = *d.Root.WebDavURL
+		if d.Root != nil {
+			if d.Root.WebDavURL != nil {
+				s.WebDavURL = *d.Root.WebDavURL
+			}
+			// A project root carries one permission: the caller's own, worked out
+			// by the server from group membership it does not disclose.
+			for _, perm := range toPermissions(d.Root.Permissions) {
+				if perm.Role != "" {
+					s.YourRole = perm.Role
+					break
+				}
+			}
+		}
+		if d.Owner != nil && d.Owner.User != nil && d.Owner.User.ID != nil {
+			s.Owner = *d.Owner.User.ID
 		}
 		if d.Quota != nil {
 			if d.Quota.Total != nil {

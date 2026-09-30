@@ -168,6 +168,52 @@ func TestShareAuditSaysProjectMembersCanReachIt(t *testing.T) {
 	if !strings.Contains(stderr, "can reach this as well") {
 		t.Errorf("project membership is access and has to be said:\n%s", stderr)
 	}
+	// The owner and the caller's own role are in the drive response, so they are
+	// said rather than left to guesswork.
+	if !strings.Contains(stderr, "owned by") {
+		t.Errorf("the owner is known and should be named:\n%s", stderr)
+	}
+	// And the part that is genuinely unavailable is declared as such, instead of
+	// an absence that reads like nobody else has access.
+	if !strings.Contains(stderr, "not published") {
+		t.Errorf("the unlistable groups should be declared, not silently omitted:\n%s", stderr)
+	}
+}
+
+// TestShareAuditNamesTheProjectOwnerAndYourRole: both come from the drive
+// listing, unlike the groups, which no driver puts in a response at all.
+func TestShareAuditNamesTheProjectOwnerAndYourRole(t *testing.T) {
+	box := newTestBox(t)
+	box.mkdir("/eos/project/c/cernbox/data")
+	box.sharesOn["/eos/project/c/cernbox"] = ``
+	box.sharesOn["/eos/project/c/cernbox/data"] = ``
+	_, stderr, err := run(t, box, "share", "audit", "/eos/project/c/cernbox/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "owned by richard") {
+		t.Errorf("the owner is missing:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "your own role is editor") {
+		t.Errorf("the caller's own role is missing:\n%s", stderr)
+	}
+}
+
+// TestShareAuditPersonalSpaceSaysNothingAboutMembership: a personal space has no
+// membership to explain, and saying so anyway would be noise.
+func TestShareAuditPersonalSpaceSaysNothingAboutMembership(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/f.txt", "x")
+	box.sharesOn["/eos/user/e/einstein"] = ``
+	box.sharesOn["/eos/user/e/einstein/f.txt"] = ``
+
+	_, stderr, err := run(t, box, "share", "audit", "/eos/user/e/einstein/f.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stderr, "not published") || strings.Contains(stderr, "owned by") {
+		t.Errorf("a personal space needs no membership note:\n%s", stderr)
+	}
 }
 
 func TestAncestorsFrom(t *testing.T) {

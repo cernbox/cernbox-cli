@@ -129,9 +129,38 @@ func (a *App) summariseAccess(grants []accessGrant, space *client.Space) {
 	// Membership of a project is access, and no share reports it. Leaving this
 	// out would make an audit of a project path read as far more private than it is.
 	if space.Type != "personal" {
-		a.out.Msg("Everyone with access to the %s space can reach this as well, "+
-			"whether or not anything above is shared.", client.SpaceAlias(*space))
+		a.describeSpaceAccess(space)
 	}
+}
+
+// describeSpaceAccess says what belonging to the space is worth, and is honest
+// about the part that cannot be answered.
+//
+// The groups a project grants access through are not obtainable. Both project
+// drivers — the one this is developed against and the SQL one production uses —
+// read Readers, Writers and Admins to decide the *caller's* role and then build
+// the response from that decision alone. The e-group names never leave the
+// server, so a client can report who owns the space and what the caller's own
+// role is, and must say plainly that the rest is not published rather than
+// implying nobody else is there.
+func (a *App) describeSpaceAccess(space *client.Space) {
+	alias := client.SpaceAlias(*space)
+
+	switch {
+	case space.YourRole != "" && space.Owner != "":
+		a.out.Msg("This is in the %s space, owned by %s, where your own role is %s.",
+			alias, space.Owner, space.YourRole)
+	case space.YourRole != "":
+		a.out.Msg("This is in the %s space, where your own role is %s.", alias, space.YourRole)
+	case space.Owner != "":
+		a.out.Msg("This is in the %s space, owned by %s.", alias, space.Owner)
+	default:
+		a.out.Msg("This is in the %s space.", alias)
+	}
+
+	a.out.Msg("Everyone the space grants access to can reach this as well, whether or " +
+		"not anything above is shared. Which groups those are is decided on the server " +
+		"and is not published, so it cannot be listed here.")
 }
 
 // grantsReaching collects the permissions on the path and on every directory

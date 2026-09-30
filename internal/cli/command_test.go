@@ -239,7 +239,10 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"value":[
 		  {"id":"s1","name":"einstein","driveType":"personal","driveAlias":"eos/user/e/einstein",
 		   "quota":{"total":1073741824,"used":524288,"remaining":1073217536}},
-		  {"id":"s2","name":"cernbox","driveType":"project","driveAlias":"eos/project/c/cernbox"}
+		  {"id":"s2","name":"cernbox","driveType":"project","driveAlias":"eos/project/c/cernbox",
+		   "owner":{"user":{"id":"richard"}},
+		   "root":{"permissions":[{"roles":["58c63c02-1d89-4572-916a-870abc5a1b7d"],
+		     "grantedToV2":{"user":{"id":"einstein"}}}]}}
 		]}`)
 
 	case strings.HasPrefix(r.URL.Path, "/graph/v1beta1/me/drive/sharedByMe"):
