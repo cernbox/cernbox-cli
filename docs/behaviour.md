@@ -109,6 +109,10 @@ Three deliberate differences from plain `du`, all because the useful answer is r
 
 The cost follows from the walk: one listing per directory, where plain `du` is a single request. Ties break on the path, so two equal sizes do not swap places between runs and two listings can be compared.
 
+Those listings run **together**, a level at a time, bounded by `--jobs` and defaulting to the same `transfer.jobs` the transfer commands use — someone who tuned that for a slow link meant it for this too. Only the requests overlap; the totals are folded in afterwards in listing order, so there is nothing to lock and the answer does not depend on which reply arrived first. Measured against the dev instance on 61 directories: 0.315s serial, 0.134s with four in flight. The gain is latency times directory count, so it grows with the distance to the server and is larger in real use than on localhost.
+
+One shape gets no benefit: a deep, narrow tree. Levels are walked in order, so a chain of single directories has nothing to overlap. Real trees are wide, and a work queue spanning levels would need locking around the totals for a case that rarely arises.
+
 ### Where the quota went
 
 The commonest confusion about space is that a quota is much larger than the files anybody can find. It is not a mistake in the accounting: **earlier versions of a file are charged to you and appear in no listing.** EOS keeps them in a `.sys.v#.<name>/` directory next to the file, and reva filters those out of every listing — `hiddenReg` is `\.sys\..#.`, applied unless the server sets `show_hidden_sys_files`, which is off by default. The container total counts them; the listing does not.

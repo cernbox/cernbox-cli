@@ -9,9 +9,11 @@ import (
 	"math"
 	"os"
 	"path"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
@@ -575,6 +577,8 @@ func newDuCmd(app *App) *cobra.Command {
 	f.BoolVarP(&opts.Human, "human-readable", "h", false, "print sizes as 1.2K, 34M")
 	f.IntVarP(&opts.MaxDepth, "max-depth", "d", 0, "also report directories this many levels down")
 	f.IntVar(&opts.Top, "top", 0, "show only the N biggest entries, largest first")
+	f.IntVar(&opts.Jobs, "jobs", 0,
+		"how many listings to run at once while walking (default: transfer.jobs)")
 	f.BoolVar(&opts.Versions, "versions", false,
 		"split each size into what listings show and what they do not, which is mostly old versions")
 	f.BoolVarP(&opts.Summarize, "summarize", "s", false, "report only the total for each argument")
@@ -593,6 +597,7 @@ type duOptions struct {
 	All       bool
 	Top       int
 	Versions  bool
+	Jobs      int
 }
 
 // biggestFirst ranks entries by size and keeps the n largest.
@@ -633,7 +638,7 @@ func (a *App) usageOf(ctx context.Context, arg string, opts duOptions) ([]duEntr
 	if err != nil {
 		return nil, err
 	}
-	t, err := a.measureHidden(ctx, root)
+	t, err := a.measureHidden(ctx, root, a.walkJobs(opts.Jobs))
 	if err != nil {
 		return nil, err
 	}
@@ -929,6 +934,20 @@ func newMvCmd(app *App) *cobra.Command {
 	return cmd
 }
 
+// walkJobs is how many listings a tree walk keeps in flight.
+//
+// The same setting the transfer engine uses, because it answers the same question
+// and a user who tuned it for a slow link meant it for this too.
+func (a *App) walkJobs(override int) int {
+	if override > 0 {
+		return override
+	}
+	if a.cfg != nil && a.cfg.Transfer.Jobs > 0 {
+		return a.cfg.Transfer.Jobs
+	}
+	return min(8, max(2, runtime.NumCPU()))
+}
+
 // usageTree is a whole subtree measured: what the server charges for each path,
 // and how much of that no listing accounts for.
 type usageTree struct {
@@ -954,7 +973,7 @@ type usageTree struct {
 // reports the hidden bytes of its whole subtree — which is the number somebody
 // hunting for missing quota is actually asking for, and the reason this walks the
 // whole tree even when only the first level will be printed.
-func (a *App) measureHidden(ctx context.Context, root string) (*usageTree, error) {
+func (a *App) measureHidden(ctx context.Context, root string, jobs int) (*usageTree, error) {
 	info, err := a.client.Stat(ctx, root)
 	if err != nil {
 		return nil, err
@@ -974,19 +993,43 @@ func (a *App) measureHidden(ctx context.Context, root string) (*usageTree, error
 	local := map[string]int64{}
 	kids := map[string][]string{}
 
+	// A level at a time, with the listings in flight together. One request per
+	// directory is unavoidable — the only recursive total the server keeps is the
+	// one that already counts the hidden entries, so the visible figure has to be
+	// summed here — but they need not wait for each other, and serialising them
+	// made the whole cost latency times directory count.
+	//
+	// Only the requests run concurrently. Everything is folded into the maps
+	// afterwards, in the order the level was listed, so there is nothing to lock
+	// and the result does not depend on which listing answered first.
 	frontier := []string{info.Path}
 	for len(frontier) > 0 {
+		children := make([][]client.ResourceInfo, len(frontier))
+		failed := make([]error, len(frontier))
+
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, max(jobs, 1))
+		for i, dir := range frontier {
+			wg.Add(1)
+			go func(i int, dir string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				children[i], failed[i] = a.client.List(ctx, dir)
+			}(i, dir)
+		}
+		wg.Wait()
+
 		var next []string
-		for _, dir := range frontier {
-			children, err := a.client.List(ctx, dir)
-			if err != nil {
-				return nil, err
+		for i, dir := range frontier {
+			if failed[i] != nil {
+				return nil, failed[i]
 			}
 
 			// Files count their own size, directories the recursive total the
 			// server keeps for them, so this is everything a listing accounts for.
 			var visible int64
-			for _, c := range children {
+			for _, c := range children[i] {
 				visible += c.Size
 				t.charged[c.Path] = c.Size
 				t.isDir[c.Path] = c.IsDir

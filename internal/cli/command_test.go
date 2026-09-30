@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,13 @@ type testBox struct {
 	// carrying If-Match can be accepted or refused the way reva does. Paths the
 	// fake never wrote report a fixed etag, which is all most tests need.
 	etags map[string]string
+
+	// inFlight and peakInFlight count requests that have arrived but not yet
+	// finished. Tracked with atomics outside the lock below, because the lock
+	// serialises the handlers and would otherwise hide every bit of concurrency a
+	// client actually used.
+	inFlight     atomic.Int64
+	peakInFlight atomic.Int64
 
 	// hidden adds bytes to a directory's reported size without listing anything
 	// for them, which is what EOS does with the .sys.v#. directories holding
@@ -152,6 +160,11 @@ func newTestBox(t *testing.T) *testBox {
 }
 
 func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
+	if n := b.inFlight.Add(1); n > b.peakInFlight.Load() {
+		b.peakInFlight.Store(n)
+	}
+	defer b.inFlight.Add(-1)
+
 	// The request body is read before the lock is taken, and this is not an
 	// optimisation. One request to this box can be fed by another: pasting a split
 	// entry into CERNBox pipes GETs of the pieces straight into a PUT. A handler

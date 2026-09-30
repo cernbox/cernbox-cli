@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -287,5 +289,98 @@ func TestDuVersionsWorksWithTop(t *testing.T) {
 	// sub is charged 2000, a.bin 1000, so sub ranks first.
 	if !strings.HasSuffix(rows[0], "/proj/sub") {
 		t.Errorf("first row = %q, want proj/sub\n%s", rows[0], stdout)
+	}
+}
+
+// ── the walk runs its listings together ──────────────────────────────────────
+
+// wideTree is broad rather than deep, so a level holds enough directories for
+// concurrency to be observable at all.
+func wideTree(t *testing.T, dirs int) *testBox {
+	box := newTestBox(t)
+	for i := range dirs {
+		d := fmt.Sprintf("/eos/user/e/einstein/wide/d%02d", i)
+		box.mkdir(d)
+		box.putFile(d+"/f.bin", strings.Repeat("x", 100))
+		box.hidden[d] = 50
+	}
+	return box
+}
+
+// TestDuVersionsWalksInParallel: one request per directory is unavoidable, but
+// they need not wait for each other. Serialised, the whole cost was latency times
+// directory count.
+func TestDuVersionsWalksInParallel(t *testing.T) {
+	box := wideTree(t, 24)
+
+	if _, _, err := run(t, box, "du", "--versions", "--jobs", "6",
+		"/eos/user/e/einstein/wide"); err != nil {
+		t.Fatal(err)
+	}
+	if peak := box.peakInFlight.Load(); peak < 2 {
+		t.Errorf("peak concurrency was %d: the listings ran one after another", peak)
+	}
+}
+
+// TestDuVersionsRespectsTheJobLimit: unbounded concurrency against a real server
+// is a way to be rate-limited, so the bound has to be a bound.
+func TestDuVersionsRespectsTheJobLimit(t *testing.T) {
+	box := wideTree(t, 30)
+
+	if _, _, err := run(t, box, "du", "--versions", "--jobs", "3",
+		"/eos/user/e/einstein/wide"); err != nil {
+		t.Fatal(err)
+	}
+	// One more than asked for is allowed: the walk lists a level of directories
+	// under the limit, and the request that discovered the level may still be
+	// finishing as they start.
+	if peak := box.peakInFlight.Load(); peak > 4 {
+		t.Errorf("peak concurrency was %d with --jobs 3", peak)
+	}
+}
+
+// TestDuVersionsIsCorrectUnderConcurrency: the listings race, so the totals must
+// not. Run this package with -race as well.
+func TestDuVersionsIsCorrectUnderConcurrency(t *testing.T) {
+	const dirs = 24
+	box := wideTree(t, dirs)
+
+	stdout, _, err := run(t, box, "--output", "json", "du", "--versions", "--jobs", "8",
+		"/eos/user/e/einstein/wide")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var rows []struct {
+		Path     string `json:"path"`
+		Size     int64  `json:"size"`
+		Listed   int64  `json:"listed"`
+		Unlisted int64  `json:"unlisted"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+		t.Fatalf("not valid JSON: %v\n%s", err, stdout)
+	}
+
+	var root *struct {
+		Path     string `json:"path"`
+		Size     int64  `json:"size"`
+		Listed   int64  `json:"listed"`
+		Unlisted int64  `json:"unlisted"`
+	}
+	for i := range rows {
+		if rows[i].Path == "/eos/user/e/einstein/wide" {
+			root = &rows[i]
+		}
+	}
+	if root == nil {
+		t.Fatalf("no row for the root:\n%s", stdout)
+	}
+	// Every directory holds 100 listable bytes and 50 nobody can see.
+	if root.Listed != dirs*100 || root.Unlisted != dirs*50 {
+		t.Errorf("root = listed %d, unlisted %d; want %d/%d",
+			root.Listed, root.Unlisted, dirs*100, dirs*50)
+	}
+	if root.Size != root.Listed+root.Unlisted {
+		t.Errorf("charged %d != listed %d + unlisted %d", root.Size, root.Listed, root.Unlisted)
 	}
 }

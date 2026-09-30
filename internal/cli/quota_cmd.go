@@ -165,7 +165,7 @@ func (a *App) renderQuota(ctx context.Context, s client.Space, versions bool) er
 	}
 
 	if versions {
-		t, err := a.measureHidden(ctx, s.Path)
+		t, err := a.measureHidden(ctx, s.Path, a.walkJobs(0))
 		if err != nil {
 			return err
 		}
