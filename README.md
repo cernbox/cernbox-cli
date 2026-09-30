@@ -67,6 +67,7 @@ cernbox ls -lt                          # newest first
 cernbox stat report.pdf                 # everything about one file
 cernbox find . --name report            # search by name
 cernbox du -h -d 2 data                 # what is taking up space
+cernbox du -h --top 20                  # the 20 biggest things you have
 cernbox cat notes.txt
 ```
 

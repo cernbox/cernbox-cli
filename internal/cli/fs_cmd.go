@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"slices"
@@ -485,9 +487,14 @@ func newDuCmd(app *App) *cobra.Command {
 		Short: "Show how much space a directory uses",
 		Long: "Show space used: a size, a tab, and a path, like du.\n\n" +
 			"Only the total for each path is shown. Pass -d to also list the\n" +
-			"directories below it.",
+			"directories below it.\n\n" +
+			"--top answers the other question, 'what is using my space': it ranks\n" +
+			"everything underneath by size and shows the biggest. Finding the big thing\n" +
+			"means looking everywhere, so --top walks the whole tree and counts files as\n" +
+			"well as directories, unless -d bounds it.",
 		Example: "  cernbox du -h /eos/user/g/gdelmont\n" +
-			"  cernbox du -h -d 1 /eos/user/g/gdelmont",
+			"  cernbox du -h -d 1 /eos/user/g/gdelmont\n" +
+			"  cernbox du -h --top 20 /eos/user/g/gdelmont",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -497,7 +504,24 @@ func newDuCmd(app *App) *cobra.Command {
 				args = []string{"home:"}
 			}
 			if opts.Summarize {
+				if opts.Top > 0 {
+					return cberr.Usagef("-s reports only the total for each path, so there is nothing for --top to rank")
+				}
 				opts.MaxDepth = 0
+			}
+			if opts.Top < 0 {
+				return cberr.Usagef("--top wants a positive number")
+			}
+
+			ranking := opts.Top > 0
+			if ranking {
+				// The biggest thing is rarely at the top level, so ranking means
+				// looking everywhere — and counting files, since a single file is
+				// usually the answer. An explicit -d bounds it again.
+				if !cmd.Flags().Changed("max-depth") && !cmd.Flags().Changed("depth") {
+					opts.MaxDepth = math.MaxInt
+				}
+				opts.All = true
 			}
 
 			var items []duEntry
@@ -506,7 +530,16 @@ func newDuCmd(app *App) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				if ranking {
+					// usage puts the argument's own total last. It is the biggest
+					// entry by definition, so ranking it would waste the first row
+					// on something the user already knows.
+					got = got[:len(got)-1]
+				}
 				items = append(items, got...)
+			}
+			if ranking {
+				items = biggestFirst(items, opts.Top)
 			}
 
 			// json and csv keep their labelled columns for scripts; the human
@@ -533,6 +566,7 @@ func newDuCmd(app *App) *cobra.Command {
 	f.Bool("help", false, "show help for du")
 	f.BoolVarP(&opts.Human, "human-readable", "h", false, "print sizes as 1.2K, 34M")
 	f.IntVarP(&opts.MaxDepth, "max-depth", "d", 0, "also report directories this many levels down")
+	f.IntVar(&opts.Top, "top", 0, "show only the N biggest entries, largest first")
 	f.BoolVarP(&opts.Summarize, "summarize", "s", false, "report only the total for each argument")
 	f.BoolVarP(&opts.All, "all", "a", false, "report files as well as directories")
 	// The old name for --max-depth, kept so existing invocations keep working.
@@ -547,6 +581,25 @@ type duOptions struct {
 	MaxDepth  int
 	Summarize bool
 	All       bool
+	Top       int
+}
+
+// biggestFirst ranks entries by size and keeps the n largest.
+//
+// Ties break on the path so that two directories of equal size do not swap
+// places between runs, which would make the output useless for comparing one
+// listing against another.
+func biggestFirst(items []duEntry, n int) []duEntry {
+	slices.SortStableFunc(items, func(a, b duEntry) int {
+		if a.Size != b.Size {
+			return cmp.Compare(b.Size, a.Size)
+		}
+		return cmp.Compare(a.Path, b.Path)
+	})
+	if n < len(items) {
+		items = items[:n]
+	}
+	return items
 }
 
 // duEntry is one line of du output.
@@ -572,7 +625,9 @@ func (a *App) usage(ctx context.Context, arg string, opts duOptions) ([]duEntry,
 
 	// Deepest first, then the argument last: du reports a directory after
 	// everything it contains.
-	levels := make([][]duEntry, 0, max(opts.MaxDepth, 0)+1)
+	// Clamped: --top walks with no depth limit, and sizing a slice from that
+	// would overflow rather than reserve anything.
+	levels := make([][]duEntry, 0, min(max(opts.MaxDepth, 0), 32)+1)
 	frontier := []client.ResourceInfo{*info}
 	for depth := 1; depth <= opts.MaxDepth && info.IsDir; depth++ {
 		var next []client.ResourceInfo

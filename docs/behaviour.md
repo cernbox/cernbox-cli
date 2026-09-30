@@ -95,6 +95,20 @@ $ cernbox du -h -d 2 /eos/user/g/gdelmont/data
 5.9K	/eos/user/g/gdelmont/data
 ```
 
+`--top N` answers the other question people have. `du` tells you how big something is; `--top` tells you **what is using the space**, which is what you want when a quota is full. It ranks by size, biggest first, and prints only the N largest.
+
+```console
+$ cernbox du -h --top 4 data
+3.0M	data/deep
+3.0M	data/deep/deeper
+3.0M	data/deep/deeper/big.bin
+20.0K	data/small.txt
+```
+
+Three deliberate differences from plain `du`, all because the useful answer is rarely at the top level. It walks the whole tree rather than stopping at the depth `du` defaults to, so a large file buried deep is found — pass `-d` to bound it again. It counts files as well as directories, since a single file is usually the answer. And it leaves out the argument's own total, which is the biggest entry by definition and is what plain `du` already prints. A directory and the file inside it both appear, as they do in `du -a | sort -n`, which is what shows you whether one file or many is responsible.
+
+The cost follows from the walk: one listing per directory, where plain `du` is a single request. Ties break on the path, so two equal sizes do not swap places between runs and two listings can be compared.
+
 `-h`, `-s`, `-a` and `-d`/`--max-depth` carry their usual meanings. One deliberate difference: only the total for each argument is reported unless `--max-depth` asks for more — that is `du -s` rather than `du`'s own default, because descending a whole tree here costs one request per directory, and the totals CERNBox reports are already recursive. Sizes are apparent bytes, not disk blocks, which the server does not report.
 
 ## The trash bin covers a period, not a bin

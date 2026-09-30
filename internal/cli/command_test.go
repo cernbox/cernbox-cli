@@ -383,7 +383,7 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 		var entries []string
 		switch {
 		case b.dirs[p]:
-			entries = append(entries, b.davXML(p, true, 0))
+			entries = append(entries, b.davXML(p, true, b.treeSize(p)))
 			if r.Header.Get("Depth") == "1" {
 				for f, body := range b.files {
 					if path.Dir(f) == p {
@@ -392,7 +392,7 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 				}
 				for d := range b.dirs {
 					if d != p && path.Dir(d) == p {
-						entries = append(entries, b.davXML(d, true, 0))
+						entries = append(entries, b.davXML(d, true, b.treeSize(d)))
 					}
 				}
 			}
@@ -569,6 +569,20 @@ func (b *testBox) etagOf(p string) string {
 // bumpETag records that a path changed, as a real server would.
 func (b *testBox) bumpETag(p string) {
 	b.etags[p] = fmt.Sprintf("etag-%d", len(b.requests))
+}
+
+// treeSize is the recursive size of a collection, which is what the real server
+// reports for one: EOS keeps a container's total and reva passes it through as
+// oc:size. Reporting 0 here instead would make du and anything built on it look
+// like it worked while measuring nothing.
+func (b *testBox) treeSize(dir string) int {
+	n := 0
+	for f, body := range b.files {
+		if strings.HasPrefix(f, dir+"/") {
+			n += len(body)
+		}
+	}
+	return n
 }
 
 func (b *testBox) davXML(p string, isDir bool, size int) string {
