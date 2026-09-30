@@ -307,6 +307,54 @@ func TestDuTopAndVersions(t *testing.T) {
 	}
 }
 
+// TestQuotaForBothSpaceTypes checks the command against a real server for a
+// personal space and a project, since a project's quota is its own and the dev
+// environment had no project space at all until one was added for this.
+func TestQuotaForBothSpaceTypes(t *testing.T) {
+	e := setup(t)
+
+	var all []struct {
+		Alias string `json:"alias"`
+		Type  string `json:"type"`
+	}
+	e.runJSON(&all, "quota", "--all")
+	seen := map[string]string{}
+	for _, s := range all {
+		seen[s.Alias] = s.Type
+	}
+	if seen["home"] != "personal" {
+		t.Errorf("--all did not report the personal space: %+v", all)
+	}
+	if seen["project/cernbox"] != "project" {
+		t.Errorf("--all did not report the project space: %+v", all)
+	}
+
+	for _, space := range []string{"home", "project/cernbox"} {
+		var rep struct {
+			Alias       string `json:"alias"`
+			Total       int64  `json:"quota_total"`
+			Used        int64  `json:"quota_used"`
+			InTree      int64  `json:"in_tree"`
+			Unaccounted int64  `json:"unaccounted"`
+		}
+		e.runJSON(&rep, "quota", space)
+		if rep.Alias != space {
+			t.Errorf("asked for %s, got %s", space, rep.Alias)
+		}
+		if rep.Total <= 0 {
+			t.Errorf("%s reports no quota at all: %+v", space, rep)
+		}
+		// Deliberately not asserting that the tree and the quota agree. They are
+		// separate pieces of storage bookkeeping updated at different moments, and
+		// either can lead: a sweep that purges a thousand entries leaves the
+		// quota current and the directory total stale for a while. What must hold
+		// is that both were read and neither is nonsense.
+		if rep.InTree < 0 || rep.Unaccounted < 0 {
+			t.Errorf("%s: negative figures: %+v", space, rep)
+		}
+	}
+}
+
 // ── versions ─────────────────────────────────────────────────────────────────
 
 func TestVersionsRoundTrip(t *testing.T) {

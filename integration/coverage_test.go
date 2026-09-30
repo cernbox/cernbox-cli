@@ -81,6 +81,7 @@ var coveredCommands = map[string]string{
 	"versions download": "TestVersionsRoundTrip",
 
 	// Spaces.
+	"quota":      "TestQuotaForBothSpaceTypes",
 	"space list": "TestSpaceListIncludesHome, TestSpaceListFilteredByType",
 	"space info": "TestSpaceInfo",
 

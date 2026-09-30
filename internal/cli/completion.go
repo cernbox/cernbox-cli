@@ -466,6 +466,8 @@ func (a *App) argCompletions() map[string]completeFunc {
 		"versions restore":  byPosition(remote, a.completeVersion),
 		"versions download": byPosition(remote, a.completeVersion),
 
+		"quota": byPosition(a.completeSpace),
+
 		"space list": none,
 		"space info": byPosition(a.completeSpace),
 

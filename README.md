@@ -76,6 +76,17 @@ If a quota looks bigger than the files you can see, it usually is: earlier versi
 
 `mkdir`, `touch`, `rm` and `mv` work as you would expect. They follow the flags you already type — `-p`, `-r`, `-f` — and are a little more careful than the local versions: `mv` and `cp` will not overwrite without `-f`, and `touch` will not empty a file that already exists.
 
+## How much space you have
+
+```bash
+cernbox quota                        # your own space
+cernbox quota project/cernbox        # any space you can reach
+cernbox quota --all                  # every one of them
+cernbox quota --versions             # split into files and their old versions
+```
+
+A project's quota is the project's, shared by everyone in it. If the number looks larger than anything you can find, `--versions` is usually the answer: earlier copies of files are charged to you and appear in no listing. Anything the space's own directory does not explain is reported as its own line rather than folded away.
+
 ## Editing a file in place
 
 ```bash
