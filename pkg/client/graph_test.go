@@ -188,7 +188,9 @@ func TestSpaceAlias(t *testing.T) {
 }
 
 func TestRoleIDAndName(t *testing.T) {
-	for _, name := range []string{"viewer", "editor", "collab", "denied", "VIEWER"} {
+	// collab stays accepted as input, so an existing script keeps working, but it
+	// is manager that comes back.
+	for _, name := range []string{"viewer", "editor", "manager", "collab", "denied", "VIEWER"} {
 		if _, err := RoleID(name); err != nil {
 			t.Errorf("RoleID(%q): %v", name, err)
 		}
@@ -201,6 +203,9 @@ func TestRoleIDAndName(t *testing.T) {
 
 	if got := RoleName(RoleEditor); got != "editor" {
 		t.Errorf("RoleName(RoleEditor) = %q", got)
+	}
+	if got := RoleName(RoleManager); got != "manager" {
+		t.Errorf("RoleName(RoleManager) = %q, want manager — it is what reva calls the role", got)
 	}
 	if got := RoleName(RoleSpaceViewer); got != "viewer" {
 		t.Errorf("RoleName(RoleSpaceViewer) = %q, want the space variant folded into viewer", got)

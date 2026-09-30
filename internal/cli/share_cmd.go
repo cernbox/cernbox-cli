@@ -106,7 +106,7 @@ func newShareCreateCmd(app *App) *cobra.Command {
 	cmd.Flags().StringSliceVar(&groups, "with-group", nil, "group to share with (repeatable)")
 	cmd.Flags().StringSliceVar(&remotes, "with-remote", nil,
 		"federated user to share with, as user@their-provider.org (repeatable)")
-	cmd.Flags().StringVar(&role, "role", "viewer", "viewer, editor, collab, or denied")
+	cmd.Flags().StringVar(&role, "role", "viewer", "viewer, editor, manager, or denied")
 	cmd.Flags().StringVar(&expiry, "expiry", "", "expiry date, YYYY-MM-DD")
 	return cmd
 }
@@ -177,7 +177,7 @@ func newShareUpdateCmd(app *App) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&role, "role", "", "new role: viewer, editor, collab, or denied")
+	cmd.Flags().StringVar(&role, "role", "", "new role: viewer, editor, manager, or denied")
 	cmd.Flags().StringVar(&expiry, "expiry", "", "new expiry date, YYYY-MM-DD")
 	return cmd
 }

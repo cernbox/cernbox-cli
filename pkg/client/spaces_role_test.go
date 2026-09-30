@@ -10,18 +10,18 @@ func TestRoleOfCallerPicksTheCallersOwnGrant(t *testing.T) {
 
 	perms := []Permission{
 		{Role: "viewer", GrantedTo: &Identity{ID: "someone-else", Type: "user"}},
-		{Role: "collab", GrantedTo: &Identity{ID: "gdelmont", Type: "user"}},
+		{Role: "manager", GrantedTo: &Identity{ID: "gdelmont", Type: "user"}},
 		{Role: "editor", GrantedTo: &Identity{ID: "a-third", Type: "user"}},
 	}
-	if got := roleOfCaller(perms, me); got != "collab" {
-		t.Errorf("got %q, want collab: the caller's own grant is not the first one", got)
+	if got := roleOfCaller(perms, me); got != "manager" {
+		t.Errorf("got %q, want manager: the caller's own grant is not the first one", got)
 	}
 
 	// Matching on the opaque id works too, since a server may identify a user
 	// either way.
-	byID := []Permission{{Role: "collab", GrantedTo: &Identity{ID: "u-123"}}}
-	if got := roleOfCaller(byID, me); got != "collab" {
-		t.Errorf("got %q, want collab when identified by id", got)
+	byID := []Permission{{Role: "manager", GrantedTo: &Identity{ID: "u-123"}}}
+	if got := roleOfCaller(byID, me); got != "manager" {
+		t.Errorf("got %q, want manager when identified by id", got)
 	}
 }
 
@@ -62,9 +62,9 @@ func TestRoleOfCallerIgnoresLinksAndRolelessGrants(t *testing.T) {
 	me := &User{Username: "gdelmont"}
 	perms := []Permission{
 		{Link: &Link{Type: "view"}},
-		{Role: "collab", GrantedTo: &Identity{ID: "gdelmont"}},
+		{Role: "manager", GrantedTo: &Identity{ID: "gdelmont"}},
 	}
-	if got := roleOfCaller(perms, me); got != "collab" {
-		t.Errorf("got %q, want collab", got)
+	if got := roleOfCaller(perms, me); got != "manager" {
+		t.Errorf("got %q, want manager", got)
 	}
 }

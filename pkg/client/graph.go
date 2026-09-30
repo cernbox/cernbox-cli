@@ -77,9 +77,11 @@ var roleNames = map[string]string{
 	"reader":  RoleViewer,
 	"editor":  RoleEditor,
 	"writer":  RoleEditor,
-	"collab":  RoleManager,
 	"manager": RoleManager,
-	"denied":  RoleDenied,
+	// Kept so that anything already passing --role collab keeps working; it is
+	// no longer what the role is called back.
+	"collab": RoleManager,
+	"denied": RoleDenied,
 }
 
 // RoleID translates a short role name to a unified role id.
@@ -87,7 +89,7 @@ func RoleID(name string) (string, error) {
 	if id, ok := roleNames[strings.ToLower(name)]; ok {
 		return id, nil
 	}
-	return "", cberr.Usagef("unknown role %q: want viewer, editor, collab, or denied", name)
+	return "", cberr.Usagef("unknown role %q: want viewer, editor, manager, or denied", name)
 }
 
 // RoleName translates a unified role id back to the CLI's short name, falling
@@ -99,7 +101,7 @@ func RoleName(id string) string {
 	case RoleEditor, RoleSpaceEditor, RoleFileEditor:
 		return "editor"
 	case RoleManager:
-		return "collab"
+		return "manager"
 	case RoleDenied:
 		return "denied"
 	default:

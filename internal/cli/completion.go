@@ -488,8 +488,8 @@ func (a *App) argCompletions() map[string]completeFunc {
 var flagCompletions = map[string]map[string][]string{
 	"ls":           {"sort": {"name", "time", "size"}},
 	"archive":      {"format": {"tar", "zip"}},
-	"share create": {"role": {"viewer", "editor", "collab", "denied"}},
-	"share update": {"role": {"viewer", "editor", "collab", "denied"}},
+	"share create": {"role": {"viewer", "editor", "manager", "denied"}},
+	"share update": {"role": {"viewer", "editor", "manager", "denied"}},
 	"link create":  {"role": {"viewer", "editor"}},
 	"link update":  {"role": {"viewer", "editor"}},
 	"space list":   {"type": {"personal", "project"}},

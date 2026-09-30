@@ -233,7 +233,7 @@ cernbox sync LOCAL cb:REMOTE [--delete] [--dry-run]
 cernbox space list [--type personal|project]
 cernbox space info SPACE
 
-cernbox share create PATH --with USER|GROUP --role viewer|editor|collab [--expiry DATE]
+cernbox share create PATH --with USER|GROUP --role viewer|editor|manager [--expiry DATE]
 cernbox share list [PATH]
 cernbox share received [--accept ID] [--decline ID]
 cernbox share update ID --role ...
