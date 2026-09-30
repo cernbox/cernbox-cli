@@ -46,12 +46,16 @@ type Space struct {
 	Owner string `json:"owner,omitempty"`
 	// YourRole is the caller's own role on the space root, as a short name.
 	//
-	// It is the caller's and nobody else's: a project's root permissions carry
-	// one entry, computed by the server from the caller's group membership. The
-	// groups that membership is decided by are configuration on the server and
-	// are not published, so no client can list who else has access or with what
-	// role — only that somebody does.
+	// The server computes it from the caller's group membership and does not
+	// disclose the groups themselves, so this says what you may do and never who
+	// else may do it.
 	YourRole string `json:"your_role,omitempty"`
+	// RootPermissions is every permission the server reported on the space root.
+	//
+	// Kept whole rather than reduced to YourRole, because when a role is not the
+	// one somebody expected, the only way to tell a mis-read from a server that
+	// really said that is to look at what arrived.
+	RootPermissions []Permission `json:"root_permissions,omitempty"`
 }
 
 // Unified role identifiers, as defined by libregraph and accepted by ocgraph.
@@ -209,6 +213,43 @@ type graphCollection[T any] struct {
 	Value []T `json:"value"`
 }
 
+// roleOfCaller picks the permission that belongs to the asking user.
+//
+// Taking the first one with a role was wrong the moment a space reported more
+// than one: the answer would depend on the order the server happened to send
+// them, and would silently be somebody else's role. A single unattributed grant
+// is still read as the caller's, because that is the shape a project root has
+// when the server names nobody.
+func roleOfCaller(perms []Permission, me *User) string {
+	if me != nil {
+		for _, p := range perms {
+			if p.GrantedTo == nil || p.Role == "" {
+				continue
+			}
+			if p.GrantedTo.ID == me.Username || p.GrantedTo.ID == me.ID {
+				return p.Role
+			}
+		}
+	}
+
+	var only string
+	for _, p := range perms {
+		if p.Role == "" {
+			continue
+		}
+		if p.GrantedTo != nil && me != nil {
+			// Attributed to somebody, and not to us.
+			continue
+		}
+		if only != "" {
+			// More than one unattributed role: no way to tell which is ours.
+			return ""
+		}
+		only = p.Role
+	}
+	return only
+}
+
 // Spaces returns the caller's spaces, cached for the configured TTL. The
 // listing backs both "cernbox space list" and every space-alias resolution, so
 // caching it keeps a shell loop from re-fetching it on each invocation.
@@ -218,6 +259,14 @@ func (c *Client) Spaces(ctx context.Context) ([]Space, error) {
 
 	if c.spacesOnce && time.Since(c.spacesAt) < c.spacesTTL {
 		return c.spaces, c.spacesErr
+	}
+
+	// Who is asking, so that a space reporting several grants can be read for the
+	// caller's own rather than for whichever came first. Cached, and a failure
+	// here only costs the role, so it is not worth failing the listing over.
+	var me *User
+	if u, err := c.Me(ctx); err == nil {
+		me = u
 	}
 
 	var coll graphCollection[graphDrive]
@@ -244,14 +293,8 @@ func (c *Client) Spaces(ctx context.Context) ([]Space, error) {
 			if d.Root.WebDavURL != nil {
 				s.WebDavURL = *d.Root.WebDavURL
 			}
-			// A project root carries one permission: the caller's own, worked out
-			// by the server from group membership it does not disclose.
-			for _, perm := range toPermissions(d.Root.Permissions) {
-				if perm.Role != "" {
-					s.YourRole = perm.Role
-					break
-				}
-			}
+			s.RootPermissions = toPermissions(d.Root.Permissions)
+			s.YourRole = roleOfCaller(s.RootPermissions, me)
 		}
 		if d.Owner != nil && d.Owner.User != nil && d.Owner.User.ID != nil {
 			s.Owner = *d.Owner.User.ID
