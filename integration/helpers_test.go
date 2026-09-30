@@ -159,15 +159,20 @@ func sweep(scratch string) {
 		out, _ := e.cmdAs(a, args...).CombinedOutput()
 		return string(out)
 	}
+	// Reports whether it worked, so that the count below means something. The
+	// first version of this ignored every error and called a two-argument command
+	// with one argument, which swept nothing and said it had swept it.
+	tryAs := func(a account, args ...string) bool {
+		return e.cmdAs(a, args...).Run() == nil
+	}
 
-	var removed int
+	var removed, stuck int
 
 	// Directories from runs whose cleanup did not happen, which is every run that
 	// was killed or that failed early.
 	for _, line := range strings.Split(runAs(e.self(), "ls", homeRoot), "\n") {
 		name := strings.TrimSpace(strings.TrimSuffix(line, "/"))
-		if strings.HasPrefix(name, "it-") {
-			runAs(e.self(), "rm", "-r", "-f", path.Join(homeRoot, name))
+		if strings.HasPrefix(name, "it-") && tryAs(e.self(), "rm", "-r", "-f", path.Join(homeRoot, name)) {
 			removed++
 		}
 	}
@@ -181,8 +186,9 @@ func sweep(scratch string) {
 		if err := json.Unmarshal([]byte(runAs(a, "--output", "json", "clipboard", "list")), &slots); err == nil {
 			for _, s := range slots {
 				if strings.HasPrefix(s.Slot, "it-") || strings.HasPrefix(s.Slot, "to-") {
-					runAs(a, "clipboard", "clear", s.Slot)
-					removed++
+					if tryAs(a, "clipboard", "clear", s.Slot) {
+						removed++
+					}
 				}
 			}
 		}
@@ -190,29 +196,35 @@ func sweep(scratch string) {
 		// still visible to completion, so ask the same question completion does.
 		for _, line := range strings.Split(runAs(a, "__complete", "clipboard", "clear", "it-"), "\n") {
 			slot := strings.TrimSpace(line)
-			if strings.HasPrefix(slot, "it-") {
-				runAs(a, "clipboard", "clear", slot)
+			if strings.HasPrefix(slot, "it-") && tryAs(a, "clipboard", "clear", slot) {
 				removed++
 			}
 		}
 	}
 
-	// Shares of paths that no longer exist. Their resource has been deleted, so
-	// they resolve to a version or recycle path and can never be tidied by the
-	// test that made them.
+	// Shares whose resource has been deleted. Removing one needs the path as well
+	// as the id, and the path these end up with is inside the recycle bin, which
+	// cannot be statted — so the CLI has no way to remove them and this counts
+	// them instead of pretending. They are harmless as long as tests match their
+	// own share exactly rather than by substring, which is what made them look
+	// like a bug in the first place.
 	var shares []struct {
 		ID   string `json:"id"`
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal([]byte(runAs(e.self(), "--output", "json", "share", "list")), &shares); err == nil {
 		for _, sh := range shares {
-			if sh.ID == "" {
+			if sh.ID == "" || sh.Path == "" {
 				continue
 			}
-			if sh.Path == "" || strings.Contains(sh.Path, ".sys.v#.") || strings.Contains(sh.Path, "/it-") {
-				runAs(e.self(), "share", "remove", sh.ID)
-				removed++
+			if !strings.Contains(sh.Path, "/proc/recycle/") && !strings.Contains(sh.Path, ".sys.v#.") {
+				continue
 			}
+			// Counted rather than attempted. Removing a share needs its path
+			// statted, and these paths are inside the recycle bin, so every
+			// attempt fails — forty of them cost half a minute on every run to
+			// learn nothing.
+			stuck++
 		}
 	}
 
@@ -224,13 +236,18 @@ func sweep(scratch string) {
 	}
 	if err := json.Unmarshal([]byte(runAs(e.self(), "--output", "json", "trash", "list", "--since", "60d")), &trashed); err == nil {
 		for _, it := range trashed {
-			runAs(e.self(), "trash", "purge", it.Key)
-			removed++
+			if tryAs(e.self(), "trash", "purge", it.Key) {
+				removed++
+			}
 		}
 	}
 
 	if removed > 0 {
 		fmt.Fprintf(os.Stderr, "===> swept %d leftovers from earlier runs\n", removed)
+	}
+	if stuck > 0 {
+		fmt.Fprintf(os.Stderr, "===> %d shares of deleted files cannot be removed through the CLI "+
+			"and were left; match shares exactly rather than by name\n", stuck)
 	}
 }
 

@@ -909,11 +909,17 @@ func TestShareReceivedAcceptAndDecline(t *testing.T) {
 		Name   string `json:"name"`
 		Hidden bool   `json:"hidden"`
 	}
+	// Matched exactly, not by substring. Overwriting a file leaves EOS a
+	// .sys.v#.decidable.txt version directory beside it, and deleting the run
+	// directory moves both into the recycle bin with their shares attached — so
+	// the listing carries entries whose names *contain* this file's name and are
+	// not this share. Taking the first substring match declined one of those and
+	// then found the other still visible, which read as "declining did not take".
 	find := func() row {
 		var received []row
 		e.runJSONAs(e.other(), &received, "share", "received")
 		for _, s := range received {
-			if strings.Contains(s.Name, "decidable.txt") {
+			if s.Name == "decidable.txt" {
 				return s
 			}
 		}
