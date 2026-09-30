@@ -39,6 +39,7 @@ func newShareCmd(app *App) *cobra.Command {
 		newShareUpdateCmd(app),
 		newShareRemoveCmd(app),
 		newShareReceivedCmd(app),
+		newShareAuditCmd(app),
 	)
 	return cmd
 }

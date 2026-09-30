@@ -263,6 +263,63 @@ func TestEditLocalFileMirrorsItToCERNBox(t *testing.T) {
 	}
 }
 
+// ── who can see this ─────────────────────────────────────────────────────────
+
+// TestShareAuditFindsInheritedAccess checks the premise against a real server:
+// sharing a directory really does give access to what is inside it, so the file
+// alone cannot answer who can reach it. The recipient reading the file is the
+// proof — without it this would only be testing that the CLI repeats what the
+// permissions endpoint says.
+func TestShareAuditFindsInheritedAccess(t *testing.T) {
+	e := setup(t)
+	dir := e.remotePath("shared-tree")
+	nested := dir + "/inner"
+	file := nested + "/secret.txt"
+
+	e.mustRun("mkdir", "-p", nested)
+	e.mustRun("put", e.writeLocal("secret.txt", []byte("inherited")), file)
+
+	// Shared two levels above the file, and linked one level above.
+	e.mustRun("share", "create", dir, "--with", otherUser, "--role", "editor")
+	e.mustRun("link", "create", nested)
+
+	var grants []struct {
+		Who       string `json:"who"`
+		Kind      string `json:"kind"`
+		GrantedOn string `json:"granted_on"`
+		Inherited bool   `json:"inherited"`
+	}
+	e.runJSON(&grants, "share", "audit", file)
+
+	var sawUser, sawLink bool
+	for _, g := range grants {
+		if g.Kind == "user" && strings.Contains(g.Who, otherUser) {
+			sawUser = true
+			if !g.Inherited || g.GrantedOn != dir {
+				t.Errorf("the user grant should be inherited from %s: %+v", dir, g)
+			}
+		}
+		if g.Kind == "link" {
+			sawLink = true
+			if g.GrantedOn != nested {
+				t.Errorf("the link should be reported on %s: %+v", nested, g)
+			}
+		}
+	}
+	if !sawUser {
+		t.Errorf("the share two levels up is missing: %+v", grants)
+	}
+	if !sawLink {
+		t.Errorf("the link one level up is missing: %+v", grants)
+	}
+
+	// And the access the audit reports is real: the recipient can read a file
+	// that was never shared directly.
+	if got := e.mustRunAs(e.other(), "cat", file); got != "inherited" {
+		t.Errorf("the recipient read %q, so the inherited access is not what was reported", got)
+	}
+}
+
 // ── disk usage ───────────────────────────────────────────────────────────────
 
 // TestDuTopAndVersions checks both flags against a real server. Versioning is a

@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -45,6 +46,12 @@ type testBox struct {
 	// client actually used.
 	inFlight     atomic.Int64
 	peakInFlight atomic.Int64
+
+	// sharesOn overrides the permissions served for one path, as a raw value
+	// array. Auditing a path is about its ancestors carrying *different* grants,
+	// which the fixed pair below cannot express: with every path answering the
+	// same, a test cannot tell an inherited grant from one on the path itself.
+	sharesOn map[string]string
 
 	// hidden adds bytes to a directory's reported size without listing anything
 	// for them, which is what EOS does with the .sys.v#. directories holding
@@ -150,6 +157,7 @@ func newTestBox(t *testing.T) *testBox {
 		dirs:      map[string]bool{"/": true},
 		hidden:    map[string]int{},
 		trash:     map[string]trashEntry{},
+		sharesOn:  map[string]string{},
 		versions:  map[string][]versionEntry{},
 		etags:     map[string]string{},
 		shortOnce: map[string]int{},
@@ -359,6 +367,10 @@ func (b *testBox) serveGraphItem(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/createLink"):
 		fmt.Fprint(w, `{"id":"link-1","link":{"type":"view","webUrl":"https://cernbox.test/s/abc"}}`)
 	case strings.HasSuffix(r.URL.Path, "/permissions"):
+		if body, ok := b.sharesOn[pathFromItemURL(r.URL.Path)]; ok {
+			fmt.Fprintf(w, `{"value":[%s]}`, body)
+			return
+		}
 		// A path the clipboard made has no shares until one is asked for, and the
 		// fixed pair stands in for shares that were already there on an ordinary
 		// path. Without the distinction, every path in the fake looks like it is
@@ -612,6 +624,20 @@ func (b *testBox) treeSize(dir string) int {
 		}
 	}
 	return n
+}
+
+// pathFromItemURL recovers the path from a graph item URL, undoing the encoding
+// davXML uses for oc:fileid.
+func pathFromItemURL(u string) string {
+	u = strings.TrimSuffix(u, "/permissions")
+	id := u[strings.LastIndex(u, "/")+1:]
+	if i := strings.LastIndex(id, "!"); i >= 0 {
+		id = id[i+1:]
+	}
+	if unescaped, err := url.PathUnescape(id); err == nil {
+		id = unescaped
+	}
+	return strings.ReplaceAll(id, "_", "/")
 }
 
 func (b *testBox) davXML(p string, isDir bool, size int) string {

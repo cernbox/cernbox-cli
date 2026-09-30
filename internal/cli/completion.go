@@ -434,6 +434,7 @@ func (a *App) argCompletions() map[string]completeFunc {
 		"share update":   byPosition(remote, a.completeShareID(false)),
 		"share remove":   byPosition(remote, a.completeShareID(false)),
 		"share received": none,
+		"share audit":    byPosition(remote),
 
 		"link create":   byPosition(remote),
 		"link list":     byPosition(remote),

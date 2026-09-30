@@ -169,6 +169,14 @@ cernbox share list                        # everything you have shared
 cernbox share received                    # what others have shared with you
 ```
 
+Sharing a directory shares what is inside it, so "who can see this file?" cannot be answered by looking at the file. `share audit` answers it properly:
+
+```bash
+cernbox share audit Documents/2026/report.pdf
+```
+
+It walks from the space root down to the path and reports every grant it finds, saying which directory each one came from and marking the ones inherited from above. Unlike `share list`, which shows what *you* shared, this shows every permission the server reports on those directories, whoever made it — and for a project it reminds you that everyone with access to the space can reach it too, share or no share.
+
 A share can be changed or withdrawn afterwards with `share update` and `share remove`. Public links work the same way, and a link keeps its address when you change it, so anybody already holding it is unaffected:
 
 ```bash

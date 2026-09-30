@@ -227,6 +227,30 @@ The final check before exiting deliberately skips the cheap stat gate and hashes
 
 Two smaller decisions. The folder for a bare name is created on the first save, not when the editor opens, so quitting without saving leaves nothing behind. And the editor command is split on spaces and executed directly rather than handed to a shell, so `code -w` works while the file name never reaches an interpreter.
 
+## Who can reach a file
+
+Shares are per-directory grants and they are inherited, so access to a file is decided by its ancestors. Verified rather than assumed: with only a grandparent directory shared, the recipient reads the file straight out — and nested shares at different levels with different roles are accepted, which was measured earlier in this project.
+
+That makes "who can see this?" unanswerable from the file alone, and `share list` the wrong tool for it, since that reports what *you* shared. `share audit` walks from the space root down to the path, asks the server for the permissions on each directory on the way, and reports every grant with the directory it came from:
+
+```console
+$ cernbox share audit audit/2026/report.pdf
+Path:  /eos/user/e/einstein/audit/2026/report.pdf
+Space: home (personal)
+WHO                                  ROLE    KIND  GRANTED ON
+marie                                editor  user  /eos/user/e/einstein/audit  (inherited)
+https://localhost/s/UNvdnPt3WghOoNE  view    link  /eos/user/e/einstein/audit/2026  (inherited)
+1 person and 1 link reach this path, 2 of them inherited from directories above.
+```
+
+Rows come broadest first, so they read as an explanation rather than a dump. Three things it is careful about:
+
+- **It asks for all permissions on each directory**, not the ones you created, so a grant made by somebody else with rights on a parent still shows up.
+- **Project membership is access, and no share reports it.** On a project path the summary says so outright; without that, an audit would read as far more private than the truth.
+- **A person granted at several levels is reported, not resolved.** Nested grants are legal and do work, but which role applies is the storage's decision, so guessing would be worse than pointing it out.
+
+A directory it cannot read is a warning rather than a failure: the audit is still true about the levels it did see, which beats refusing to answer. The cost is two requests per level — a stat for the resource id, then its permissions — so a deep path costs more than a shallow one.
+
 ## Unix conventions
 
 The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.
