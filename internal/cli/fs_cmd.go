@@ -524,9 +524,13 @@ func newDuCmd(app *App) *cobra.Command {
 				opts.All = true
 			}
 
+			if opts.Versions && opts.Summarize {
+				return cberr.Usagef("-s reports only a total, so there is nothing to split")
+			}
+
 			var items []duEntry
 			for _, arg := range args {
-				got, err := app.usage(ctx, arg, opts)
+				got, err := app.usageOf(ctx, arg, opts)
 				if err != nil {
 					return err
 				}
@@ -540,6 +544,10 @@ func newDuCmd(app *App) *cobra.Command {
 			}
 			if ranking {
 				items = biggestFirst(items, opts.Top)
+			}
+
+			if opts.Versions {
+				return app.renderHiddenUsage(items, opts)
 			}
 
 			// json and csv keep their labelled columns for scripts; the human
@@ -567,6 +575,8 @@ func newDuCmd(app *App) *cobra.Command {
 	f.BoolVarP(&opts.Human, "human-readable", "h", false, "print sizes as 1.2K, 34M")
 	f.IntVarP(&opts.MaxDepth, "max-depth", "d", 0, "also report directories this many levels down")
 	f.IntVar(&opts.Top, "top", 0, "show only the N biggest entries, largest first")
+	f.BoolVar(&opts.Versions, "versions", false,
+		"split each size into what listings show and what they do not, which is mostly old versions")
 	f.BoolVarP(&opts.Summarize, "summarize", "s", false, "report only the total for each argument")
 	f.BoolVarP(&opts.All, "all", "a", false, "report files as well as directories")
 	// The old name for --max-depth, kept so existing invocations keep working.
@@ -582,6 +592,7 @@ type duOptions struct {
 	Summarize bool
 	All       bool
 	Top       int
+	Versions  bool
 }
 
 // biggestFirst ranks entries by size and keeps the n largest.
@@ -606,6 +617,68 @@ func biggestFirst(items []duEntry, n int) []duEntry {
 type duEntry struct {
 	Path string `json:"path"`
 	Size int64  `json:"size"`
+	// Listed and Unlisted split Size when --versions asked for the split. They
+	// are omitted otherwise, so the shape scripts already parse is unchanged.
+	Listed   int64 `json:"listed,omitempty"`
+	Unlisted int64 `json:"unlisted,omitempty"`
+}
+
+// usageOf measures arg the cheap way, or the thorough way when the hidden bytes
+// have been asked for.
+func (a *App) usageOf(ctx context.Context, arg string, opts duOptions) ([]duEntry, error) {
+	if !opts.Versions {
+		return a.usage(ctx, arg, opts)
+	}
+	root, err := a.resolve(ctx, arg)
+	if err != nil {
+		return nil, err
+	}
+	t, err := a.measureHidden(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	return t.entries(opts), nil
+}
+
+// renderHiddenUsage prints the three-column form.
+//
+// Tab separated and headerless like the rest of du, so that cut keeps working;
+// the labels go to stderr, where they reach a person without reaching a pipe.
+func (a *App) renderHiddenUsage(items []duEntry, opts duOptions) error {
+	if a.out.Format() != output.FormatTable {
+		table := output.Table{Headers: []string{"CHARGED", "LISTED", "UNLISTED", "PATH"}, Items: items}
+		for _, it := range items {
+			table.Rows = append(table.Rows, []string{
+				formatSize(it.Size, opts.Human),
+				formatSize(it.Listed, opts.Human),
+				formatSize(it.Unlisted, opts.Human),
+				it.Path,
+			})
+		}
+		return a.out.Render(table)
+	}
+
+	a.out.Msg("CHARGED\tLISTED\tUNLISTED\tPATH")
+	for _, it := range items {
+		a.out.Line("%s\t%s\t%s\t%s",
+			formatSize(it.Size, opts.Human),
+			formatSize(it.Listed, opts.Human),
+			formatSize(it.Unlisted, opts.Human),
+			it.Path)
+	}
+
+	var hidden int64
+	for _, it := range items {
+		if it.Unlisted > hidden {
+			hidden = it.Unlisted
+		}
+	}
+	if hidden > 0 {
+		a.out.Msg("%s is charged to you but shown by no listing, almost always earlier "+
+			"versions of files. 'cernbox versions list FILE' shows them for one file.",
+			output.HumanSize(hidden))
+	}
+	return nil
 }
 
 // usage reports the space used at arg, and below it when asked.
@@ -854,4 +927,141 @@ func newMvCmd(app *App) *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite the destination if it exists")
 	return cmd
+}
+
+// usageTree is a whole subtree measured: what the server charges for each path,
+// and how much of that no listing accounts for.
+type usageTree struct {
+	root     string
+	charged  map[string]int64 // every path, file or directory
+	unlisted map[string]int64 // directories: hidden bytes in the whole subtree
+	isDir    map[string]bool
+	depth    map[string]int // levels below the argument
+}
+
+// measureHidden walks a tree and works out, for every directory in it, how many
+// of the bytes it is charged for are things no listing will show.
+//
+// It has to be a subtraction, because the entries cannot be seen at all. The size
+// the server reports for a container counts everything beneath it, including the
+// .sys.v#. directories where EOS keeps earlier versions of a file — while a
+// listing has exactly those filtered out before it is answered. What the two
+// numbers disagree about is what is hidden.
+//
+// Per directory the arithmetic is local: a subdirectory's reported size is
+// already recursive, so subtracting the visible children of one directory needs
+// nothing from deeper down. The local figures are then rolled up, so a directory
+// reports the hidden bytes of its whole subtree — which is the number somebody
+// hunting for missing quota is actually asking for, and the reason this walks the
+// whole tree even when only the first level will be printed.
+func (a *App) measureHidden(ctx context.Context, root string) (*usageTree, error) {
+	info, err := a.client.Stat(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+
+	t := &usageTree{
+		root:     info.Path,
+		charged:  map[string]int64{info.Path: info.Size},
+		unlisted: map[string]int64{},
+		isDir:    map[string]bool{info.Path: info.IsDir},
+		depth:    map[string]int{info.Path: 0},
+	}
+	if !info.IsDir {
+		return t, nil
+	}
+
+	local := map[string]int64{}
+	kids := map[string][]string{}
+
+	frontier := []string{info.Path}
+	for len(frontier) > 0 {
+		var next []string
+		for _, dir := range frontier {
+			children, err := a.client.List(ctx, dir)
+			if err != nil {
+				return nil, err
+			}
+
+			// Files count their own size, directories the recursive total the
+			// server keeps for them, so this is everything a listing accounts for.
+			var visible int64
+			for _, c := range children {
+				visible += c.Size
+				t.charged[c.Path] = c.Size
+				t.isDir[c.Path] = c.IsDir
+				t.depth[c.Path] = t.depth[dir] + 1
+				if c.IsDir {
+					kids[dir] = append(kids[dir], c.Path)
+					next = append(next, c.Path)
+				}
+			}
+
+			// Clamped at zero: the server's totals are maintained
+			// asynchronously, so a listing taken mid-propagation can disagree
+			// with its own parent, and a negative "hidden" figure would be
+			// nonsense rather than news.
+			if h := t.charged[dir] - visible; h > 0 {
+				local[dir] = h
+			}
+		}
+		frontier = next
+	}
+
+	var roll func(string) int64
+	roll = func(dir string) int64 {
+		if v, done := t.unlisted[dir]; done {
+			return v
+		}
+		total := local[dir]
+		for _, sub := range kids[dir] {
+			total += roll(sub)
+		}
+		t.unlisted[dir] = total
+		return total
+	}
+	roll(info.Path)
+	return t, nil
+}
+
+// entries turns a measured tree into the rows du would print, honouring the
+// display depth and -a. The walk was exhaustive; what is shown need not be.
+func (t *usageTree) entries(opts duOptions) []duEntry {
+	maxDepth := opts.MaxDepth
+	if opts.Top > 0 {
+		maxDepth = math.MaxInt
+	}
+
+	var out []duEntry
+	for p, size := range t.charged {
+		d := t.depth[p]
+		if d == 0 || d > maxDepth {
+			continue
+		}
+		if !t.isDir[p] && !opts.All {
+			continue
+		}
+		out = append(out, duEntry{
+			Path:     p,
+			Size:     size,
+			Unlisted: t.unlisted[p],
+			Listed:   size - t.unlisted[p],
+		})
+	}
+
+	// Deepest first, then the argument last, which is the order du prints in.
+	slices.SortFunc(out, func(a, b duEntry) int {
+		if da, db := t.depth[a.Path], t.depth[b.Path]; da != db {
+			return cmp.Compare(db, da)
+		}
+		return cmp.Compare(a.Path, b.Path)
+	})
+	// The argument's own total goes last, the same contract usage() has, so that
+	// the caller can drop it when ranking without knowing which of us measured.
+	return append(out, duEntry{
+		Path:     t.root,
+		Size:     t.charged[t.root],
+		Unlisted: t.unlisted[t.root],
+		Listed:   t.charged[t.root] - t.unlisted[t.root],
+	})
 }

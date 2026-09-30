@@ -263,6 +263,50 @@ func TestEditLocalFileMirrorsItToCERNBox(t *testing.T) {
 	}
 }
 
+// ── disk usage ───────────────────────────────────────────────────────────────
+
+// TestDuTopAndVersions checks both flags against a real server. Versioning is a
+// per-directory EOS attribute the test cannot set, so the hidden figure here is
+// expected to be zero — what is worth checking against reva is that the walk
+// finds something buried, and that the split always adds back up to the total the
+// server charges.
+func TestDuTopAndVersions(t *testing.T) {
+	e := setup(t)
+	e.mustRun("mkdir", "-p", e.remotePath("deep/deeper"))
+	e.mustRun("put", e.writeLocal("big.bin", make([]byte, 300000)), e.remotePath("deep/deeper/big.bin"))
+	e.mustRun("put", e.writeLocal("small.txt", []byte("x")), e.remotePath("small.txt"))
+
+	// --top has to look all the way down, since the biggest thing is rarely at
+	// the top level.
+	out := e.mustRun("du", "--top", "5", e.remote)
+	if !strings.Contains(out, "deep/deeper/big.bin") {
+		t.Errorf("--top did not reach the file three levels down:\n%s", out)
+	}
+	if strings.Contains(out, e.remote+"\n") {
+		t.Errorf("--top should leave out the argument's own total:\n%s", out)
+	}
+
+	var rows []struct {
+		Path     string `json:"path"`
+		Size     int64  `json:"size"`
+		Listed   int64  `json:"listed"`
+		Unlisted int64  `json:"unlisted"`
+	}
+	e.runJSON(&rows, "du", "--versions", "-d", "1", e.remote)
+	if len(rows) == 0 {
+		t.Fatal("--versions returned nothing")
+	}
+	for _, r := range rows {
+		if r.Listed+r.Unlisted != r.Size {
+			t.Errorf("%s: listed %d + unlisted %d != charged %d",
+				r.Path, r.Listed, r.Unlisted, r.Size)
+		}
+		if r.Unlisted < 0 {
+			t.Errorf("%s: negative unlisted %d", r.Path, r.Unlisted)
+		}
+	}
+}
+
 // ── versions ─────────────────────────────────────────────────────────────────
 
 func TestVersionsRoundTrip(t *testing.T) {

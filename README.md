@@ -68,8 +68,11 @@ cernbox stat report.pdf                 # everything about one file
 cernbox find . --name report            # search by name
 cernbox du -h -d 2 data                 # what is taking up space
 cernbox du -h --top 20                  # the 20 biggest things you have
+cernbox du -h --versions                # how much of that is old versions
 cernbox cat notes.txt
 ```
+
+If a quota looks bigger than the files you can see, it usually is: earlier versions of a file are charged to you but appear in no listing. `du --versions` splits each size into the part listings account for and the part they do not, which is almost always that history. [docs/behaviour.md](docs/behaviour.md) explains how it is measured.
 
 `mkdir`, `touch`, `rm` and `mv` work as you would expect. They follow the flags you already type — `-p`, `-r`, `-f` — and are a little more careful than the local versions: `mv` and `cp` will not overwrite without `-f`, and `touch` will not empty a file that already exists.
 

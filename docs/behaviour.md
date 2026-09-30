@@ -109,6 +109,31 @@ Three deliberate differences from plain `du`, all because the useful answer is r
 
 The cost follows from the walk: one listing per directory, where plain `du` is a single request. Ties break on the path, so two equal sizes do not swap places between runs and two listings can be compared.
 
+### Where the quota went
+
+The commonest confusion about space is that a quota is much larger than the files anybody can find. It is not a mistake in the accounting: **earlier versions of a file are charged to you and appear in no listing.** EOS keeps them in a `.sys.v#.<name>/` directory next to the file, and reva filters those out of every listing — `hiddenReg` is `\.sys\..#.`, applied unless the server sets `show_hidden_sys_files`, which is off by default. The container total counts them; the listing does not.
+
+`du --versions` measures the difference:
+
+```console
+$ cernbox du -h --versions -d 1 ver-check
+CHARGED	LISTED	UNLISTED	PATH
+6.0M	2.0M	4.0M	ver-check/deep
+12.0M	4.0M	8.0M	ver-check
+```
+
+Those numbers are from a real instance: two 2M files, each written three times. EOS reported 12,582,912 for the tree with 4,194,304 in each of the two version directories, which is what the `UNLISTED` column adds up to.
+
+Nothing reads a version directory to do this — nothing can. The measurement is a subtraction between two numbers that come from different places: the recursive total the server reports for a container, which counts the hidden entries, and the sum of the entries a listing returns, which does not. Per directory it is local arithmetic, since a subdirectory's reported size is already recursive. The figures are then **rolled up**, so a directory reports the hidden bytes of its whole subtree — which is why `ver-check` shows 8M including the 4M that lives one level further down, and why the flag walks the whole tree even when printing one level.
+
+Three limits worth stating plainly:
+
+- **It measures hidden bytes, not provably versions.** The same filter hides `.sys.a#.` attribute files, and at a space root reva additionally drops anything whose name begins with a dot. Versions are the usual and usually the entire cause; `cernbox versions list FILE` is what turns the inference into a fact for one file.
+- **Version bytes are attributed to the directory that holds the file**, not to the file, because that is where EOS puts them. A file's row always reads `UNLISTED 0`.
+- **Versions cannot be deleted through the API.** CS3 has no such call and reva's versions handler answers `501` to anything but list, restore, head and download — its own comment says `cs3api has no delete file version call`. The space comes back when the file itself is deleted and then purged from the trash, which discards its version directory too.
+
+One more thing that misleads people: EOS maintains container totals and quota **asynchronously**. Straight after an upload, `du` can read `0` and the quota can read the old figure, for ten seconds or more. Nothing is wrong; the number has not caught up.
+
 `-h`, `-s`, `-a` and `-d`/`--max-depth` carry their usual meanings. One deliberate difference: only the total for each argument is reported unless `--max-depth` asks for more — that is `du -s` rather than `du`'s own default, because descending a whole tree here costs one request per directory, and the totals CERNBox reports are already recursive. Sizes are apparent bytes, not disk blocks, which the server does not report.
 
 ## The trash bin covers a period, not a bin

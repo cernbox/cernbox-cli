@@ -38,6 +38,13 @@ type testBox struct {
 	// fake never wrote report a fixed etag, which is all most tests need.
 	etags map[string]string
 
+	// hidden adds bytes to a directory's reported size without listing anything
+	// for them, which is what EOS does with the .sys.v#. directories holding
+	// earlier versions of a file: the container total counts them, and reva
+	// filters them out of the listing before answering it. Without this the fake
+	// could not express the very gap du --versions measures.
+	hidden map[string]int
+
 	// failPath makes writes to one path fail, standing in for the upload troubles
 	// that have nothing to do with a conflict: a full quota, a broken connection,
 	// a storage that is briefly unhappy.
@@ -133,6 +140,7 @@ func newTestBox(t *testing.T) *testBox {
 	b := &testBox{
 		files:     map[string]string{},
 		dirs:      map[string]bool{"/": true},
+		hidden:    map[string]int{},
 		trash:     map[string]trashEntry{},
 		versions:  map[string][]versionEntry{},
 		etags:     map[string]string{},
@@ -575,11 +583,19 @@ func (b *testBox) bumpETag(p string) {
 // reports for one: EOS keeps a container's total and reva passes it through as
 // oc:size. Reporting 0 here instead would make du and anything built on it look
 // like it worked while measuring nothing.
+//
+// Hidden bytes count, at this directory and anywhere below it, because a
+// container's total is recursive and EOS does not exclude what reva will not show.
 func (b *testBox) treeSize(dir string) int {
-	n := 0
+	n := b.hidden[dir]
 	for f, body := range b.files {
 		if strings.HasPrefix(f, dir+"/") {
 			n += len(body)
+		}
+	}
+	for d, extra := range b.hidden {
+		if strings.HasPrefix(d, dir+"/") {
+			n += extra
 		}
 	}
 	return n
