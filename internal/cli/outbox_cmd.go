@@ -67,9 +67,9 @@ type outboxFlags struct {
 
 func (o *outboxFlags) register(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.StringVar(&o.to, "to", "", "CERNBox folder to upload into, for a folder not in the configuration")
+	f.StringVar(&o.to, "to", "", "CERNBox folder to upload into")
 	f.StringVar(&o.layout, "layout", "", "where each file lands: flat, or date for YYYY/MM/DD folders")
-	f.StringVar(&o.after, "after", "", "what to do with the local file once it is safely up: keep, move or delete")
+	f.StringVar(&o.after, "after", "", "what to do with the local file: keep, move or delete")
 	f.BoolVar(&o.link, "link", false, "create a public link for each upload and print it")
 	f.DurationVar(&o.settle, "settle", defaultSettle,
 		"how long a file must be unchanged before it counts as finished")
@@ -134,12 +134,11 @@ func newOutboxPushCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "push [DIR]",
 		Short: "Upload what is waiting, then stop",
-		Long: "Upload everything waiting in the outbox folders and exit.\n\n" +
-			"This is the form to run from a timer: it does one pass and stops, so a\n" +
-			"laptop that slept or lost its network simply catches up on the next run.\n\n" +
-			"A file still being written is left for next time. Nothing is uploaded until\n" +
-			"it has been unchanged for --settle, because a screenshot that appears while\n" +
-			"the tool is still writing it would otherwise arrive half finished.",
+		Long: "Upload everything waiting in the outbox folders and exit, which is the form\n" +
+			"to run from a timer.\n" +
+			"\n" +
+			"A file that has changed within --settle is still being written, so it is left\n" +
+			"for next time rather than uploaded half finished.",
 		Example: "  cernbox outbox push\n" +
 			"  cernbox outbox push ~/Pictures/Screenshots --to Screenshots --layout date",
 		Args: cobra.MaximumNArgs(1),
@@ -177,17 +176,13 @@ func newOutboxWatchCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "watch [DIR]",
 		Short: "Keep uploading as files appear",
-		Long: "Watch the outbox folders and upload what appears, until interrupted.\n\n" +
-			"Convenient for a session at a desk. For something that has to survive\n" +
-			"sleep, a lost network and a reboot, run 'outbox push' from a timer instead:\n" +
-			"a process that has to stay alive is the weaker arrangement.\n\n" +
-			"It is driven by filesystem notifications, so a folder with thousands of\n" +
-			"files in it is not read through on a timer. Notifications do get dropped —\n" +
-			"by a full kernel queue, by network filesystems, by anything that arrived\n" +
-			"before the watch started — so the folders are also looked through every\n" +
-			"--sweep as a safety net.\n\n" +
-			"There is nobody to sign in here, so this needs a credential that works\n" +
-			"without a terminal: a Kerberos ticket, or an app token in CERNBOX_APP_TOKEN.",
+		Long: "Watch the outbox folders and upload what appears, until interrupted.\n" +
+			"\n" +
+			"Needs a credential that works with nobody present: a Kerberos ticket, or an\n" +
+			"app token in CERNBOX_APP_TOKEN.\n" +
+			"\n" +
+			"Good for a session at a desk. To survive sleep, a lost network and a reboot,\n" +
+			"run 'outbox push' from a timer instead.",
 		Example: "  cernbox outbox watch\n  cernbox outbox watch ~/scratch --to Scratch",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

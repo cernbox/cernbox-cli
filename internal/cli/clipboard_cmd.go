@@ -43,20 +43,14 @@ func newCopyCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "copy PATH...",
 		Short: "Copy files, to paste on another computer",
-		Long: "Put files on a clipboard stored in CERNBox, then paste them on another\n" +
-			"computer you are signed in on.\n\n" +
-			"A CERNBox path (cb:/eos/...) is only pointed at, so nothing is\n" +
-			"transferred. A file on your computer is uploaded, which is what lets you\n" +
-			"paste it elsewhere.\n\n" +
-			"Copying replaces what the clipboard held. Pasting does not empty it, so\n" +
-			"you can paste on several computers. 'cernbox clipboard clear' frees the\n" +
-			"space.\n\n" +
-			"With --stream nothing is stored: this command waits for the paste and\n" +
-			"sends the file straight to it.\n\n" +
-			"With --to somebody else collects it instead, on their own account. That\n" +
-			"slot becomes readable by them, so keep it for what you meant to send.\n\n" +
-			"The two combine: --stream --to waits for that person and sends it\n" +
-			"straight to them, storing nothing.",
+		Long: "Put files on a clipboard stored in CERNBox, to paste on another computer.\n" +
+			"\n" +
+			"A CERNBox path (cb:/eos/...) is only pointed at, so nothing is transferred; a\n" +
+			"file on your computer is uploaded. Copying replaces what the clipboard held,\n" +
+			"and pasting does not empty it.\n" +
+			"\n" +
+			"--stream stores nothing and waits for the paste. --to hands it to somebody\n" +
+			"else, which makes that slot readable by them. The two combine.",
 		Example: "  cernbox copy ./report.pdf\n" +
 			"  cernbox copy cb:/eos/user/g/gdelmont/report.pdf\n" +
 			"  cernbox copy -r ./data --slot build\n" +
@@ -115,15 +109,14 @@ func newPasteCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "paste [DEST]",
 		Short: "Paste what was copied on another computer",
-		Long: "Paste what was copied.\n\n" +
-			"With no destination the files land in the current directory under their\n" +
-			"own names. Give a CERNBox path (cb:/eos/...) and the server copies them\n" +
-			"without sending any data. Use - to write a single file to standard output.\n\n" +
-			"Pasting leaves the clipboard alone, so you can paste again elsewhere.\n" +
-			"'cernbox clipboard clear' frees the space when you are done.\n\n" +
-			"Use --from to collect what somebody else copied for you. 'cernbox\n" +
-			"clipboard list' shows who has.\n\n" +
-			"A progress bar is shown on a terminal. --no-progress turns it off.",
+		Long: "Paste what was copied.\n" +
+			"\n" +
+			"With no destination the files land in the current directory under their own\n" +
+			"names. A CERNBox path (cb:/eos/...) is copied by the server without sending\n" +
+			"data, and - writes a single file to standard output.\n" +
+			"\n" +
+			"Pasting leaves the clipboard alone, so you can paste elsewhere too. --from\n" +
+			"collects what somebody copied for you; 'cernbox clipboard list' shows who has.",
 		Example: "  cernbox paste\n" +
 			"  cernbox paste ./incoming/\n" +
 			"  cernbox paste cb:/eos/project/c/cernbox/data/\n" +

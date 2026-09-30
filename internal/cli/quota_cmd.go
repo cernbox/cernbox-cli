@@ -18,14 +18,15 @@ func newQuotaCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "quota [SPACE]",
 		Short: "Show how much space you have, and what is using it",
-		Long: "Show how much of a space's quota is used.\n\n" +
-			"Without an argument this is your own space; name any other you can reach,\n" +
-			"by alias or by path, or pass --all for every one of them. A project's quota\n" +
-			"is the project's, shared by everybody in it.\n\n" +
-			"--versions additionally splits what is used into the files listings show and\n" +
-			"the earlier versions they do not, which is the usual answer to a quota that\n" +
-			"looks larger than anything you can find. It walks the whole space, so it is\n" +
-			"much slower than the summary.",
+		Long: "Show how much of a space's quota is used.\n" +
+			"\n" +
+			"With no argument, your own space; otherwise any space you can reach, by alias\n" +
+			"or by path, or --all for every one. A project's quota is shared by everybody\n" +
+			"in it.\n" +
+			"\n" +
+			"--versions splits what is used into files and their earlier versions, which is\n" +
+			"usually why a quota looks bigger than anything you can find. It walks the\n" +
+			"whole space.",
 		Example: "  cernbox quota\n" +
 			"  cernbox quota project/cernbox\n" +
 			"  cernbox quota --all\n" +

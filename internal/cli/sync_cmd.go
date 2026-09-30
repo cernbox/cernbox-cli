@@ -16,14 +16,15 @@ func newSyncCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync SOURCE DEST",
 		Short: "Make one directory match another",
-		Long: "Copy a directory so the destination matches the source.\n\n" +
-			"This is one way only. It cannot merge changes made on both sides, so use\n" +
-			"the CERNBox desktop client if you need that.\n\n" +
+		Long: "Copy a directory so the destination matches the source, one way only. Use the\n" +
+			"CERNBox desktop client if you need changes on both sides to merge.\n" +
+			"\n" +
 			"Mark the CERNBox side with cb:, as for cp. Files are compared by size and\n" +
-			"time, so unchanged files are not sent again. Without --delete, sync only\n" +
-			"adds and updates.\n\n" +
-			"--dry-run shows what would happen and changes nothing, which is worth\n" +
-			"doing first with --delete.",
+			"time, so unchanged ones are not sent again, and without --delete sync only\n" +
+			"adds and updates.\n" +
+			"\n" +
+			"--dry-run shows the whole plan and changes nothing, which is worth doing first\n" +
+			"when --delete is involved.",
 		Example: "  cernbox sync ./data cb:/eos/project/c/cernbox/data\n" +
 			"  cernbox sync cb:/eos/project/c/cernbox/data ./data --delete\n" +
 			"  cernbox sync ./data cb:/eos/project/c/cernbox/data --delete --dry-run\n" +

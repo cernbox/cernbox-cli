@@ -414,13 +414,14 @@ func newFindCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "find PATH",
 		Short: "Search for files by name, size, age or kind",
-		Long: "Search a directory and everything under it.\n\n" +
-			"--name matches the file name: as a glob when it contains * or ?, and as text\n" +
-			"appearing anywhere in the name otherwise. --size, --newer, --older and --type\n" +
-			"narrow it further, and any of them can be used on its own.\n\n" +
-			"The server searches by name when it can. The other tests it cannot apply, so\n" +
-			"asking for one means walking the tree — slower, but the only way to get an\n" +
-			"answer that is not quietly incomplete.",
+		Long: "Search a directory and everything under it.\n" +
+			"\n" +
+			"--name matches a glob when it contains * or ?, and text anywhere in the name\n" +
+			"otherwise. --size, --newer, --older and --type narrow it further, and any of\n" +
+			"them works on its own.\n" +
+			"\n" +
+			"The server can only search by name, so asking for anything else means walking\n" +
+			"the tree.",
 		Example: "  cernbox find . --name report\n" +
 			"  cernbox find . --name '*.root' --size +1G\n" +
 			"  cernbox find data --newer 7d --type f\n" +
@@ -490,7 +491,7 @@ func newFindCmd(app *App) *cobra.Command {
 	}
 
 	f := cmd.Flags()
-	f.StringVar(&opts.name, "name", "", "name to match: a glob with * or ?, otherwise text anywhere in the name")
+	f.StringVar(&opts.name, "name", "", "glob with * or ?, otherwise text anywhere in the name")
 	f.StringVar(&opts.size, "size", "", "size to match: +1G larger, -10M smaller, 1G exactly")
 	f.StringVar(&opts.newer, "newer", "", "changed within this span, e.g. 7d, or since a date")
 	f.StringVar(&opts.older, "older", "", "not changed for this long, e.g. 30d, or before a date")
@@ -683,13 +684,13 @@ func newDuCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "du [PATH...]",
 		Short: "Show how much space a directory uses",
-		Long: "Show space used: a size, a tab, and a path, like du.\n\n" +
-			"Only the total for each path is shown. Pass -d to also list the\n" +
-			"directories below it.\n\n" +
-			"--top answers the other question, 'what is using my space': it ranks\n" +
-			"everything underneath by size and shows the biggest. Finding the big thing\n" +
-			"means looking everywhere, so --top walks the whole tree and counts files as\n" +
-			"well as directories, unless -d bounds it.",
+		Long: "Show space used: a size, a tab, and a path, like du.\n" +
+			"\n" +
+			"Only the total for each path, unless -d asks for the directories below it.\n" +
+			"\n" +
+			"--top ranks everything underneath by size and shows the biggest, which is the\n" +
+			"question to ask when a quota is full. It looks at the whole tree and counts\n" +
+			"files too, unless -d bounds it.",
 		Example: "  cernbox du -h /eos/user/g/gdelmont\n" +
 			"  cernbox du -h -d 1 /eos/user/g/gdelmont\n" +
 			"  cernbox du -h --top 20 /eos/user/g/gdelmont",

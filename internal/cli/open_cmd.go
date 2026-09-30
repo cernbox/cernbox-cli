@@ -18,11 +18,10 @@ func newOpenCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "open PATH",
 		Short: "Print the link that opens a file in a browser",
-		Long: "Print the URL that opens a file in CERNBox.\n\n" +
-			"By default this is the online editor for the file's type. With --web it is\n" +
-			"the file's page in the CERNBox interface.\n\n" +
-			"The link is only printed, so you can paste it into a browser. Pass\n" +
-			"--launch to open it directly.",
+		Long: "Print the URL that opens a file in CERNBox: the online editor for its type,\n" +
+			"or with --web its page in the CERNBox interface.\n" +
+			"\n" +
+			"The link is only printed unless you pass --launch.",
 		Example: "  cernbox open /eos/user/g/gdelmont/report.docx\n" +
 			"  cernbox open --web /eos/user/g/gdelmont/Documents\n" +
 			"  cernbox open --app Collabora --view-mode write /eos/user/g/gdelmont/notes.odt",

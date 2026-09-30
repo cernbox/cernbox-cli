@@ -43,12 +43,11 @@ func newCpCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cp SOURCE DEST",
 		Short: "Copy between your computer and CERNBox",
-		Long: "Copy files between your computer and CERNBox.\n\n" +
-			"Mark the CERNBox side with cb:. A path like /eos/... can exist on your\n" +
-			"computer too, and guessing which one you meant could touch the wrong\n" +
-			"file.\n\n" +
-			"If the prefix is awkward, use get and put: they tell the two sides apart\n" +
-			"by position.",
+		Long: "Copy files between your computer and CERNBox.\n" +
+			"\n" +
+			"Mark the CERNBox side with cb:, because a path like /eos/... can exist on your\n" +
+			"computer too. If the prefix is awkward, get and put tell the two sides apart\n" +
+			"by position instead.",
 		Example: "  cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/\n" +
 			"  cernbox cp -r cb:/eos/project/c/cernbox/data ./data\n" +
 			"  cernbox cp cb:/eos/user/g/gdelmont/a.txt cb:/eos/user/g/gdelmont/b.txt",

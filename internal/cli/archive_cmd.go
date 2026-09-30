@@ -26,11 +26,11 @@ func newArchiveCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "archive PATH...",
 		Short: "Download files and directories as one archive",
-		Long: "Download from CERNBox as a single archive.\n\n" +
-			"The server packs everything, so a directory of many small files costs one\n" +
-			"request instead of one per file.\n\n" +
-			"Without --to, the archive lands in the current directory named after what\n" +
-			"you asked for. Use '--to -' to send it to another program.",
+		Long: "Download from CERNBox as a single archive, which the server packs — so many\n" +
+			"small files cost one request rather than one each.\n" +
+			"\n" +
+			"Without --to it lands in the current directory, named after what you asked\n" +
+			"for. '--to -' sends it to another program.",
 		Example: "  cernbox archive /eos/project/c/cernbox/data\n" +
 			"  cernbox archive --format zip --to notes.zip Documents\n" +
 			"  cernbox archive --to - Documents | tar -t",

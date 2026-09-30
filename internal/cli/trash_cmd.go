@@ -266,12 +266,11 @@ func newTrashBrowseCmd(app *App) *cobra.Command {
 		Use:     "browse",
 		Aliases: []string{"ui"},
 		Short:   "Walk through deleted files and restore them",
-		Long: "Open the trash bin as a directory tree.\n\n" +
-			"Deleted files remember where they lived, so the bin can be walked like the\n" +
-			"folders it came from. Pick what you want back and restore it in one go,\n" +
-			"without copying any keys.\n\n" +
+		Long: "Open the trash bin as a directory tree, walk into it, and restore what you\n" +
+			"pick. No keys to copy.\n" +
+			"\n" +
 			"A listing covers a span of time rather than the whole bin, starting at two\n" +
-			"days; --since widens it before opening, and 't' widens it from inside.",
+			"days. --since widens it before opening, and 't' widens it from inside.",
 		Example: "  cernbox trash browse\n" +
 			"  cernbox trash browse --since 30d\n" +
 			"  cernbox trash browse --space project/cernbox",

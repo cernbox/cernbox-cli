@@ -16,13 +16,14 @@ func newShareAuditCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "audit PATH",
 		Short: "Show everyone who can reach a file, and how",
-		Long: "Show who can reach a path, including access granted further up.\n\n" +
-			"Sharing a directory shares what is inside it, so the question 'who can see\n" +
-			"this file' cannot be answered by looking at the file. This walks from the\n" +
-			"space root down to the path and reports every grant it finds on the way,\n" +
-			"saying which directory each one came from.\n\n" +
-			"Unlike 'share list', which shows what you shared, this shows every\n" +
-			"permission the server reports on those directories, whoever made it.",
+		Long: "Show who can reach a path, including access granted further up.\n" +
+			"\n" +
+			"Sharing a directory shares what is inside it, so a file alone cannot answer\n" +
+			"the question. This reports every grant from the space root down to the path,\n" +
+			"and which directory each one came from.\n" +
+			"\n" +
+			"'share list' shows what you shared; this shows everything the server reports,\n" +
+			"whoever made it.",
 		Example: "  cernbox share audit Documents/2026/report.pdf\n" +
 			"  cernbox share audit /eos/project/c/cernbox/data",
 		Args: cobra.ExactArgs(1),

@@ -44,21 +44,16 @@ func newEditCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "edit NAME",
 		Short: "Open a file in your editor, saving it to CERNBox as you go",
-		Long: "Open a file in your editor, with CERNBox keeping up with every save.\n\n" +
-			"A CERNBox file is fetched to a temporary place, edited there, and written\n" +
-			"back on each save. A file on this machine is edited where it lies — nothing\n" +
-			"is downloaded over it — and uploaded on each save. Either way, closing the\n" +
-			"editor is not a special moment: the server is already up to date.\n\n" +
-			"Which one it is:\n" +
-			"  notes.txt            a bare name: CERNBox, in your " + DefaultEditFolder + " folder\n" +
-			"  ./notes.txt  ~/x.md  this machine\n" +
+		Long: "Open a file in your editor and write it back to CERNBox on every save.\n" +
+			"\n" +
+			"Which side a name means:\n" +
+			"  notes.txt            CERNBox, in your myfiles folder\n" +
+			"  ./notes.txt  ~/x.md  this machine, saved to myfiles under its own name\n" +
 			"  file:PATH            this machine, said explicitly\n" +
 			"  cb:PATH  home:PATH   CERNBox, said explicitly\n" +
-			"  any other path       CERNBox if it is there, otherwise this machine\n\n" +
-			"A local file is saved into the " + DefaultEditFolder + " folder under its own name, so\n" +
-			"'cernbox edit ./notes.txt' needs no destination. Whichever way it goes, the\n" +
-			"paths are printed before the editor opens.\n\n" +
-			"The editor comes from --editor, then CERNBOX_EDITOR, then VISUAL, then EDITOR.",
+			"  any other path       CERNBox if it is there, otherwise this machine\n" +
+			"\n" +
+			"Both paths are printed before the editor opens.",
 		Example: "  cernbox edit notes.txt\n" +
 			"  cernbox edit ./draft.md\n" +
 			"  cernbox edit /eos/user/g/gdelmont/Documents/report.md\n" +
