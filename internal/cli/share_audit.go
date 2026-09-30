@@ -133,34 +133,36 @@ func (a *App) summariseAccess(grants []accessGrant, space *client.Space) {
 	}
 }
 
-// describeSpaceAccess says what belonging to the space is worth, and is honest
-// about the part that cannot be answered.
+// describeSpaceAccess says what belonging to the space is worth.
 //
-// The groups a project grants access through are not obtainable. Both project
-// drivers — the one this is developed against and the SQL one production uses —
-// read Readers, Writers and Admins to decide the *caller's* role and then build
-// the response from that decision alone. The e-group names never leave the
-// server, so a client can report who owns the space and what the caller's own
-// role is, and must say plainly that the rest is not published rather than
-// implying nobody else is there.
+// A project always grants access through three groups — readers, writers and
+// admins — which is the shape both project drivers are built on, so the shape is
+// stated even though the names cannot be. What is not obtainable is which groups
+// those are: the drivers read the three names to decide the *caller's* role and
+// then build the response from that decision alone, so the names never leave the
+// server. Saying the structure is far more use than the bare fact that somebody
+// else might have access.
+//
+// The caller's own role is worth naming for the same reason it is confusing: it
+// is derived, not assigned. Somebody in the writers group is an editor here and
+// nothing says so unless this does.
 func (a *App) describeSpaceAccess(space *client.Space) {
-	alias := client.SpaceAlias(*space)
-
+	// The header above already named the space and its type, so this says only
+	// what that does not.
 	switch {
 	case space.YourRole != "" && space.Owner != "":
-		a.out.Msg("This is in the %s space, owned by %s, where your own role is %s.",
-			alias, space.Owner, space.YourRole)
+		a.out.Msg("Owned by %s. Your own role here is %s, which the server works out "+
+			"from your group membership.", space.Owner, space.YourRole)
 	case space.YourRole != "":
-		a.out.Msg("This is in the %s space, where your own role is %s.", alias, space.YourRole)
+		a.out.Msg("Your own role here is %s, which the server works out from your "+
+			"group membership.", space.YourRole)
 	case space.Owner != "":
-		a.out.Msg("This is in the %s space, owned by %s.", alias, space.Owner)
-	default:
-		a.out.Msg("This is in the %s space.", alias)
+		a.out.Msg("Owned by %s.", space.Owner)
 	}
 
-	a.out.Msg("Everyone the space grants access to can reach this as well, whether or " +
-		"not anything above is shared. Which groups those are is decided on the server " +
-		"and is not published, so it cannot be listed here.")
+	a.out.Msg("A project also grants access through three groups — readers, writers " +
+		"and admins. Their names are not published by the server, so anyone in them " +
+		"reaches this without appearing above.")
 }
 
 // grantsReaching collects the permissions on the path and on every directory
