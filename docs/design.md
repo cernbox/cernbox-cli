@@ -245,8 +245,8 @@ cernbox link update ID ...
 cernbox link remove ID
 
 cernbox trash list [PATH]
-cernbox trash restore ID [--to PATH]
-cernbox trash purge [ID | --all]
+cernbox trash restore KEY...
+cernbox trash purge KEY...
 
 cernbox versions list PATH
 cernbox versions restore PATH VERSION

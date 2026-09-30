@@ -1,11 +1,13 @@
 package cli
 
 import (
-	"io"
-	"os"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/output"
 	"github.com/spf13/cobra"
 )
@@ -39,85 +41,240 @@ func (a *App) trashBasePath(cmd *cobra.Command, space string) (string, error) {
 	return a.client.ResolveSpace(ctx, space)
 }
 
+// trashWindowOptions are the flags that choose which slice of a bin to look at.
+// Registered on every command that reads one, so the query language cannot drift
+// between them.
+type trashWindowOptions struct {
+	space string
+	since string
+	from  string
+	to    string
+}
+
+func (o *trashWindowOptions) register(cmd *cobra.Command) {
+	spaceFlag(cmd, &o.space)
+	cmd.Flags().StringVar(&o.since, "since", "",
+		"how far back to look, e.g. 7d, 2w, 36h (default 2d)")
+	cmd.Flags().StringVar(&o.from, "from", "", "list deletions from this date, e.g. 2026-09-01")
+	cmd.Flags().StringVar(&o.to, "to", "", "list deletions up to this date (default now)")
+}
+
+func (o *trashWindowOptions) window() (client.TrashWindow, error) {
+	return trashWindow(o.since, o.from, o.to)
+}
+
 func newTrashListCmd(app *App) *cobra.Command {
-	var space string
+	var opts trashWindowOptions
 
 	cmd := &cobra.Command{
-		Use:     "list",
-		Short:   "List deleted files",
-		Example: "  cernbox trash list\n  cernbox trash list --space project/cernbox",
-		Args:    cobra.NoArgs,
+		Use:   "list",
+		Short: "List deleted files",
+		Long: "List deleted files.\n\n" +
+			"A listing covers a span of time, not the whole bin: the server reaches two\n" +
+			"days back unless it is told otherwise. Use --since to look further, or\n" +
+			"--from and --to for a particular stretch.",
+		Example: "  cernbox trash list\n" +
+			"  cernbox trash list --since 30d\n" +
+			"  cernbox trash list --from 2026-09-01 --to 2026-09-15\n" +
+			"  cernbox trash list --space project/cernbox",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
 
-			base, err := app.trashBasePath(cmd, space)
+			window, err := opts.window()
 			if err != nil {
 				return err
 			}
-			items, err := app.client.ListTrash(ctx, base)
+			base, err := app.trashBasePath(cmd, opts.space)
 			if err != nil {
 				return err
 			}
-			if len(items) == 0 {
-				app.out.Msg("The trash is empty.")
+			listing, err := app.client.ListTrash(ctx, base, window)
+			if err != nil {
+				return err
 			}
-
-			now := time.Now()
-			table := output.Table{Headers: []string{"KEY", "TYPE", "SIZE", "DELETED", "ORIGINAL PATH"}, Items: items}
-			for _, it := range items {
-				kind := "file"
-				if it.IsDir {
-					kind = "dir"
-				}
-				table.Rows = append(table.Rows, []string{
-					it.Key, kind, output.HumanSize(it.Size),
-					output.HumanTime(it.DeletedAt, now),
-					orDash(it.OriginalPath),
-				})
-			}
-			return app.out.Render(table)
+			return app.renderTrashListing(listing)
 		},
 	}
 
-	spaceFlag(cmd, &space)
+	opts.register(cmd)
 	return cmd
 }
 
+// trashWindow turns the flags into a window.
+func trashWindow(since, from, to string) (client.TrashWindow, error) {
+	if since != "" && (from != "" || to != "") {
+		return client.TrashWindow{}, cberr.Usagef(
+			"--since says how far back to look and --from/--to say exactly when, so pass one or the other")
+	}
+
+	var w client.TrashWindow
+	if to != "" {
+		t, err := time.Parse(expiryLayout, to)
+		if err != nil {
+			return w, cberr.Usagef("invalid --to %q: want a date like 2026-09-15", to)
+		}
+		// The end of that day rather than its midnight, so --to 2026-09-15
+		// includes what was deleted during the 15th.
+		w.To = t.Add(24*time.Hour - time.Second)
+	}
+	if from != "" {
+		t, err := time.Parse(expiryLayout, from)
+		if err != nil {
+			return w, cberr.Usagef("invalid --from %q: want a date like 2026-09-01", from)
+		}
+		w.From = t
+	}
+	if since != "" {
+		d, err := parseLookback(since)
+		if err != nil {
+			return w, err
+		}
+		w.To = time.Now()
+		w.From = w.To.Add(-d)
+	}
+	if !w.From.IsZero() && !w.To.IsZero() && !w.To.After(w.From) {
+		return w, cberr.Usagef("--from must come before --to")
+	}
+	return w, nil
+}
+
+// parseLookback reads a span like 30d, 2w, 36h, or a bare number of days.
+//
+// time.ParseDuration has no unit longer than an hour, and nobody asks for their
+// deleted files in hours: "--since 720h" is how you write a month only if you
+// have already done the arithmetic.
+func parseLookback(s string) (time.Duration, error) {
+	invalid := cberr.Usagef("invalid --since %q: want something like 7d, 2w, 36h", s)
+
+	unit := time.Hour * 24
+	num := s
+	switch {
+	case strings.HasSuffix(s, "d"):
+		num = strings.TrimSuffix(s, "d")
+	case strings.HasSuffix(s, "w"):
+		num, unit = strings.TrimSuffix(s, "w"), 7*24*time.Hour
+	case strings.HasSuffix(s, "h") || strings.HasSuffix(s, "m") || strings.HasSuffix(s, "s"):
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			return 0, invalid
+		}
+		return d, nil
+	}
+
+	n, err := strconv.ParseFloat(num, 64)
+	if err != nil || n <= 0 {
+		return 0, invalid
+	}
+	return time.Duration(n * float64(unit)), nil
+}
+
+// describeTrashWindow says what was searched, and what was refused.
+func describeTrashWindow(app *App, listing *client.TrashListing) {
+	where := trashWindowPhrase(listing.Window)
+	if len(listing.Items) == 0 {
+		app.out.Msg("Nothing was deleted %s. Look further back with 'trash list --since 30d'.", where)
+	} else {
+		app.out.Msg("%s %s. Look further back with 'trash list --since 30d'.",
+			filesPlural(len(listing.Items)), where)
+	}
+
+	// A refused day is a hole in what was just printed. Staying quiet about it
+	// would turn "the server would not tell me" into "it is not there", which is
+	// the one mistake a trash listing must never make.
+	for _, gap := range listing.Gaps {
+		app.out.Warn("the server would not list %s — more was deleted that day than it will "+
+			"return at once, so anything from it is missing above",
+			gap.From.Format(expiryLayout))
+	}
+}
+
+// trashWindowPhrase describes a window the way it was asked for: a lookback
+// reads as "in the last week", an explicit range as the dates themselves.
+func trashWindowPhrase(w client.TrashWindow) string {
+	if time.Since(w.To) > time.Hour {
+		return fmt.Sprintf("between %s and %s",
+			w.From.Format(expiryLayout), w.To.Format(expiryLayout))
+	}
+	span := w.To.Sub(w.From)
+	if span < 24*time.Hour {
+		// Saying "the last day" for --since 2h would be the same overstatement
+		// this whole window business exists to stop making.
+		return fmt.Sprintf("in the last %d hours", max(int(span.Hours()), 1))
+	}
+	days := int(span.Hours() / 24)
+	switch {
+	case days == 1:
+		return "in the last day"
+	case days == 7:
+		return "in the last week"
+	case days%7 == 0:
+		return fmt.Sprintf("in the last %d weeks", days/7)
+	default:
+		return fmt.Sprintf("in the last %d days", days)
+	}
+}
+
+func filesPlural(n int) string {
+	if n == 1 {
+		return "1 file deleted"
+	}
+	return fmt.Sprintf("%d files deleted", n)
+}
+
+// renderTrashListing prints a listing as a table, and says which window it
+// covered.
+func (a *App) renderTrashListing(listing *client.TrashListing) error {
+	now := time.Now()
+	table := output.Table{
+		Headers: []string{"KEY", "TYPE", "SIZE", "DELETED", "ORIGINAL PATH"},
+		Items:   listing.Items,
+	}
+	for _, it := range listing.Items {
+		kind := "file"
+		if it.IsDir {
+			kind = "dir"
+		}
+		table.Rows = append(table.Rows, []string{
+			it.Key, kind, output.HumanSize(it.Size),
+			output.HumanTime(it.DeletedAt, now),
+			orDash(it.OriginalPath),
+		})
+	}
+	if err := a.out.Render(table); err != nil {
+		return err
+	}
+
+	// After the table, and on stderr, so that it informs a person without
+	// reaching a pipe. Saying which window was searched is the point: "nothing
+	// there" and "nothing there lately" are different answers, and only one of
+	// them is ever true.
+	describeTrashWindow(a, listing)
+	return nil
+}
+
 func newTrashRestoreCmd(app *App) *cobra.Command {
-	var space, to string
+	var space string
 
 	cmd := &cobra.Command{
 		Use:   "restore KEY...",
 		Short: "Restore a deleted file",
-		Long: "Restore deleted files. Without --to they go back where they were, which is\n" +
-			"the path shown by 'cernbox trash list'.",
-		Example: "  cernbox trash restore 1a2b3c\n" +
-			"  cernbox trash restore 1a2b3c --to /eos/user/g/gdelmont/recovered.txt",
-		Args: cobra.MinimumNArgs(1),
+		Long: "Restore deleted files. They go back where they were, which is the path\n" +
+			"shown by 'cernbox trash list'.",
+		Example: "  cernbox trash restore 1a2b3c",
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
-
-			if to != "" && len(args) > 1 {
-				return cberr.Usagef("--to takes a single destination, so it cannot be used with several keys")
-			}
 
 			base, err := app.trashBasePath(cmd, space)
 			if err != nil {
 				return err
 			}
 
-			dst := ""
-			if to != "" {
-				dst, err = app.resolve(ctx, to)
-				if err != nil {
-					return err
-				}
-			}
-
 			for _, key := range args {
-				if err := app.client.RestoreTrash(ctx, key, dst, base); err != nil {
+				if err := app.client.RestoreTrash(ctx, key, base); err != nil {
 					return err
 				}
 				app.out.Msg("Restored %s", key)
@@ -127,47 +284,32 @@ func newTrashRestoreCmd(app *App) *cobra.Command {
 	}
 
 	spaceFlag(cmd, &space)
-	cmd.Flags().StringVar(&to, "to", "", "restore to this path instead of the original location")
 	return cmd
 }
 
 func newTrashPurgeCmd(app *App) *cobra.Command {
 	var space string
-	var all, yes bool
 
 	cmd := &cobra.Command{
-		Use:   "purge [KEY...]",
+		Use:   "purge KEY...",
 		Short: "Delete items from the trash for good",
 		Long: "Delete trash items for good. This cannot be undone.\n\n" +
-			"--all empties the whole trash, so it asks first unless you pass --yes.",
+			"There is no way to empty the whole bin: the storage does not offer one, and\n" +
+			"the keys to purge come from 'cernbox trash list'.",
+		// Checked here rather than with cobra.MinimumNArgs so that a missing key
+		// exits 2, the code this CLI documents for a mistake in the command.
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
 
-			switch {
-			case all && len(args) > 0:
-				return cberr.Usagef("pass either --all or a list of keys, not both")
-			case !all && len(args) == 0:
-				return cberr.Usagef("pass the keys to purge, or --all to empty the bin")
+			if len(args) == 0 {
+				return cberr.Usagef("pass the keys to purge, which 'cernbox trash list' shows")
 			}
 
 			base, err := app.trashBasePath(cmd, space)
 			if err != nil {
 				return err
-			}
-
-			if all {
-				// Emptying the bin destroys everything a user might be about to
-				// recover, so make them say so.
-				if !yes && !confirm(app, "Permanently delete everything in the trash bin?") {
-					return cberr.New(cberr.KindOther, "purge the trash bin", "", "cancelled")
-				}
-				if err := app.client.PurgeTrash(ctx, "", base); err != nil {
-					return err
-				}
-				app.out.Msg("Emptied the trash.")
-				return nil
 			}
 
 			for _, key := range args {
@@ -181,51 +323,5 @@ func newTrashPurgeCmd(app *App) *cobra.Command {
 	}
 
 	spaceFlag(cmd, &space)
-	cmd.Flags().BoolVar(&all, "all", false, "empty the whole trash bin")
-	cmd.Flags().BoolVar(&yes, "yes", false, "do not ask for confirmation")
 	return cmd
-}
-
-// confirm asks a yes/no question. With no terminal there is nobody to ask, so
-// it answers no: a script that meant to purge should pass --yes.
-func confirm(app *App, question string) bool {
-	if !output.IsTerminal(os.Stdin) {
-		app.out.Warn("not running interactively; pass --yes to confirm")
-		return false
-	}
-	if _, err := io.WriteString(app.stderr, question+" [y/N] "); err != nil {
-		return false
-	}
-	var answer string
-	if _, err := fmtScan(&answer); err != nil {
-		return false
-	}
-	return answer == "y" || answer == "Y" || answer == "yes"
-}
-
-// fmtScan is a seam so the confirmation prompt can be exercised in tests.
-var fmtScan = func(a *string) (int, error) {
-	return fscanln(os.Stdin, a)
-}
-
-func fscanln(r io.Reader, a *string) (int, error) {
-	buf := make([]byte, 0, 16)
-	one := make([]byte, 1)
-	for {
-		n, err := r.Read(one)
-		if n > 0 {
-			if one[0] == '\n' {
-				break
-			}
-			buf = append(buf, one[0])
-		}
-		if err != nil {
-			break
-		}
-		if len(buf) > 64 {
-			break
-		}
-	}
-	*a = string(buf)
-	return len(buf), nil
 }

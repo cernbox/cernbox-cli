@@ -67,17 +67,17 @@ func TestListTrash(t *testing.T) {
 		))
 	})
 
-	items, err := f.client().ListTrash(context.Background(), "")
+	listing, err := f.client().ListTrash(context.Background(), "", TrashWindow{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// The bin itself must not appear as a restorable item.
-	if len(items) != 2 {
-		t.Fatalf("got %d items, want 2 (the bin itself must be excluded): %+v", len(items), items)
+	if len(listing.Items) != 2 {
+		t.Fatalf("got %d items, want 2 (the bin itself must be excluded): %+v", len(listing.Items), listing.Items)
 	}
 
-	first := items[0]
+	first := listing.Items[0]
 	if first.Key != "key-1" {
 		t.Errorf("Key = %q", first.Key)
 	}
@@ -98,7 +98,7 @@ func TestListTrash(t *testing.T) {
 	if first.IsDir {
 		t.Error("a file was reported as a directory")
 	}
-	if !items[1].IsDir {
+	if !listing.Items[1].IsDir {
 		t.Error("a directory was reported as a file")
 	}
 }
@@ -112,7 +112,7 @@ func TestListTrashWithSpace(t *testing.T) {
 		fmt.Fprint(w, trashMultistatus("einstein"))
 	})
 
-	if _, err := f.client().ListTrash(context.Background(), "/eos/project/c/cernbox"); err != nil {
+	if _, err := f.client().ListTrash(context.Background(), "/eos/project/c/cernbox", TrashWindow{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(gotQuery, "base_path=") {
@@ -156,7 +156,7 @@ func TestRestoreTrashToOriginalLocation(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	if err := f.client().RestoreTrash(context.Background(), "key-1", "", ""); err != nil {
+	if err := f.client().RestoreTrash(context.Background(), "key-1", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,6 +169,10 @@ func TestRestoreTrashToOriginalLocation(t *testing.T) {
 	if !strings.HasSuffix(req.Path, "/key-1") {
 		t.Errorf("request path = %q", req.Path)
 	}
+	// Restoring must not silently clobber whatever is at that path now.
+	if got := req.Header.Get("Overwrite"); got != "F" {
+		t.Errorf("Overwrite = %q, want F", got)
+	}
 }
 
 // TestRestoreTrashUnknownKey: without the listing there is no destination to
@@ -180,34 +184,12 @@ func TestRestoreTrashUnknownKey(t *testing.T) {
 		fmt.Fprint(w, trashMultistatus("einstein"))
 	})
 
-	err := f.client().RestoreTrash(context.Background(), "nope", "", "")
+	err := f.client().RestoreTrash(context.Background(), "nope", "")
 	if err == nil {
 		t.Fatal("restoring a key that is not in the bin should fail")
 	}
 	if cberr.KindOf(err) != cberr.KindNotFound {
 		t.Errorf("kind = %v, want not found", cberr.KindOf(err))
-	}
-}
-
-func TestRestoreTrashToExplicitDestination(t *testing.T) {
-	f := newFakeServer(t)
-	f.on(MethodMove, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	})
-
-	err := f.client().RestoreTrash(context.Background(), "key-1", "/eos/user/e/einstein/recovered.txt", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := f.lastRequest(MethodMove)
-	dst := req.Header.Get("Destination")
-	if !strings.HasSuffix(dst, "/eos/user/e/einstein/recovered.txt") {
-		t.Errorf("Destination = %q", dst)
-	}
-	// Restoring must not silently clobber a file that already exists there.
-	if got := req.Header.Get("Overwrite"); got != "F" {
-		t.Errorf("Overwrite = %q, want F", got)
 	}
 }
 
@@ -225,18 +207,197 @@ func TestPurgeTrashItem(t *testing.T) {
 	}
 }
 
-func TestPurgeWholeTrashBin(t *testing.T) {
+// TestPurgeTrashRefusesAnEmptyKey: a DELETE with no key is a request to empty
+// the bin, which reaches EmptyRecycle — unimplemented in the EOS driver, so it
+// answers with an internal error rather than emptying anything. Refusing here
+// keeps that request from ever being sent.
+func TestPurgeTrashRefusesAnEmptyKey(t *testing.T) {
 	f := newFakeServer(t)
+	var reached bool
 	f.on(http.MethodDelete, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	if err := f.client().PurgeTrash(context.Background(), "", ""); err != nil {
+	if err := f.client().PurgeTrash(context.Background(), "", ""); err == nil {
+		t.Error("purging with no key should be refused")
+	}
+	if reached {
+		t.Error("the request was sent to the server anyway")
+	}
+}
+
+// TestListTrashSendsARangeTheServerCanParse guards the whole feature against
+// the way it would fail silently. ocdav discards a range it cannot parse and
+// substitutes its own two days, so a wrong layout — or a '+' offset arriving as
+// a space — does not produce an error anybody would notice: it produces a
+// listing that ignores --since.
+func TestListTrashSendsARangeTheServerCanParse(t *testing.T) {
+	f := newFakeServer(t)
+	var gotFrom, gotTo string
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		gotFrom, gotTo = r.URL.Query().Get("from"), r.URL.Query().Get("to")
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, trashMultistatus("einstein"))
+	})
+
+	to := time.Now()
+	from := to.AddDate(0, 0, -7)
+	if _, err := f.client().ListTrash(context.Background(), "", TrashWindow{From: from, To: to}); err != nil {
 		t.Fatal(err)
 	}
-	// No key means the whole bin, so the path must stop at the username.
-	if got := f.lastRequest(http.MethodDelete).Path; !strings.HasSuffix(got, "/einstein") {
-		t.Errorf("purge path = %q, want the bin root", got)
+
+	// The layouts are reva's own, from ocs/conversions.ParseTimestamp.
+	for name, got := range map[string]string{"from": gotFrom, "to": gotTo} {
+		if got == "" {
+			t.Fatalf("%s was not sent at all", name)
+		}
+		if _, err := time.Parse("2006-01-02T15:04:05Z0700", got); err != nil {
+			t.Errorf("the server cannot parse %s=%q: %v", name, got, err)
+		}
+	}
+	if !strings.Contains(gotFrom, "T") || strings.Contains(gotFrom, " ") {
+		t.Errorf("from=%q reached the server mangled", gotFrom)
+	}
+}
+
+// TestListTrashSplitsARangeTheServerRefuses: the storage rejects a range wider
+// than max_days_in_recycle_list outright, and the width it will accept is a
+// deployment's choice. Asking for less on refusal is what makes --since 90d work
+// without the client having to know that number.
+func TestListTrashSplitsARangeTheServerRefuses(t *testing.T) {
+	f := newFakeServer(t)
+	var requests int
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		from, _ := time.Parse("2006-01-02T15:04:05Z0700", r.URL.Query().Get("from"))
+		to, _ := time.Parse("2006-01-02T15:04:05Z0700", r.URL.Query().Get("to"))
+		if to.Sub(from) > 14*24*time.Hour {
+			http.Error(w, "too many days requested in listing the recycle bin", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, trashMultistatus("einstein",
+			trashFixture{Key: "key-" + from.Format("0102"), Name: "notes.txt",
+				Location: "Documents/notes.txt", Size: 1, Deleted: from.Unix()},
+		))
+	})
+
+	to := time.Now()
+	listing, err := f.client().ListTrash(context.Background(), "",
+		TrashWindow{From: to.AddDate(0, 0, -60), To: to})
+	if err != nil {
+		t.Fatalf("a range the server refuses must be split, not returned as an error: %v", err)
+	}
+	if requests < 2 {
+		t.Errorf("made %d requests: the refused range was never split", requests)
+	}
+	if len(listing.Items) == 0 {
+		t.Error("the split produced no items")
+	}
+	if len(listing.Gaps) != 0 {
+		t.Errorf("a range that splits cleanly should leave no gaps: %+v", listing.Gaps)
+	}
+	// Adjacent halves share the day they were split on.
+	seen := map[string]bool{}
+	for _, it := range listing.Items {
+		if seen[it.Key] {
+			t.Errorf("key %q appears twice: the shared boundary day was not deduplicated", it.Key)
+		}
+		seen[it.Key] = true
+	}
+}
+
+// TestListTrashReportsADayItCannotList: one day holding more deletions than the
+// storage will return fails that day and no more. The rest of the window is
+// still worth showing — as long as the hole is declared, because a listing that
+// quietly omits a day is worse than one that fails.
+func TestListTrashReportsADayItCannotList(t *testing.T) {
+	f := newFakeServer(t)
+	busy := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		from, _ := time.Parse("2006-01-02T15:04:05Z0700", r.URL.Query().Get("from"))
+		to, _ := time.Parse("2006-01-02T15:04:05Z0700", r.URL.Query().Get("to"))
+		// Refuse any range touching the busy day, however narrow.
+		for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+			if d.Format("2006-01-02") == busy {
+				http.Error(w, "too many entries found in listing the recycle bin", http.StatusBadRequest)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusMultiStatus)
+		fmt.Fprint(w, trashMultistatus("einstein",
+			trashFixture{Key: "key-" + from.Format("0102"), Name: "kept.txt",
+				Location: "kept.txt", Size: 1, Deleted: from.Unix()},
+		))
+	})
+
+	to := time.Now()
+	listing, err := f.client().ListTrash(context.Background(), "",
+		TrashWindow{From: to.AddDate(0, 0, -7), To: to})
+	if err != nil {
+		t.Fatalf("one unlistable day must not fail the whole listing: %v", err)
+	}
+	if len(listing.Gaps) == 0 {
+		t.Fatal("the unlistable day was not reported as a gap")
+	}
+	if len(listing.Items) == 0 {
+		t.Error("the listable days returned nothing")
+	}
+}
+
+// TestListTrashPropagatesRealFailures: only the too-much refusal is worth
+// splitting. Halving a rejected credential would turn one 401 into a burst of
+// them and still fail.
+func TestListTrashPropagatesRealFailures(t *testing.T) {
+	f := newFakeServer(t)
+	var requests int
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "nope", http.StatusForbidden)
+	})
+
+	to := time.Now()
+	_, err := f.client().ListTrash(context.Background(), "", TrashWindow{From: to.AddDate(0, 0, -60), To: to})
+	if err == nil {
+		t.Fatal("a 403 must fail the listing")
+	}
+	if requests != 1 {
+		t.Errorf("made %d requests: a 403 was retried by splitting", requests)
+	}
+}
+
+// TestRestoreTrashFindsAnItemOlderThanTheDefaultWindow is the bug this window
+// work exists to fix. A restore needs the original location, which is only in
+// the listing, and the listing only reaches two days back — so restoring a
+// week-old file failed with "no item with this key", which reads as a bad key
+// rather than a window too narrow to contain it.
+func TestRestoreTrashFindsAnItemOlderThanTheDefaultWindow(t *testing.T) {
+	f := newFakeServer(t)
+	deleted := time.Now().AddDate(0, 0, -20)
+	f.on(MethodPropfind, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		from, _ := time.Parse("2006-01-02T15:04:05Z0700", r.URL.Query().Get("from"))
+		w.WriteHeader(http.StatusMultiStatus)
+		if deleted.Before(from) {
+			fmt.Fprint(w, trashMultistatus("einstein"))
+			return
+		}
+		fmt.Fprint(w, trashMultistatus("einstein",
+			trashFixture{Key: "key-old", Name: "notes.txt", Location: "Documents/notes.txt",
+				Size: 10, Deleted: deleted.Unix()},
+		))
+	})
+	var gotDestination string
+	f.on(MethodMove, davTrashPrefix, func(w http.ResponseWriter, r *http.Request) {
+		gotDestination = r.Header.Get("Destination")
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	if err := f.client().RestoreTrash(context.Background(), "key-old", ""); err != nil {
+		t.Fatalf("restoring a 20-day-old item failed: %v", err)
+	}
+	if !strings.Contains(gotDestination, "Documents/notes.txt") {
+		t.Errorf("Destination = %q, want the original location", gotDestination)
 	}
 }
 
@@ -250,14 +411,14 @@ func TestTrashDeletedAtFromMilliseconds(t *testing.T) {
 		))
 	})
 
-	items, err := f.client().ListTrash(context.Background(), "")
+	listing, err := f.client().ListTrash(context.Background(), "", TrashWindow{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("got %d items", len(items))
+	if len(listing.Items) != 1 {
+		t.Fatalf("got %d items", len(listing.Items))
 	}
-	if year := items[0].DeletedAt.Year(); year != 2026 {
+	if year := listing.Items[0].DeletedAt.Year(); year != 2026 {
 		t.Errorf("deleted year = %d, want 2026: the millisecond timestamp was read as seconds", year)
 	}
 }

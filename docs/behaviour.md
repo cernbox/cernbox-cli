@@ -21,6 +21,9 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 | `If-None-Match: *` on PUT is ignored, so a "create only" write silently overwrites | `touch` checks for an existing path before writing, rather than trusting the precondition. `If-Match` *is* honoured, and the clipboard uses it |
 | No upload accepts a body of unknown length: `PUT` requires `Content-Length`, and TUS does not offer `creation-defer-length` | `copy -` splits a stream into known-length pieces rather than spooling it to disk to measure it |
 | Downloading a directory answers 501 | `cat` reports "is a directory", as `cat(1)` does |
+| A recycle-bin listing with no date range silently means "the last two days", and a range the storage thinks is too wide is refused outright | `trash list` always sends a range, reports which one, and splits a refused one — see [the trash bin covers a period](#the-trash-bin-covers-a-period-not-a-bin) |
+| `EmptyRecycle` is not implemented, so emptying a bin in one request is an internal error | No `trash purge --all`. Purging takes the keys from `trash list` |
+| A restore ignores the destination it is given: EOS restores to the path it recorded, while ocdav deletes whatever is at the requested destination first and then reports failure when the file does not arrive there | No `trash restore --to`. A restore goes back where it came from, which is all the storage can do |
 
 **Two-way sync** is a deliberate omission rather than a gap. `sync` is a one-way mirror: genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there", and without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
 
@@ -92,6 +95,42 @@ $ cernbox du -h -d 2 /eos/user/g/gdelmont/data
 ```
 
 `-h`, `-s`, `-a` and `-d`/`--max-depth` carry their usual meanings. One deliberate difference: only the total for each argument is reported unless `--max-depth` asks for more — that is `du -s` rather than `du`'s own default, because descending a whole tree here costs one request per directory, and the totals CERNBox reports are already recursive. Sizes are apparent bytes, not disk blocks, which the server does not report.
+
+## The trash bin covers a period, not a bin
+
+A recycle-bin listing is a query over a span of deletion times, and the server picks the span when the client does not. Left to itself it reaches **two days** back. That is the whole explanation for the commonest complaint about CERNBox trash — a file deleted last week is simply not in the answer, and nothing in the answer says so.
+
+So `trash list` always sends a range, and always reports the one it sent:
+
+```console
+$ cernbox trash list
+KEY      TYPE  SIZE   DELETED      ORIGINAL PATH
+a1b2c3   file  1.2K   2 hours ago  Documents/notes.txt
+1 file deleted in the last 2 days. Look further back with 'trash list --since 30d'.
+```
+
+The footer is on standard error, so it informs a person without reaching a pipe.
+
+Three server limits shape how a wider range is asked for, all of them in the EOS storage driver:
+
+| Limit | Default | What happens |
+| --- | --- | --- |
+| No range given | last 2 days | A silent choice, not an error |
+| `max_days_in_recycle_list` | 14 | A wider range is refused outright, 400 |
+| `max_recycle_entries` | 2000 | Too many deletions in range refuses the **whole** listing, not the surplus |
+
+A refusal of either kind is answered by halving the range and asking again, down to single days. This costs one request in the ordinary case, needs no knowledge of a deployment's configured limits — which is the point, since they are a deployment's to change — and turns the 2000-entry wall into a per-day one. It also costs the server nothing extra: the driver already walks the range a day at a time internally, one call per day either way.
+
+A single day that still cannot be listed becomes a **gap**, reported as a warning rather than swallowed. The rest of the window is worth showing, but a listing that quietly omits a day is worse than one that fails, because the user concludes the file is gone.
+
+Two details that make this easy to get wrong, both of which fail silently rather than loudly:
+
+- **The layout is `2006-01-02T15:04:05Z0700`**, or a bare date. ocdav *discards* a value it cannot parse and falls back to its own two days, so a wrong format produces a plausible listing that ignores `--since`.
+- **Both ends or neither.** The driver honours a range only when it has `from` and `to`; one alone is ignored the same way.
+
+There is no way to restore somewhere else, and no way to empty the bin in one go. Both were offered once and both were removed, because neither did what it said: a destination is ignored by the driver while ocdav deletes what is already there and then calls the restore a failure, and emptying a bin reaches a method the driver does not implement. A flag that appears to work and does something else is worse than its absence.
+
+Restoring has the same window underneath it. There is no "put it back" on the wire: a restore is a `MOVE` and needs a `Destination`, and the only source for an item's original location is the listing. Looking in the default window is why restoring a week-old file used to fail with *no item with this key*, which reads as a bad key rather than a search too narrow to contain it. The lookup now widens — 2 days, then 14, then 90 — so the common restore still costs one request and an old one still works.
 
 ## Unix conventions
 

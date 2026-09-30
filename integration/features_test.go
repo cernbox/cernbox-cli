@@ -46,6 +46,43 @@ func TestTrashRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTrashListSince checks the one thing only a real server can settle: that it
+// accepts the range and answers with it. ocdav discards a range it cannot parse
+// and substitutes its own two days, so a wrong layout does not fail — it returns
+// a plausible listing that ignores --since. A window wider than the storage will
+// take in one request has to come back split rather than refused.
+func TestTrashListSince(t *testing.T) {
+	e := setup(t)
+	e.mustRun("put", e.writeLocal("doomed.txt", []byte("delete me")), e.remotePath("doomed.txt"))
+	e.mustRun("rm", e.remotePath("doomed.txt"))
+
+	type item struct {
+		Key          string `json:"key"`
+		Name         string `json:"name"`
+		OriginalPath string `json:"original_path"`
+	}
+	var recent, wide []item
+	e.runJSON(&recent, "trash", "list")
+	// 60 days is wider than max_days_in_recycle_list, so this only succeeds if
+	// the client split it.
+	e.runJSON(&wide, "trash", "list", "--since", "60d")
+
+	if len(wide) < len(recent) {
+		t.Errorf("--since 60d returned %d items, fewer than the default window's %d",
+			len(wide), len(recent))
+	}
+	mine := path.Base(e.remote)
+	found := false
+	for _, it := range wide {
+		if it.Name == "doomed.txt" && strings.Contains(it.OriginalPath, mine) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the file deleted by this run is missing from a 60-day listing: %+v", wide)
+	}
+}
+
 func TestTrashPurge(t *testing.T) {
 	e := setup(t)
 	e.mustRun("put", e.writeLocal("gone.txt", []byte("x")), e.remotePath("gone.txt"))
@@ -70,19 +107,6 @@ func TestTrashPurge(t *testing.T) {
 		if it.Name == "gone.txt" {
 			t.Error("the purged item is still in the trash bin")
 		}
-	}
-}
-
-// TestTrashPurgeAllRefusesNonInteractively is the guard that matters most here:
-// the integration run has no terminal, so the confirmation cannot be answered.
-func TestTrashPurgeAllRefusesNonInteractively(t *testing.T) {
-	e := setup(t)
-	_, stderr, code := e.run("trash", "purge", "--all")
-	if code == 0 {
-		t.Error("purge --all should be refused with no terminal to confirm at")
-	}
-	if !strings.Contains(stderr, "--yes") {
-		t.Errorf("the refusal should mention --yes:\n%s", stderr)
 	}
 }
 

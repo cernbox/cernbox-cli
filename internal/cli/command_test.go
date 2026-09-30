@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
 	"github.com/cernbox/cernbox-cli/pkg/output"
@@ -83,12 +84,23 @@ type testBox struct {
 	postBodies     []string
 
 	requests []string
+	// trashWindows records the range of every trash listing the box served, so
+	// a test can check what was asked for and not merely what came back.
+	trashWindows [][2]time.Time
 }
+
+// trashFakeLayout is the layout ocdav parses the trash range with. A value it
+// cannot parse is discarded rather than refused, so the fake has to be as strict
+// as the server to be worth testing against.
+const trashFakeLayout = "2006-01-02T15:04:05Z0700"
 
 type trashEntry struct {
 	name     string
 	location string
 	body     string
+	// deleted is when the item was deleted. Zero means "just now", which keeps
+	// it inside any window a test asks for.
+	deleted time.Time
 }
 
 type versionEntry struct {
@@ -571,21 +583,43 @@ func (b *testBox) serveTrash(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "PROPFIND":
+		// The range, the way reva reads it: both ends or neither, in the one
+		// layout ocdav parses. Honouring it here is what lets a test prove the
+		// CLI asked for the window it says it asked for.
+		from, fromErr := time.Parse(trashFakeLayout, r.URL.Query().Get("from"))
+		to, toErr := time.Parse(trashFakeLayout, r.URL.Query().Get("to"))
+		windowed := fromErr == nil && toErr == nil
+		if !windowed {
+			// What the storage does when it is given no usable range.
+			to = time.Now()
+			from = to.AddDate(0, 0, -2)
+		}
+		b.trashWindows = append(b.trashWindows, [2]time.Time{from, to})
+
 		var entries []string
 		entries = append(entries, fmt.Sprintf(
 			`<d:response><d:href>%s/</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status>`+
 				`<d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>`+
 				`</d:propstat></d:response>`, testTrashPrefix))
 		for k, item := range b.trash {
+			deleted := item.deleted
+			if deleted.IsZero() {
+				deleted = time.Now()
+			}
+			// Whole days at both ends, as the storage matches them.
+			if deleted.Before(from.Truncate(24*time.Hour)) || deleted.After(to.Add(24*time.Hour)) {
+				continue
+			}
 			entries = append(entries, fmt.Sprintf(
 				`<d:response><d:href>%s/%s</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop>`+
 					`<d:displayname>%s</d:displayname><d:resourcetype></d:resourcetype>`+
 					`<d:getcontentlength>%d</d:getcontentlength><oc:size>%d</oc:size>`+
 					`<oc:trashbin-original-filename>%s</oc:trashbin-original-filename>`+
 					`<oc:trashbin-original-location>%s</oc:trashbin-original-location>`+
-					`<oc:trashbin-delete-timestamp>1767225600</oc:trashbin-delete-timestamp>`+
+					`<oc:trashbin-delete-timestamp>%d</oc:trashbin-delete-timestamp>`+
 					`</d:prop></d:propstat></d:response>`,
-				testTrashPrefix, k, item.name, len(item.body), len(item.body), item.name, item.location))
+				testTrashPrefix, k, item.name, len(item.body), len(item.body), item.name, item.location,
+				deleted.Unix()))
 		}
 		w.WriteHeader(http.StatusMultiStatus)
 		fmt.Fprint(w, `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">`+
@@ -1305,7 +1339,7 @@ func TestCommandsDumpListsTheTree(t *testing.T) {
 	}
 
 	listed := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(stdout.String()), "\n") {
 		listed[strings.TrimSpace(line)] = true
 	}
 

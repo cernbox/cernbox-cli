@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
 )
@@ -27,14 +28,141 @@ func TestTrashList(t *testing.T) {
 	}
 }
 
-func TestTrashListEmpty(t *testing.T) {
+// TestTrashListEmptySaysWhichWindowWasSearched: "the trash is empty" is the one
+// thing an empty listing does not prove. The server answers for a span of time,
+// so nothing found means nothing found lately, and a user told the bin is empty
+// stops looking for a file that is sitting in it.
+func TestTrashListEmptySaysWhichWindowWasSearched(t *testing.T) {
 	box := newTestBox(t)
 	_, stderr, err := run(t, box, "trash", "list")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr, "empty") {
-		t.Errorf("an empty bin should say so:\n%s", stderr)
+	if !strings.Contains(stderr, "last 2 days") {
+		t.Errorf("an empty listing must say how far back it looked:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "--since") {
+		t.Errorf("an empty listing must say how to look further back:\n%s", stderr)
+	}
+}
+
+// TestTrashListDefaultWindowIsNarrowAndSaysSo documents the behaviour users run
+// into: the plain listing reaches two days back, so a file deleted last week is
+// absent from it. That is the server's choice, not something the CLI can undo —
+// what it can do is say which window it searched and how to widen it.
+func TestTrashListDefaultWindowIsNarrowAndSaysSo(t *testing.T) {
+	box := newTestBox(t)
+	box.trash["key-old"] = trashEntry{
+		name: "lastweek.txt", location: "lastweek.txt", body: "old",
+		deleted: time.Now().AddDate(0, 0, -7),
+	}
+
+	stdout, stderr, err := run(t, box, "trash", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout, "lastweek.txt") {
+		t.Errorf("the default window should not have reached a week back:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "last 2 days") {
+		t.Errorf("the listing must say how far back it looked:\n%s", stderr)
+	}
+
+	// And --since is the way out.
+	stdout, _, err = run(t, box, "trash", "list", "--since", "30d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "lastweek.txt") {
+		t.Errorf("--since 30d should have found the week-old file:\n%s", stdout)
+	}
+}
+
+func TestTrashListSinceWidensTheWindow(t *testing.T) {
+	box := newTestBox(t)
+	if _, _, err := run(t, box, "trash", "list", "--since", "2w"); err != nil {
+		t.Fatal(err)
+	}
+	if len(box.trashWindows) == 0 {
+		t.Fatal("no listing reached the server")
+	}
+	w := box.trashWindows[0]
+	if days := w[1].Sub(w[0]).Hours() / 24; days < 13 || days > 15 {
+		t.Errorf("--since 2w asked for %.1f days, want 14", days)
+	}
+}
+
+func TestTrashListFromTo(t *testing.T) {
+	box := newTestBox(t)
+	if _, _, err := run(t, box, "trash", "list", "--from", "2026-09-01", "--to", "2026-09-15"); err != nil {
+		t.Fatal(err)
+	}
+	if len(box.trashWindows) == 0 {
+		t.Fatal("no listing reached the server")
+	}
+	w := box.trashWindows[0]
+	if got := w[0].Format("2006-01-02"); got != "2026-09-01" {
+		t.Errorf("from = %s, want 2026-09-01", got)
+	}
+	// Through the end of the 15th, not its midnight: a user naming a day means
+	// the day, and excluding it would hide everything deleted that afternoon.
+	if got := w[1].Format("2006-01-02"); got != "2026-09-15" {
+		t.Errorf("to = %s, want 2026-09-15", got)
+	}
+}
+
+func TestTrashListRejectsContradictoryWindows(t *testing.T) {
+	box := newTestBox(t)
+	_, _, err := run(t, box, "trash", "list", "--since", "7d", "--from", "2026-09-01")
+	if cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Errorf("got %v, want a usage error for --since together with --from", err)
+	}
+}
+
+func TestTrashListRejectsUnreadableSince(t *testing.T) {
+	box := newTestBox(t)
+	for _, bad := range []string{"soon", "-3d", "0d", "3x"} {
+		if _, _, err := run(t, box, "trash", "list", "--since", bad); cberr.ExitCode(err) != cberr.ExitUsage {
+			t.Errorf("--since %q: got %v, want a usage error", bad, err)
+		}
+	}
+}
+
+func TestParseLookback(t *testing.T) {
+	cases := map[string]time.Duration{
+		"7d":  7 * 24 * time.Hour,
+		"2w":  14 * 24 * time.Hour,
+		"36h": 36 * time.Hour,
+		"90":  90 * 24 * time.Hour, // a bare number is days, the unit people mean
+		"1.5": 36 * time.Hour,
+	}
+	for in, want := range cases {
+		got, err := parseLookback(in)
+		if err != nil {
+			t.Errorf("parseLookback(%q): %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("parseLookback(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// TestTrashRestoreReachesPastTheDefaultWindow: restoring needs the original
+// location, which only the listing carries, so a key from an older listing used
+// to fail as though it were invalid.
+func TestTrashRestoreReachesPastTheDefaultWindow(t *testing.T) {
+	box := newTestBox(t)
+	box.trash["key-old"] = trashEntry{
+		name: "lastmonth.txt", location: "lastmonth.txt", body: "recovered",
+		deleted: time.Now().AddDate(0, 0, -20),
+	}
+
+	if _, _, err := run(t, box, "trash", "restore", "key-old"); err != nil {
+		t.Fatalf("restoring a 20-day-old item failed: %v", err)
+	}
+	if got := box.files["/eos/user/e/einstein/lastmonth.txt"]; got != "recovered" {
+		t.Errorf("the file was not restored: %+v", box.files)
 	}
 }
 
@@ -77,32 +205,6 @@ func TestTrashRestoreToOriginalLocation(t *testing.T) {
 	}
 }
 
-func TestTrashRestoreToExplicitPath(t *testing.T) {
-	box := newTestBox(t)
-	box.mkdir("/eos/user/e/einstein")
-	// The server reports the location relative to the root of the space the
-	// bin belongs to, as in TestTrashListJSON above, not as a full path.
-	box.trash["key-1"] = trashEntry{name: "notes.txt", location: "notes.txt", body: "recovered"}
-
-	_, _, err := run(t, box, "trash", "restore", "key-1", "--to", "/eos/user/e/einstein/elsewhere.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := box.files["/eos/user/e/einstein/elsewhere.txt"]; got != "recovered" {
-		t.Errorf("the file was not restored to --to: %+v", box.files)
-	}
-}
-
-// TestTrashRestoreRejectsToWithSeveralKeys: one destination cannot receive
-// several files, and silently restoring only the last would lose data.
-func TestTrashRestoreRejectsToWithSeveralKeys(t *testing.T) {
-	box := newTestBox(t)
-	_, _, err := run(t, box, "trash", "restore", "key-1", "key-2", "--to", "/eos/user/e/einstein/x.txt")
-	if cberr.ExitCode(err) != cberr.ExitUsage {
-		t.Errorf("got %v, want a usage error", err)
-	}
-}
-
 func TestTrashPurgeItem(t *testing.T) {
 	box := newTestBox(t)
 	box.trash["key-1"] = trashEntry{name: "notes.txt", location: "Documents/notes.txt", body: "gone"}
@@ -119,43 +221,24 @@ func TestTrashPurgeItem(t *testing.T) {
 	}
 }
 
-func TestTrashPurgeAllWithYes(t *testing.T) {
+// TestTrashRemovedFlagsStayRemoved: both flags were removed because the storage
+// does not do what they claimed. --to was ignored by EOS, which restores to the
+// path it recorded whatever it is told, while ocdav deleted whatever was at the
+// destination first and then reported failure — so it could destroy the target
+// and call a successful restore an error. --all reached EmptyRecycle, which the
+// driver does not implement. Neither should come back without the server
+// changing first.
+func TestTrashRemovedFlagsStayRemoved(t *testing.T) {
 	box := newTestBox(t)
-	box.trash["key-1"] = trashEntry{name: "a", location: "a", body: "x"}
-	box.trash["key-2"] = trashEntry{name: "b", location: "b", body: "y"}
-
-	if _, _, err := run(t, box, "trash", "purge", "--all", "--yes"); err != nil {
-		t.Fatal(err)
+	cases := [][]string{
+		{"trash", "restore", "key-1", "--to", "/eos/user/e/einstein/x.txt"},
+		{"trash", "purge", "--all"},
+		{"trash", "purge", "--all", "--yes"},
 	}
-	if len(box.trash) != 0 {
-		t.Errorf("the bin still holds %d items", len(box.trash))
-	}
-}
-
-// TestTrashPurgeAllRefusesWithoutConfirmation is the guard that matters:
-// emptying the bin destroys exactly the things someone is about to recover, and
-// a non-interactive run has nobody to ask.
-func TestTrashPurgeAllRefusesWithoutConfirmation(t *testing.T) {
-	box := newTestBox(t)
-	box.trash["key-1"] = trashEntry{name: "a", location: "a", body: "x"}
-
-	_, stderr, err := run(t, box, "trash", "purge", "--all")
-	if err == nil {
-		t.Fatal("expected the purge to be refused")
-	}
-	if len(box.trash) != 1 {
-		t.Error("the bin was emptied without confirmation")
-	}
-	if !strings.Contains(stderr, "--yes") {
-		t.Errorf("the refusal should mention --yes:\n%s", stderr)
-	}
-}
-
-func TestTrashPurgeRejectsAllWithKeys(t *testing.T) {
-	box := newTestBox(t)
-	_, _, err := run(t, box, "trash", "purge", "--all", "key-1")
-	if cberr.ExitCode(err) != cberr.ExitUsage {
-		t.Errorf("got %v, want a usage error", err)
+	for _, args := range cases {
+		if _, _, err := run(t, box, args...); err == nil {
+			t.Errorf("%v was accepted", args)
+		}
 	}
 }
 

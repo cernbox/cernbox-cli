@@ -2,9 +2,11 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +31,67 @@ type TrashItem struct {
 	Size int64 `json:"size,omitempty"`
 }
 
+// TrashWindow is the span of deletion times a listing covers.
+//
+// Every listing has one, whether or not the caller chose it. Asked for no range
+// the storage picks one silently, and that range is the last two days — so a
+// caller that leaves this empty does not get the bin, it gets two days of it
+// with no way to tell that is what happened. Making the window an argument is
+// what lets a command say which slice of the bin the user is looking at.
+type TrashWindow struct {
+	From time.Time
+	To   time.Time
+}
+
+const (
+	// DefaultTrashDays is how far back a listing reaches when the caller does
+	// not say. It is what the storage would have chosen by itself, so the plain
+	// listing still costs one request and shows what it always showed.
+	DefaultTrashDays = 2
+
+	// MaxTrashSpanDays is the widest range the storage will consider in one
+	// request: max_days_in_recycle_list, 14 by default. It is a guess, not a
+	// rule — a deployment is free to lower it — so a refusal is answered by
+	// asking for less rather than by trusting this number.
+	MaxTrashSpanDays = 14
+
+	// trashTimeLayout is the layout ocdav parses the range with. It discards a
+	// value it cannot parse and falls back to the default window, so getting
+	// this wrong does not fail: it quietly ignores the range that was asked for.
+	trashTimeLayout = "2006-01-02T15:04:05Z0700"
+)
+
+// resolve fills in the ends the caller left open.
+func (w TrashWindow) resolve(now time.Time) TrashWindow {
+	if w.To.IsZero() {
+		w.To = now
+	}
+	if w.From.IsZero() {
+		w.From = w.To.AddDate(0, 0, -DefaultTrashDays)
+	}
+	return w
+}
+
+// TrashGap is a stretch of the window the server would not list.
+type TrashGap struct {
+	From time.Time
+	To   time.Time
+	Err  error
+}
+
+// TrashListing is what a recycle bin returned.
+type TrashListing struct {
+	// Items are the deleted resources, newest first.
+	Items []TrashItem
+	// Window is the range that was asked for.
+	Window TrashWindow
+	// Gaps are the stretches inside Window the server refused, which happens
+	// when a single day holds more deletions than max_recycle_entries. Items
+	// covers all of Window except these; showing it as the whole bin without
+	// mentioning them would be a lie.
+	Gaps []TrashGap
+}
+
 // trashPropfindBody asks for the trash-specific properties alongside the usual
 // ones. The original location is what makes a listing actionable: without it a
 // user sees a pile of names with no way to tell which "report.pdf" is which.
@@ -46,9 +109,8 @@ const trashPropfindBody = `<?xml version="1.0" encoding="UTF-8"?>
   </d:prop>
 </d:propfind>`
 
-// trashURL builds a trash-bin URL. basePath selects which recycle bin to use;
-// empty means the caller's home, which is what the server defaults to.
-func (c *Client) trashURL(ctx context.Context, key, basePath string) (string, error) {
+// trashURL builds a trash-bin URL with q as its query.
+func (c *Client) trashURL(ctx context.Context, key string, q url.Values) (string, error) {
 	me, err := c.Me(ctx)
 	if err != nil {
 		return "", err
@@ -57,16 +119,99 @@ func (c *Client) trashURL(ctx context.Context, key, basePath string) (string, er
 	if key != "" {
 		u += "/" + url.PathEscape(key)
 	}
-	if basePath != "" {
-		u += "?base_path=" + url.QueryEscape(basePath)
+	if len(q) > 0 {
+		u += "?" + q.Encode()
 	}
 	return u, nil
 }
 
-// ListTrash returns the deleted items in a recycle bin. basePath selects the
-// bin; empty means the caller's home.
-func (c *Client) ListTrash(ctx context.Context, basePath string) ([]TrashItem, error) {
-	u, err := c.trashURL(ctx, "", basePath)
+// trashQuery selects a bin, and optionally a range within it. basePath empty
+// means the caller's home, which is what the server defaults to.
+//
+// Both ends of the range or neither: the storage honours it only when it has
+// both, and silently substitutes its own two days otherwise. Encoding matters
+// as much as the layout — a '+' reaching the server raw would arrive as a
+// space, and an unparsable range is ignored rather than refused.
+func trashQuery(basePath string, from, to time.Time) url.Values {
+	q := url.Values{}
+	if basePath != "" {
+		q.Set("base_path", basePath)
+	}
+	if !from.IsZero() && !to.IsZero() {
+		q.Set("from", from.UTC().Format(trashTimeLayout))
+		q.Set("to", to.UTC().Format(trashTimeLayout))
+	}
+	return q
+}
+
+// ListTrash returns the items deleted within a window. basePath selects the
+// bin; empty means the caller's home. A zero window means the default span.
+//
+// A wide window is not one wide request. The storage refuses a range spanning
+// more than max_days_in_recycle_list, and refuses the whole listing — not the
+// surplus — when the range holds more than max_recycle_entries deletions. Both
+// refusals are answered the same way, by halving the range and asking again,
+// which costs one request in the ordinary case and degrades to per-day requests
+// only where the bin is actually too full to list. The storage already walks the
+// range a day at a time internally, so splitting it changes nothing about the
+// work the server does.
+func (c *Client) ListTrash(ctx context.Context, basePath string, window TrashWindow) (*TrashListing, error) {
+	window = window.resolve(time.Now())
+
+	items, gaps, err := c.listTrashRange(ctx, basePath, window.From, window.To)
+	if err != nil {
+		return nil, err
+	}
+	return &TrashListing{Items: sortTrash(items), Window: window, Gaps: gaps}, nil
+}
+
+// listTrashRange lists from..to, splitting it when the server says it is too
+// much to answer at once.
+func (c *Client) listTrashRange(ctx context.Context, basePath string, from, to time.Time) ([]TrashItem, []TrashGap, error) {
+	items, err := c.listTrashOnce(ctx, basePath, from, to)
+	if err == nil {
+		return items, nil, nil
+	}
+	// Only the too-much refusal is worth splitting. Anything else — a rejected
+	// credential, an unreachable server, a bin that is not there — would simply
+	// be repeated by every half, turning one failure into a burst of them.
+	if !isTrashRangeRefused(err) {
+		return nil, nil, err
+	}
+	if !to.After(from.Add(24 * time.Hour)) {
+		// One day, and it still will not answer. There is nothing left to
+		// narrow, so the day is a hole in the listing rather than a failure of
+		// it: the rest of the window is still worth showing.
+		return nil, []TrashGap{{From: from, To: to, Err: err}}, nil
+	}
+
+	mid := from.Add(to.Sub(from) / 2).Truncate(24 * time.Hour)
+	if !mid.After(from) || !to.After(mid) {
+		mid = from.Add(24 * time.Hour)
+	}
+	left, leftGaps, err := c.listTrashRange(ctx, basePath, from, mid)
+	if err != nil {
+		return nil, nil, err
+	}
+	right, rightGaps, err := c.listTrashRange(ctx, basePath, mid, to)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(left, right...), append(leftGaps, rightGaps...), nil
+}
+
+// isTrashRangeRefused reports whether the server refused the size of the range.
+//
+// Both "too many days requested" and "too many entries found" arrive as
+// InvalidArgument from the storage, which ocdav renders as 400. Nothing else on
+// this endpoint answers 400 for a request the client built itself.
+func isTrashRangeRefused(err error) bool {
+	var e *cberr.Error
+	return errors.As(err, &e) && e.Status == http.StatusBadRequest
+}
+
+func (c *Client) listTrashOnce(ctx context.Context, basePath string, from, to time.Time) ([]TrashItem, error) {
+	u, err := c.trashURL(ctx, "", trashQuery(basePath, from, to))
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +247,28 @@ func (c *Client) ListTrash(ctx context.Context, basePath string) ([]TrashItem, e
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+// sortTrash puts the newest deletion first and drops repeats.
+//
+// Both halves of a split range include the day it was split on, because the
+// storage matches whole days at each end, so an item deleted that day comes
+// back twice. Deduplicating on the key is also what keeps the count in the
+// footer honest.
+func sortTrash(items []TrashItem) []TrashItem {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]TrashItem, 0, len(items))
+	for _, it := range items {
+		if _, dup := seen[it.Key]; dup {
+			continue
+		}
+		seen[it.Key] = struct{}{}
+		out = append(out, it)
+	}
+	slices.SortStableFunc(out, func(a, b TrashItem) int {
+		return b.DeletedAt.Compare(a.DeletedAt)
+	})
+	return out
 }
 
 func trashEntryToItem(entry multistatusEntry) (TrashItem, bool) {
@@ -154,23 +321,27 @@ func trashKeyFromHref(href string) string {
 	return strings.Trim(after, "/")
 }
 
-// RestoreTrash puts a deleted item back. An empty dst restores it to where it
-// came from.
+// RestoreTrash puts a deleted item back where it came from.
 //
 // The server has no notion of "put it back": a restore is a MOVE, and a MOVE
 // without a Destination is rejected outright. So restoring to the original
 // location means looking that location up in the bin first.
-func (c *Client) RestoreTrash(ctx context.Context, key, dst, basePath string) error {
-	src, err := c.trashURL(ctx, key, basePath)
+//
+// There is deliberately no way to restore somewhere else. The Destination is
+// computed rather than chosen because the EOS driver ignores it — it restores to
+// the path it recorded, whatever it is told — while ocdav deletes whatever is at
+// the destination beforehand and then reports failure when the file does not
+// appear there. Offering the choice would mean offering to destroy the target
+// and report an error for a restore that in fact succeeded elsewhere.
+func (c *Client) RestoreTrash(ctx context.Context, key, basePath string) error {
+	src, err := c.trashURL(ctx, key, trashQuery(basePath, time.Time{}, time.Time{}))
 	if err != nil {
 		return err
 	}
 
-	if dst == "" {
-		dst, err = c.originalPathOf(ctx, key, basePath)
-		if err != nil {
-			return err
-		}
+	dst, err := c.originalPathOf(ctx, key, basePath)
+	if err != nil {
+		return err
 	}
 
 	dstURL, err := c.davURL(ctx, dst)
@@ -196,56 +367,78 @@ func (c *Client) RestoreTrash(ctx context.Context, key, dst, basePath string) er
 	return nil
 }
 
+// trashSearchDays are the spans originalPathOf looks through, in order.
+//
+// Widening rather than one long search: almost every restore is of something
+// just deleted, and the first span answers that in a single request. Anything
+// older is rarer and worth paying more for — which is the whole point, because
+// searching only the default span is why restoring a week-old file used to fail
+// with "no item with this key", as though the key were wrong.
+var trashSearchDays = []int{DefaultTrashDays, MaxTrashSpanDays, 90}
+
 // originalPathOf finds where a deleted item used to live.
 func (c *Client) originalPathOf(ctx context.Context, key, basePath string) (string, error) {
-	items, err := c.ListTrash(ctx, basePath)
-	if err != nil {
-		return "", err
-	}
-	for _, it := range items {
-		if it.Key != key {
-			continue
+	to := time.Now()
+	for _, days := range trashSearchDays {
+		listing, err := c.ListTrash(ctx, basePath, TrashWindow{From: to.AddDate(0, 0, -days), To: to})
+		if err != nil {
+			return "", err
 		}
-		if it.OriginalPath == "" {
-			return "", cberr.New(cberr.KindOther, "restore from the trash bin", key,
-				"the server did not say where this item came from; name a destination")
-		}
-		if path.IsAbs(it.OriginalPath) {
-			return it.OriginalPath, nil
-		}
-		// The server reports the location relative to the root of the space
-		// the bin belongs to, while a WebDAV path is absolute. Rooting it at
-		// "/" would aim the restore at the top of the namespace instead of
-		// back inside the space.
-		root := basePath
-		if root == "" {
-			root, err = c.ResolveSpace(ctx, "home")
-			if err != nil {
-				return "", err
+		for _, it := range listing.Items {
+			if it.Key != key {
+				continue
 			}
+			return c.restoreDestination(ctx, it, basePath)
 		}
-		return path.Join(root, it.OriginalPath), nil
 	}
 	return "", cberr.New(cberr.KindNotFound, "restore from the trash bin", key,
-		"no item with this key is in the trash bin")
+		"no item with this key was found in the last 90 days of the trash bin — "+
+			"'cernbox trash list --since 90d' shows what is there")
 }
 
-// PurgeTrash permanently deletes one item, or the whole bin when key is empty.
+// restoreDestination turns a listed item's original location into a path a MOVE
+// can aim at.
+func (c *Client) restoreDestination(ctx context.Context, it TrashItem, basePath string) (string, error) {
+	if it.OriginalPath == "" {
+		return "", cberr.New(cberr.KindOther, "restore from the trash bin", it.Key,
+			"the server did not say where this item came from; name a destination")
+	}
+	if path.IsAbs(it.OriginalPath) {
+		return it.OriginalPath, nil
+	}
+	// The server reports the location relative to the root of the space the bin
+	// belongs to, while a WebDAV path is absolute. Rooting it at "/" would aim
+	// the restore at the top of the namespace instead of back inside the space.
+	root := basePath
+	if root == "" {
+		var err error
+		root, err = c.ResolveSpace(ctx, "home")
+		if err != nil {
+			return "", err
+		}
+	}
+	return path.Join(root, it.OriginalPath), nil
+}
+
+// PurgeTrash permanently deletes one item.
+//
+// One item, never the bin: a DELETE with no key reaches EmptyRecycle, which the
+// EOS driver does not implement, so it fails as an internal error rather than
+// emptying anything. An empty key here would be that request.
 func (c *Client) PurgeTrash(ctx context.Context, key, basePath string) error {
-	u, err := c.trashURL(ctx, key, basePath)
+	if key == "" {
+		return cberr.New(cberr.KindUsage, "purge a trash item", "",
+			"no key given, and the whole bin cannot be emptied in one request")
+	}
+	u, err := c.trashURL(ctx, key, trashQuery(basePath, time.Time{}, time.Time{}))
 	if err != nil {
 		return err
-	}
-
-	op := "purge the trash bin"
-	if key != "" {
-		op = "purge a trash item"
 	}
 
 	resp, err := c.do(ctx, request{
 		method:  http.MethodDelete,
 		url:     u,
-		op:      op,
+		op:      "purge a trash item",
 		path:    key,
 		expects: []int{http.StatusNoContent, http.StatusOK, http.StatusAccepted},
 	})
