@@ -116,8 +116,7 @@ If somebody else changes the file while you have it open, your save is refused r
 
 ## A folder that uploads itself
 
-Point an outbox at a local folder and whatever appears in it goes to CERNBox — a
-screenshots folder, a scratch directory, anywhere you drop things.
+Point an outbox at a local folder and whatever appears in it goes to CERNBox — a screenshots folder, a scratch directory, anywhere you drop things.
 
 ```bash
 cernbox outbox push                  # upload what is waiting, then stop
@@ -125,24 +124,45 @@ cernbox outbox watch                 # keep going as files appear
 cernbox outbox status                # what is waiting, and what it is waiting on
 ```
 
-Folders usually live in the configuration file, so those need no arguments:
+Folders usually live in the configuration file, so those commands need no arguments:
 
 ```yaml
 outbox:
   - local: ~/Pictures/Screenshots
     remote: Screenshots
-    layout: date        # files under Screenshots/2026/09/30/
-    after: delete       # empty the folder once the upload is verified
-    link: true          # print a public link for each upload
+    layout: date
+    after: delete
+    link: true
   - local: ~/scratch
     remote: Scratch
 ```
 
-Or name one directly: `cernbox outbox push ~/scratch --to Scratch`.
+| Key | Default | What it does |
+| --- | --- | --- |
+| `local` | required | the folder to upload from; a leading `~` is expanded |
+| `remote` | required | the CERNBox folder it goes to, created if it is not there |
+| `layout` | `flat` | `date` files each upload under `2026/09/30/`, taken from the file's own timestamp rather than today's |
+| `after` | `keep` | `keep` leaves the file alone, `move` puts it in `.uploaded/` beside it, `delete` removes it |
+| `link` | `false` | make a public link for each upload and print it |
 
-It is one way, always — nothing in CERNBox is changed except by adding to it, and `sync` is still the command for keeping two sides matching. Nothing is uploaded until a file has stopped changing for a moment, so a screenshot still being written is left for next time rather than arriving half finished. `after` defaults to `keep`, and `delete` removes the local copy only once the server has confirmed a matching checksum. A name already taken in CERNBox is never overwritten; the upload goes alongside it.
+`layout`, `after` and `link` are flags too, and a flag overrides the configuration for that one run — useful as a safety net over a config that says `delete`. `--to` names the CERNBox folder for a local folder that is not in the configuration at all:
 
-`watch` is convenient at a desk. For something that survives sleep, a lost network and a reboot, run `outbox push` from a systemd timer or a launchd job — and give it an app token in `CERNBOX_APP_TOKEN`, since there is nobody there to sign in.
+```bash
+cernbox outbox push --after keep                       # ignore what the config says, this once
+cernbox outbox push ~/scratch --to Scratch             # a folder not in the configuration
+cernbox outbox push ~/Desktop --to Inbox --layout date --link
+```
+
+`--settle` sets how long a file must be unchanged before it counts as finished, and `watch` takes `--sweep` for how often it looks through the folders anyway. With `link: true` each URL goes to standard output as its upload finishes, so piping into `xclip` or `pbcopy` gives you a link ready to paste.
+
+It is one way, always: nothing in CERNBox is changed except by adding to it, and `sync` is the command for keeping two sides matching. A few more rules, all pointed the same way:
+
+- Nothing is uploaded until a file has stopped changing, so a screenshot still being written is left for next time rather than arriving half finished.
+- `delete` removes the local copy only after the server confirms a matching checksum.
+- A name already taken in CERNBox is never overwritten — the upload goes alongside it as `name (2).png`.
+- Subdirectories are skipped, and you are told they were.
+
+[docs/configuration.md](docs/configuration.md) has the full reference, including where the configuration file lives.
 
 ## Copying and mirroring
 
