@@ -77,6 +77,8 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	sweep(dir)
+
 	os.Exit(m.Run())
 }
 
@@ -135,6 +137,101 @@ func waitForWrites(scratch string) error {
 	}
 	return fmt.Errorf("the storage did not accept a write within %s, last error: %s",
 		time.Duration(attempts)*pause, last)
+}
+
+// sweep clears what earlier runs left in the account.
+//
+// The dev environment is long-lived and every run adds to it, which breaks tests
+// in ways that look like bugs in whatever is being worked on. It has cost real
+// time three times over: leftover clipboard slots made a completion assertion
+// find two candidates where it wanted one; leftover received shares made a
+// decline look as though it had not taken; and a trash bin grown past
+// max_recycle_entries made the storage refuse to list a day at all, so three
+// trash tests failed against a client that was behaving correctly.
+//
+// Tests should scope their assertions to their own run, and the ones written here
+// do. This is for everything already in the account before the first test starts.
+// Failures are reported and ignored: a sweep that cannot finish is a worse reason
+// to abandon a run than the litter it was trying to remove.
+func sweep(scratch string) {
+	e := &env{localDir: scratch, cacheDir: scratch}
+	runAs := func(a account, args ...string) string {
+		out, _ := e.cmdAs(a, args...).CombinedOutput()
+		return string(out)
+	}
+
+	var removed int
+
+	// Directories from runs whose cleanup did not happen, which is every run that
+	// was killed or that failed early.
+	for _, line := range strings.Split(runAs(e.self(), "ls", homeRoot), "\n") {
+		name := strings.TrimSpace(strings.TrimSuffix(line, "/"))
+		if strings.HasPrefix(name, "it-") {
+			runAs(e.self(), "rm", "-r", "-f", path.Join(homeRoot, name))
+			removed++
+		}
+	}
+
+	// Clipboard slots, including the handovers between the two test users, which
+	// outlive the run that made them and are what "clipboard clear" is for.
+	for _, a := range []account{e.self(), e.other()} {
+		var slots []struct {
+			Slot string `json:"slot"`
+		}
+		if err := json.Unmarshal([]byte(runAs(a, "--output", "json", "clipboard", "list")), &slots); err == nil {
+			for _, s := range slots {
+				if strings.HasPrefix(s.Slot, "it-") || strings.HasPrefix(s.Slot, "to-") {
+					runAs(a, "clipboard", "clear", s.Slot)
+					removed++
+				}
+			}
+		}
+		// A slot whose manifest never landed is invisible to "clipboard list" and
+		// still visible to completion, so ask the same question completion does.
+		for _, line := range strings.Split(runAs(a, "__complete", "clipboard", "clear", "it-"), "\n") {
+			slot := strings.TrimSpace(line)
+			if strings.HasPrefix(slot, "it-") {
+				runAs(a, "clipboard", "clear", slot)
+				removed++
+			}
+		}
+	}
+
+	// Shares of paths that no longer exist. Their resource has been deleted, so
+	// they resolve to a version or recycle path and can never be tidied by the
+	// test that made them.
+	var shares []struct {
+		ID   string `json:"id"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(runAs(e.self(), "--output", "json", "share", "list")), &shares); err == nil {
+		for _, sh := range shares {
+			if sh.ID == "" {
+				continue
+			}
+			if sh.Path == "" || strings.Contains(sh.Path, ".sys.v#.") || strings.Contains(sh.Path, "/it-") {
+				runAs(e.self(), "share", "remove", sh.ID)
+				removed++
+			}
+		}
+	}
+
+	// The trash bin last, because emptying it is what the deletions above add to.
+	// Purged one key at a time: the storage does not implement emptying a bin, so
+	// there is nothing quicker to ask for.
+	var trashed []struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(runAs(e.self(), "--output", "json", "trash", "list", "--since", "60d")), &trashed); err == nil {
+		for _, it := range trashed {
+			runAs(e.self(), "trash", "purge", it.Key)
+			removed++
+		}
+	}
+
+	if removed > 0 {
+		fmt.Fprintf(os.Stderr, "===> swept %d leftovers from earlier runs\n", removed)
+	}
 }
 
 func reachable() bool {
