@@ -26,6 +26,10 @@ type Config struct {
 	Transfer TransferConfig `yaml:"transfer"`
 	Edit     EditConfig     `yaml:"edit"`
 
+	// Outbox lists local folders whose contents are uploaded to CERNBox, so that
+	// "cernbox outbox push" needs no arguments.
+	Outbox []OutboxFolder `yaml:"outbox"`
+
 	// Insecure disables transport security checks. Only for development
 	// instances; the CLI warns on every use.
 	Insecure bool `yaml:"insecure"`
@@ -82,6 +86,23 @@ type EditConfig struct {
 	// when the editor you want for a remote file is not the one you want for a
 	// commit message.
 	Command string `yaml:"command"`
+}
+
+// OutboxFolder is one local folder that is uploaded to CERNBox.
+type OutboxFolder struct {
+	// Local is the folder to watch. A leading ~ is expanded.
+	Local string `yaml:"local"`
+	// Remote is the CERNBox folder its contents go to.
+	Remote string `yaml:"remote"`
+	// Layout is "flat", or "date" to file each upload under YYYY/MM/DD taken from
+	// the file's own timestamp.
+	Layout string `yaml:"layout"`
+	// After is what happens to the local file once it is safely up: "keep",
+	// "move" to an .uploaded folder, or "delete". Empty means keep, because that
+	// is the only choice that cannot lose anything.
+	After string `yaml:"after"`
+	// Link creates a public link for each upload and prints it.
+	Link bool `yaml:"link"`
 }
 
 // DefaultConfig returns the built-in defaults, which target production

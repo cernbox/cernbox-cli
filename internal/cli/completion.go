@@ -458,6 +458,12 @@ func (a *App) argCompletions() map[string]completeFunc {
 		// machine that CERNBox should keep up with.
 		"edit": byPosition(transfer),
 
+		// An outbox folder is local, and the destination is a flag rather than an
+		// argument.
+		"outbox push":   byPosition(local),
+		"outbox watch":  byPosition(local),
+		"outbox status": byPosition(local),
+
 		"trash list":    none,
 		"trash browse":  none,
 		"trash restore": none,

@@ -181,6 +181,7 @@ func newRootCmd(app *App) *cobra.Command {
 		newArchiveCmd(app),
 
 		newEditCmd(app),
+		newOutboxCmd(app),
 		newQuotaCmd(app),
 
 		newCopyCmd(app),

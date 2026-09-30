@@ -237,6 +237,25 @@ What matters is **when** it is worth making. The server can only match a name, s
 
 Two smaller decisions. An entry the server reports no modification time for matches neither `--newer` nor `--older`, because no time is not the same as 1970. And `--print0` writes paths separated by NUL and nothing else — no table, no headers, refused under `--output json` — so `xargs -0` can take it and a name containing a newline cannot break the stream.
 
+## The outbox
+
+A local folder whose contents are uploaded. Three questions decide how it behaves.
+
+**When is a file finished?** This is the one that matters, because a screenshot appears while the tool is still writing it and uploading then produces half an image. A file is eligible once its modification time is at least `--settle` old, which is a comparison against the clock rather than a second look at the file: something still being written keeps its timestamp current, so one stat answers it and nothing has to be remembered between runs.
+
+**How are new files noticed?** `watch` uses filesystem notifications, so a folder holding thousands of screenshots is not read through every few seconds to find the one that just arrived. Notifications alone are not trustworthy, though — they are dropped when the kernel queue overflows, they frequently do not arrive at all on network filesystems, and nothing announces what was already there when the watch started. So the folders are also looked through every `--sweep`, a minute by default. The fast path is the notification; the sweep turns "silently never uploaded" into "uploaded a minute late". `push` does a single scan and needs neither.
+
+**What happens to the local file?** `keep` by default, because it is the only choice that cannot lose anything, and it needs no state: the destination is the record of what went, so a second pass compares against it and skips. `move` puts the file in `.uploaded/`. `delete` removes it — and only that policy turns on checksum verification, because a server that agreed with a checksum is the difference between knowing the file arrived and assuming it did, and assuming is not good enough to remove somebody's only copy.
+
+Four smaller rules, each chosen so that nothing is lost or quietly ignored:
+
+- **Never overwrite.** A name already taken in CERNBox by different content is not ours to replace, so the upload goes alongside as `name (2).ext`. An outbox adds; `sync` is the tool that makes two sides match.
+- **One folder deep.** Deciding that a whole tree has finished being written is a much harder question than deciding it about one file. A subdirectory is skipped — and *said* to be skipped, because somebody who dropped a folder in would otherwise believe it had gone.
+- **Symbolic links are not followed.** One pointing at `/` would mean uploading a home directory.
+- **Half-written names are left alone**: dotfiles, `~`, `.part`, `.crdownload`, `.tmp`, `.partial`, `.swp`.
+
+`watch` refuses to start without a credential that works unattended, rather than starting cheerfully and failing an hour later on the first upload. Kerberos and an app token qualify; the device flow never does, since it prints a URL and waits for somebody to visit it. Basic counts only when the password is already in the environment — `Available()` cannot be used to decide that, because it reports true when a password *could* be obtained, including by prompting for one.
+
 ## Who can reach a file
 
 Shares are per-directory grants and they are inherited, so access to a file is decided by its ancestors. Verified rather than assumed: with only a grandparent directory shared, the recipient reads the file straight out — and nested shares at different levels with different roles are accepted, which was measured earlier in this project.

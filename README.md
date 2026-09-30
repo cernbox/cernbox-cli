@@ -114,6 +114,36 @@ The editor comes from `--editor`, then `CERNBOX_EDITOR`, then `VISUAL`, then `ED
 
 If somebody else changes the file while you have it open, your save is refused rather than allowed to overwrite theirs, and your version is kept on disk with its path printed so nothing is lost. Sending a local file to a name CERNBox already uses for *different* content is refused too, the way `put` refuses to overwrite. `--force` says yours should win.
 
+## A folder that uploads itself
+
+Point an outbox at a local folder and whatever appears in it goes to CERNBox — a
+screenshots folder, a scratch directory, anywhere you drop things.
+
+```bash
+cernbox outbox push                  # upload what is waiting, then stop
+cernbox outbox watch                 # keep going as files appear
+cernbox outbox status                # what is waiting, and what it is waiting on
+```
+
+Folders usually live in the configuration file, so those need no arguments:
+
+```yaml
+outbox:
+  - local: ~/Pictures/Screenshots
+    remote: Screenshots
+    layout: date        # files under Screenshots/2026/09/30/
+    after: delete       # empty the folder once the upload is verified
+    link: true          # print a public link for each upload
+  - local: ~/scratch
+    remote: Scratch
+```
+
+Or name one directly: `cernbox outbox push ~/scratch --to Scratch`.
+
+It is one way, always — nothing in CERNBox is changed except by adding to it, and `sync` is still the command for keeping two sides matching. Nothing is uploaded until a file has stopped changing for a moment, so a screenshot still being written is left for next time rather than arriving half finished. `after` defaults to `keep`, and `delete` removes the local copy only once the server has confirmed a matching checksum. A name already taken in CERNBox is never overwritten; the upload goes alongside it.
+
+`watch` is convenient at a desk. For something that survives sleep, a lost network and a reboot, run `outbox push` from a systemd timer or a launchd job — and give it an app token in `CERNBOX_APP_TOKEN`, since there is nobody there to sign in.
+
 ## Copying and mirroring
 
 ```bash

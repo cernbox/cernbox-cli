@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
 )
@@ -261,6 +262,79 @@ func TestEditLocalFileMirrorsItToCERNBox(t *testing.T) {
 	e.mustRun("edit", "file:"+local, "--in", folder, "--editor", editor)
 	if remote := e.mustRun("cat", folder+"/mirrored.txt"); !strings.Contains(remote, "appended\nappended") {
 		t.Errorf("the second run did not upload: %q", remote)
+	}
+}
+
+// ── the outbox ───────────────────────────────────────────────────────────────
+
+// TestOutboxPushAndDelete checks the drop-folder flow against a real server, and
+// the part that matters most: the local file is only removed once the upload is
+// verified, so a failure leaves it where it is.
+func TestOutboxPushAndDelete(t *testing.T) {
+	e := setup(t)
+	local := filepath.Join(e.localDir, "outbox")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	remote := e.remotePath("Dropped")
+
+	shot := filepath.Join(local, "shot.png")
+	if err := os.WriteFile(shot, []byte("picture bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Backdated so it counts as finished without the test waiting.
+	old := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(shot, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// status first: it reports and uploads nothing.
+	var pending []struct {
+		Local string `json:"local"`
+		State string `json:"state"`
+	}
+	e.runJSON(&pending, "outbox", "status", local, "--to", remote)
+	if len(pending) != 1 || pending[0].State != "waiting" {
+		t.Errorf("status = %+v, want one file waiting", pending)
+	}
+	if _, _, code := e.run("stat", remote+"/shot.png"); code == 0 {
+		t.Error("status uploaded something")
+	}
+
+	e.mustRun("outbox", "push", local, "--to", remote, "--after", "delete")
+
+	if got := e.mustRun("cat", remote+"/shot.png"); got != "picture bytes" {
+		t.Errorf("uploaded content = %q", got)
+	}
+	if _, err := os.Stat(shot); !os.IsNotExist(err) {
+		t.Errorf("--after delete left the local file: %v", err)
+	}
+
+	// A second pass has nothing to do and must not fail.
+	e.mustRun("outbox", "push", local, "--to", remote, "--after", "delete")
+}
+
+// TestOutboxWatchUploadsOnArrival drives the notification path against a real
+// server, with the safety sweep pushed out of reach so that only a filesystem
+// event can explain the upload.
+func TestOutboxWatchUploadsOnArrival(t *testing.T) {
+	e := setup(t)
+	local := filepath.Join(e.localDir, "watched")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	remote := e.remotePath("Watched")
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_ = os.WriteFile(filepath.Join(local, "late.png"), []byte("arrived later"), 0o644)
+	}()
+
+	e.mustRun("--timeout", "6s", "outbox", "watch", local,
+		"--to", remote, "--settle", "200ms", "--sweep", "1h")
+
+	if got := e.mustRun("cat", remote+"/late.png"); got != "arrived later" {
+		t.Errorf("the watch did not pick up the arrival; cat gives %q", got)
 	}
 }
 

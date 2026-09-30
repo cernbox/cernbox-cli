@@ -81,6 +81,11 @@ var coveredCommands = map[string]string{
 	"versions restore":  "TestVersionsRoundTrip",
 	"versions download": "TestVersionsRoundTrip",
 
+	// The outbox.
+	"outbox push":   "TestOutboxPushAndDelete",
+	"outbox watch":  "TestOutboxWatchUploadsOnArrival",
+	"outbox status": "TestOutboxPushAndDelete",
+
 	// Spaces.
 	"quota":      "TestQuotaForBothSpaceTypes",
 	"space list": "TestSpaceListIncludesHome, TestSpaceListFilteredByType",
