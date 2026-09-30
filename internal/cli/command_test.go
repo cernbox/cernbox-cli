@@ -87,6 +87,12 @@ type testBox struct {
 	// trashWindows records the range of every trash listing the box served, so
 	// a test can check what was asked for and not merely what came back.
 	trashWindows [][2]time.Time
+	// trashRefuseDay is a day (2006-01-02) the box refuses to list, the way the
+	// storage refuses one holding more deletions than it will return at once.
+	trashRefuseDay string
+	// trashMoveDelay slows a restore, so a test can watch what happens while one
+	// is in flight rather than only after it.
+	trashMoveDelay time.Duration
 }
 
 // trashFakeLayout is the layout ocdav parses the trash range with. A value it
@@ -101,6 +107,9 @@ type trashEntry struct {
 	// deleted is when the item was deleted. Zero means "just now", which keeps
 	// it inside any window a test asks for.
 	deleted time.Time
+	// isDir marks a directory deleted as a tree, which the storage records as a
+	// single entry whose restore brings back everything under it.
+	isDir bool
 }
 
 type versionEntry struct {
@@ -596,6 +605,16 @@ func (b *testBox) serveTrash(w http.ResponseWriter, r *http.Request) {
 		}
 		b.trashWindows = append(b.trashWindows, [2]time.Time{from, to})
 
+		if b.trashRefuseDay != "" {
+			for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+				if d.Format("2006-01-02") == b.trashRefuseDay {
+					http.Error(w, "too many entries found in listing the recycle bin",
+						http.StatusBadRequest)
+					return
+				}
+			}
+		}
+
 		var entries []string
 		entries = append(entries, fmt.Sprintf(
 			`<d:response><d:href>%s/</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status>`+
@@ -610,15 +629,19 @@ func (b *testBox) serveTrash(w http.ResponseWriter, r *http.Request) {
 			if deleted.Before(from.Truncate(24*time.Hour)) || deleted.After(to.Add(24*time.Hour)) {
 				continue
 			}
+			rt := "<d:resourcetype></d:resourcetype>"
+			if item.isDir {
+				rt = "<d:resourcetype><d:collection/></d:resourcetype>"
+			}
 			entries = append(entries, fmt.Sprintf(
 				`<d:response><d:href>%s/%s</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop>`+
-					`<d:displayname>%s</d:displayname><d:resourcetype></d:resourcetype>`+
+					`<d:displayname>%s</d:displayname>%s`+
 					`<d:getcontentlength>%d</d:getcontentlength><oc:size>%d</oc:size>`+
 					`<oc:trashbin-original-filename>%s</oc:trashbin-original-filename>`+
 					`<oc:trashbin-original-location>%s</oc:trashbin-original-location>`+
 					`<oc:trashbin-delete-timestamp>%d</oc:trashbin-delete-timestamp>`+
 					`</d:prop></d:propstat></d:response>`,
-				testTrashPrefix, k, item.name, len(item.body), len(item.body), item.name, item.location,
+				testTrashPrefix, k, item.name, rt, len(item.body), len(item.body), item.name, item.location,
 				deleted.Unix()))
 		}
 		w.WriteHeader(http.StatusMultiStatus)
@@ -626,6 +649,9 @@ func (b *testBox) serveTrash(w http.ResponseWriter, r *http.Request) {
 			strings.Join(entries, "")+`</d:multistatus>`)
 
 	case "MOVE":
+		if b.trashMoveDelay > 0 {
+			time.Sleep(b.trashMoveDelay)
+		}
 		item, ok := b.trash[key]
 		if !ok {
 			http.Error(w, "no such trash item", http.StatusNotFound)
@@ -637,7 +663,11 @@ func (b *testBox) serveTrash(w http.ResponseWriter, r *http.Request) {
 				dst = path.Clean(after)
 			}
 		}
-		b.files[dst] = item.body
+		if item.isDir {
+			b.mkdir(dst)
+		} else {
+			b.files[dst] = item.body
+		}
 		delete(b.trash, key)
 		w.WriteHeader(http.StatusCreated)
 

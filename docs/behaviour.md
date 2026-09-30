@@ -24,6 +24,7 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 | A recycle-bin listing with no date range silently means "the last two days", and a range the storage thinks is too wide is refused outright | `trash list` always sends a range, reports which one, and splits a refused one — see [the trash bin covers a period](#the-trash-bin-covers-a-period-not-a-bin) |
 | `EmptyRecycle` is not implemented, so emptying a bin in one request is an internal error | No `trash purge --all`. Purging takes the keys from `trash list` |
 | A restore ignores the destination it is given: EOS restores to the path it recorded, while ocdav deletes whatever is at the requested destination first and then reports failure when the file does not arrive there | No `trash restore --to`. A restore goes back where it came from, which is all the storage can do |
+| Nothing in the recycle-bin API filters, pages or drills down: the listing takes only a date range, `ListRecycle` ignores the key and relative path it is passed, and there is no cursor within a day | `trash browse` rebuilds the tree client-side from the paths the entries carry — see [browsing the bin](#browsing-the-bin) |
 
 **Two-way sync** is a deliberate omission rather than a gap. `sync` is a one-way mirror: genuine bidirectional synchronisation needs persistent per-file state to tell "changed here" from "deleted there", and without it the two are indistinguishable, which is how a sync tool deletes data it should have uploaded. That state is the desktop client's job.
 
@@ -131,6 +132,41 @@ Two details that make this easy to get wrong, both of which fail silently rather
 There is no way to restore somewhere else, and no way to empty the bin in one go. Both were offered once and both were removed, because neither did what it said: a destination is ignored by the driver while ocdav deletes what is already there and then calls the restore a failure, and emptying a bin reaches a method the driver does not implement. A flag that appears to work and does something else is worse than its absence.
 
 Restoring has the same window underneath it. There is no "put it back" on the wire: a restore is a `MOVE` and needs a `Destination`, and the only source for an item's original location is the listing. Looking in the default window is why restoring a week-old file used to fail with *no item with this key*, which reads as a bad key rather than a search too narrow to contain it. The lookup now widens — 2 days, then 14, then 90 — so the common restore still costs one request and an old one still works.
+
+## Browsing the bin
+
+`trash browse` shows the trash as a directory tree. Every entry carries the path it used to have, so the shape the user remembers can be rebuilt from a flat list of opaque keys — which is also how the key stops being something anybody has to see or copy.
+
+Three things this buys that flags cannot:
+
+- **You need not know when.** `--since` requires already knowing roughly when the file went. `t` widens the window from inside, and the tree grows.
+- **A folder is one row.** Forty thousand deletions under one directory are one line with a count, not forty thousand lines. And a directory deleted *whole* is a single entry in the storage whose restore brings back everything underneath, so it is marked apart (`▪ whole folder`) and costs one request instead of forty thousand.
+- **Holes are shown where they matter.** A day the storage refuses appears in the title bar as `⚠ N days unlistable`, which makes every count on screen visibly a lower bound. A listing that quietly omits a day is worse than one that fails, because the user concludes the file is gone.
+
+Nothing moves until a plan has been shown and confirmed. The plan makes two corrections a user should not have to make by hand: an entry covered by a folder also being restored is dropped, because restoring the folder brings it back and the child would then fail against a path that already exists; and restores are ordered parents first, because a child arriving before its directory is a 409.
+
+### Launching it
+
+The order is *fetch, then take the screen* — never the reverse. Credentials resolve on the first request rather than when the client is built, so a device-code sign-in prints a URL and a code and waits; that has to happen while the normal screen is still visible. The same goes for the first failure: a 403, or a space with no bin, is an ordinary command error, not something to discover inside a full-screen UI with no obvious way out.
+
+It refuses to start rather than half-work:
+
+| Condition | Why |
+| --- | --- |
+| Either end is not a terminal | A frame written to a pipe is gibberish, and a scheduled job that meets a full-screen UI hangs until somebody kills it |
+| `--output json` or `csv` | An explicit request for something this cannot produce; ignoring the flag would be the wrong kind of helpful |
+| `--quiet` | It and a full-screen browser ask for opposite things |
+| `TERM` unset or `dumb` | Nothing to draw on |
+
+`--plain`, or `CERNBOX_NO_TUI`, prints the listing instead — and deliberately skips every check above, since it is the escape hatch for exactly the places where the browser cannot run.
+
+The alternate screen takes its contents with it when it closes, so anything worth keeping is reprinted afterwards: what was restored, what failed and why, and the equivalent plain command. Quitting is exit 0; an operation with failures is not.
+
+### What it does not do yet
+
+- **No live `exists now` mark per row.** Conflicts are detected when the plan is built, where it matters most, because marking every visible row means a stat per row and an asynchronous redraw the event loop does not have yet.
+- **No streaming of days as they arrive.** A wide window is fetched by halving refused ranges, so days do not arrive in order and there is no natural per-day boundary to stream on. A long fetch shows a notice, not a count.
+- **No resume across runs.** Failures are listed and can be retried in the session; a journal on disk that survives `Ctrl-C` is not there.
 
 ## Unix conventions
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +19,12 @@ func newTrashCmd(app *App) *cobra.Command {
 		Short: "Work with deleted files",
 		Long: "Work with deleted files.\n\n" +
 			"Each space has its own trash. Commands use your home space unless you pass\n" +
-			"--space.",
+			"--space.\n\n" +
+			"'cernbox trash browse' opens the bin as a directory tree you can walk\n" +
+			"through, which is easier than copying keys out of a listing.",
 	}
-	cmd.AddCommand(newTrashListCmd(app), newTrashRestoreCmd(app), newTrashPurgeCmd(app))
+	cmd.AddCommand(newTrashListCmd(app), newTrashBrowseCmd(app),
+		newTrashRestoreCmd(app), newTrashPurgeCmd(app))
 	return cmd
 }
 
@@ -224,7 +228,7 @@ func filesPlural(n int) string {
 }
 
 // renderTrashListing prints a listing as a table, and says which window it
-// covered.
+// covered. Shared with the browser's --plain fallback so there is one renderer.
 func (a *App) renderTrashListing(listing *client.TrashListing) error {
 	now := time.Now()
 	table := output.Table{
@@ -254,6 +258,84 @@ func (a *App) renderTrashListing(listing *client.TrashListing) error {
 	return nil
 }
 
+func newTrashBrowseCmd(app *App) *cobra.Command {
+	var opts trashWindowOptions
+	var plain bool
+
+	cmd := &cobra.Command{
+		Use:     "browse",
+		Aliases: []string{"ui"},
+		Short:   "Walk through deleted files and restore them",
+		Long: "Open the trash bin as a directory tree.\n\n" +
+			"Deleted files remember where they lived, so the bin can be walked like the\n" +
+			"folders it came from. Pick what you want back and restore it in one go,\n" +
+			"without copying any keys.\n\n" +
+			"A listing covers a span of time rather than the whole bin, starting at two\n" +
+			"days; --since widens it before opening, and 't' widens it from inside.",
+		Example: "  cernbox trash browse\n" +
+			"  cernbox trash browse --since 30d\n" +
+			"  cernbox trash browse --space project/cernbox",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			window, err := opts.window()
+			if err != nil {
+				return err
+			}
+			base, err := app.trashBasePath(cmd, opts.space)
+			if err != nil {
+				return err
+			}
+
+			// Asked not to take the terminal, so none of the terminal's
+			// requirements apply: this is the escape hatch for the places where
+			// the browser cannot run, and refusing it there would be absurd.
+			if plain || os.Getenv("CERNBOX_NO_TUI") != "" {
+				listing, err := app.client.ListTrash(ctx, base, window)
+				if err != nil {
+					return err
+				}
+				return app.renderTrashListing(listing)
+			}
+
+			if reason := app.browseRefusal(); reason != "" {
+				return cberr.Usagef("%s", reason)
+			}
+			return runTrashBrowser(ctx, app, opts.space, base, window)
+		},
+	}
+
+	opts.register(cmd)
+	cmd.Flags().BoolVar(&plain, "plain", false,
+		"print the listing instead of taking over the terminal")
+	return cmd
+}
+
+// browseRefusal explains why the browser must not start, or "" when it may.
+//
+// Every one of these is a case where starting it would be worse than refusing.
+// A frame drawn into a pipe is gibberish; a cron job that meets a full-screen UI
+// hangs until somebody kills it; and a caller who asked for JSON asked for
+// something this cannot produce, so ignoring the flag would be the wrong kind of
+// helpful.
+func (a *App) browseRefusal() string {
+	switch {
+	case a.out.Format() != output.FormatTable:
+		return "browsing produces no machine-readable output; use 'cernbox trash list --output json'"
+	case a.out.IsQuiet():
+		return "--quiet and a full-screen browser ask for opposite things; use 'cernbox trash list'"
+	case a.stdinFile() == nil || a.stdoutFile() == nil,
+		!output.IsTerminal(a.stdinFile()) || !output.IsTerminal(a.stdoutFile()):
+		return "browsing needs a terminal on both input and output; 'cernbox trash list' prints the same thing"
+	case os.Getenv("TERM") == "" || os.Getenv("TERM") == "dumb":
+		return "this terminal cannot be drawn on (TERM is " + orDash(os.Getenv("TERM")) +
+			"); use 'cernbox trash list', or --plain"
+	}
+	return ""
+}
+
 func newTrashRestoreCmd(app *App) *cobra.Command {
 	var space string
 
@@ -261,9 +343,14 @@ func newTrashRestoreCmd(app *App) *cobra.Command {
 		Use:   "restore KEY...",
 		Short: "Restore a deleted file",
 		Long: "Restore deleted files. They go back where they were, which is the path\n" +
-			"shown by 'cernbox trash list'.",
-		Example: "  cernbox trash restore 1a2b3c",
-		Args:    cobra.MinimumNArgs(1),
+			"shown by 'cernbox trash list'.\n\n" +
+			"With no keys, and on a terminal, this opens the browser so you can pick\n" +
+			"what to bring back.",
+		Example: "  cernbox trash restore 1a2b3c\n  cernbox trash restore",
+		// Checked in the body rather than by cobra, because no arguments is not
+		// a mistake here: it is how somebody who does not have a key to hand
+		// asks to be shown the bin.
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
@@ -271,6 +358,13 @@ func newTrashRestoreCmd(app *App) *cobra.Command {
 			base, err := app.trashBasePath(cmd, space)
 			if err != nil {
 				return err
+			}
+
+			if len(args) == 0 {
+				if reason := app.browseRefusal(); reason != "" {
+					return cberr.Usagef("pass the keys to restore, which 'cernbox trash list' shows (%s)", reason)
+				}
+				return runTrashBrowser(ctx, app, space, base, client.TrashWindow{})
 			}
 
 			for _, key := range args {

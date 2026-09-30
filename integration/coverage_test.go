@@ -71,6 +71,7 @@ var coveredCommands = map[string]string{
 	"ocm received":      "TestOCMShareReachesThePartner",
 
 	// History.
+	"trash browse":      "TestTrashBrowseRestoresThroughTheTerminal, TestTrashBrowseRefusesWithoutATerminal",
 	"trash list":        "TestTrashRoundTrip, TestTrashListSince",
 	"trash restore":     "TestTrashRoundTrip",
 	"trash purge":       "TestTrashPurge",

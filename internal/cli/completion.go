@@ -450,8 +450,11 @@ func (a *App) argCompletions() map[string]completeFunc {
 
 		// Trash keys are not completed on purpose. The only way to learn them is
 		// to list the whole trash bin, which on a real account is enormous and
-		// slow — far too much work to do behind a key press.
+		// slow — far too much work to do behind a key press. "trash browse" is
+		// the answer to not having a key to hand, and "trash restore" with no
+		// arguments opens it.
 		"trash list":    none,
+		"trash browse":  none,
 		"trash restore": none,
 		"trash purge":   none,
 

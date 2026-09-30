@@ -299,6 +299,43 @@ func (e *env) runAs(a account, args ...string) (stdout, stderr string, code int)
 	return outBuf.String(), errBuf.String(), code
 }
 
+// runInPty runs the CLI under a real pseudo-terminal, feeding it keystrokes, and
+// returns everything the terminal saw.
+//
+// script(1) rather than a pty library: the point is to exercise the same path a
+// user's terminal takes — raw mode, the alternate screen, arrow keys arriving as
+// escape sequences — and adding a dependency to the module to do it would be a
+// poor trade for a test helper.
+func (e *env) runInPty(keys string, args ...string) string {
+	e.t.Helper()
+
+	if _, err := exec.LookPath("script"); err != nil {
+		e.t.Skip("script(1) is needed to drive a terminal")
+	}
+
+	base := e.cmdAs(e.self(), args...)
+	quoted := make([]string, 0, len(base.Args))
+	for _, a := range base.Args {
+		quoted = append(quoted, shellQuote(a))
+	}
+
+	c := exec.Command("script", "-qec", strings.Join(quoted, " "), "/dev/null")
+	c.Env = base.Env
+	c.Stdin = strings.NewReader(keys)
+	var out strings.Builder
+	c.Stdout, c.Stderr = &out, &out
+
+	// The exit status is not the interesting part: a browser that quits on end of
+	// input is behaving correctly, and what it drew is the evidence.
+	_ = c.Run()
+	return out.String()
+}
+
+// shellQuote makes an argument safe for the command line script(1) runs.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // mustRun executes the CLI and fails the test on a non-zero exit.
 func (e *env) mustRun(args ...string) string {
 	e.t.Helper()

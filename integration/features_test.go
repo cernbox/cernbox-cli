@@ -110,6 +110,50 @@ func TestTrashPurge(t *testing.T) {
 	}
 }
 
+// TestTrashBrowseRestoresThroughTheTerminal drives the browser the way a person
+// does: in a real terminal, with keystrokes. It is the only test that exercises
+// raw mode, the alternate screen and escape-sequence decoding against a live
+// server, and the only one that proves the tree it builds from the entries lines
+// up with what the storage actually reports.
+func TestTrashBrowseRestoresThroughTheTerminal(t *testing.T) {
+	e := setup(t)
+	e.mustRun("put", e.writeLocal("browsed.txt", []byte("bring me back")), e.remotePath("browsed.txt"))
+	e.mustRun("rm", e.remotePath("browsed.txt"))
+
+	// Narrow the top level to this run's own directory, open it, restore what the
+	// cursor lands on, confirm, quit. The run directory's name is unique, so the
+	// filter leaves exactly one row and the navigation is deterministic even
+	// though the bin holds everything previous runs deleted.
+	mine := path.Base(e.remote)
+	keys := "/" + mine + "\r" + "\r" + "r" + "y" + "q"
+
+	out := e.runInPty(keys, "trash", "browse")
+
+	if !strings.Contains(out, "TRASH") {
+		t.Fatalf("the browser did not draw a frame:\n%s", out)
+	}
+	if !strings.Contains(out, "browsed.txt") {
+		t.Errorf("the deleted file was not shown:\n%s", out)
+	}
+	if got := e.mustRun("cat", e.remotePath("browsed.txt")); got != "bring me back" {
+		t.Errorf("the file was not restored through the browser; cat gives %q", got)
+	}
+}
+
+// TestTrashBrowseRefusesWithoutATerminal is the other half: no terminal means no
+// browser, because a scheduled job that starts one waits for a keystroke nobody
+// will type.
+func TestTrashBrowseRefusesWithoutATerminal(t *testing.T) {
+	e := setup(t)
+	_, stderr, code := e.run("trash", "browse")
+	if code != cberr.ExitUsage {
+		t.Errorf("exit = %d, want %d with no terminal", code, cberr.ExitUsage)
+	}
+	if !strings.Contains(stderr, "trash list") {
+		t.Errorf("the refusal should point at the listing:\n%s", stderr)
+	}
+}
+
 // ── versions ─────────────────────────────────────────────────────────────────
 
 func TestVersionsRoundTrip(t *testing.T) {
