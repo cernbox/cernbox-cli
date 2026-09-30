@@ -72,6 +72,30 @@ cernbox cat notes.txt
 
 `mkdir`, `touch`, `rm` and `mv` work as you would expect. They follow the flags you already type — `-p`, `-r`, `-f` — and are a little more careful than the local versions: `mv` and `cp` will not overwrite without `-f`, and `touch` will not empty a file that already exists.
 
+## Editing a file in place
+
+```bash
+cernbox edit notes.txt
+```
+
+That opens your editor and writes the file back **every time you save**, so the copy in CERNBox keeps up with the one in front of you and closing the editor is not a special moment.
+
+It works on both sides. A CERNBox file is fetched, edited, and written back. A file on **your own machine** is edited where it lies — nothing is downloaded over it — and uploaded on each save, which makes this a way to keep a local file mirrored into CERNBox while you work on it.
+
+```bash
+cernbox edit notes.txt               # CERNBox, in your myfiles folder
+cernbox edit ./draft.md              # this machine, saved to myfiles/draft.md
+cernbox edit Documents/report.md     # a CERNBox path, taken as it is
+cernbox edit todo.md --in Scratch    # a different folder
+cernbox edit notes.txt --no-watch    # save once, when the editor closes
+```
+
+Which side an argument means: a bare name is CERNBox, in your `myfiles` folder; `./x`, `../x` and `~/x` are this machine; `file:` and `cb:` say so outright; and any other path is CERNBox if it is there and this machine otherwise — which is how `/eos/user/...` resolves sensibly on lxplus, where it is both. Whichever way it goes, the paths are printed before the editor opens.
+
+The editor comes from `--editor`, then `CERNBOX_EDITOR`, then `VISUAL`, then `EDITOR`. `edit.folder` in the configuration file, or `CERNBOX_EDIT_FOLDER`, changes where bare names go.
+
+If somebody else changes the file while you have it open, your save is refused rather than allowed to overwrite theirs, and your version is kept on disk with its path printed so nothing is lost. Sending a local file to a name CERNBox already uses for *different* content is refused too, the way `put` refuses to overwrite. `--force` says yours should win.
+
 ## Copying and mirroring
 
 ```bash

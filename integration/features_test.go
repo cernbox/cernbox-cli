@@ -154,6 +154,103 @@ func TestTrashBrowseRefusesWithoutATerminal(t *testing.T) {
 	}
 }
 
+// ── edit ─────────────────────────────────────────────────────────────────────
+
+// TestEditRoundTrip checks against a real server the two things the fake cannot
+// settle: that the working copy really comes from the server, and that a save
+// made while the editor is still running arrives before it exits.
+func TestEditRoundTrip(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("edited.txt")
+	e.mustRun("put", e.writeLocal("edited.txt", []byte("from the server\n")), target)
+
+	// An editor that appends, waits long enough for a save to be noticed, then
+	// appends again — so the first version has to reach the server mid-session.
+	editor := e.writeLocal("editor.sh", []byte("#!/bin/sh\n"+
+		"printf 'first edit\\n' >> \"$1\"\n"+
+		"sleep 3\n"+
+		"printf 'second edit\\n' >> \"$1\"\n"))
+	if err := os.Chmod(editor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	e.mustRun("edit", target, "--editor", editor, "--interval", "500ms")
+
+	got := e.mustRun("cat", target)
+	want := "from the server\nfirst edit\nsecond edit\n"
+	if got != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+
+	// And the file has a version history, which is what proves the mid-session
+	// save was a separate write rather than one upload at the end.
+	var versions []struct {
+		Key string `json:"key"`
+	}
+	e.runJSON(&versions, "versions", "list", target)
+	if len(versions) < 2 {
+		t.Errorf("%d versions: the save made while the editor was open did not reach the server separately",
+			len(versions))
+	}
+}
+
+// TestEditBareNameGoesToTheEditFolder: the whole point of "cernbox edit notes.txt".
+func TestEditBareNameGoesToTheEditFolder(t *testing.T) {
+	e := setup(t)
+	// Inside this run's own directory, and deliberately not created first: the
+	// folder a bare name lands in has to be made on demand, since a PUT into a
+	// missing collection is refused.
+	folder := e.remotePath("edit-folder")
+	name := "note.txt"
+
+	editor := e.writeLocal("editor2.sh", []byte("#!/bin/sh\nprintf 'written\\n' > \"$1\"\n"))
+	if err := os.Chmod(editor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	e.mustRun("edit", name, "--in", folder, "--editor", editor)
+
+	if got := e.mustRun("cat", folder+"/"+name); got != "written\n" {
+		t.Errorf("content = %q", got)
+	}
+}
+
+// TestEditLocalFileMirrorsItToCERNBox is the other half of edit: the file stays
+// on this machine and CERNBox follows it.
+func TestEditLocalFileMirrorsItToCERNBox(t *testing.T) {
+	e := setup(t)
+	local := e.writeLocal("mirrored.txt", []byte("local original\n"))
+	folder := e.remotePath("edit-local")
+
+	editor := e.writeLocal("editor3.sh", []byte("#!/bin/sh\n"+
+		"printf 'appended\\n' >> \"$1\"\n"))
+	if err := os.Chmod(editor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	e.mustRun("edit", "file:"+local, "--in", folder, "--editor", editor)
+
+	// The local file is still there, with the edit in it.
+	got, err := os.ReadFile(local)
+	if err != nil {
+		t.Fatalf("the local file was disturbed: %v", err)
+	}
+	if string(got) != "local original\nappended\n" {
+		t.Errorf("local file = %q", got)
+	}
+	// And CERNBox has the same thing.
+	if remote := e.mustRun("cat", folder+"/mirrored.txt"); remote != string(got) {
+		t.Errorf("CERNBox has %q, local has %q", remote, got)
+	}
+
+	// Running it again must not need --force: the file already there is this
+	// file's own earlier upload, not a collision.
+	e.mustRun("edit", "file:"+local, "--in", folder, "--editor", editor)
+	if remote := e.mustRun("cat", folder+"/mirrored.txt"); !strings.Contains(remote, "appended\nappended") {
+		t.Errorf("the second run did not upload: %q", remote)
+	}
+}
+
 // ── versions ─────────────────────────────────────────────────────────────────
 
 func TestVersionsRoundTrip(t *testing.T) {

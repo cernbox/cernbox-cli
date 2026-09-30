@@ -180,6 +180,8 @@ func newRootCmd(app *App) *cobra.Command {
 		newSyncCmd(app),
 		newArchiveCmd(app),
 
+		newEditCmd(app),
+
 		newCopyCmd(app),
 		newPasteCmd(app),
 		newClipboardCmd(app),

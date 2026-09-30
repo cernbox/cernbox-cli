@@ -453,6 +453,10 @@ func (a *App) argCompletions() map[string]completeFunc {
 		// slow — far too much work to do behind a key press. "trash browse" is
 		// the answer to not having a key to hand, and "trash restore" with no
 		// arguments opens it.
+		// Both sides, because edit takes either: a CERNBox path, or a file on this
+		// machine that CERNBox should keep up with.
+		"edit": byPosition(transfer),
+
 		"trash list":    none,
 		"trash browse":  none,
 		"trash restore": none,

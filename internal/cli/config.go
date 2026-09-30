@@ -24,6 +24,7 @@ type Config struct {
 
 	Auth     AuthConfig     `yaml:"auth"`
 	Transfer TransferConfig `yaml:"transfer"`
+	Edit     EditConfig     `yaml:"edit"`
 
 	// Insecure disables transport security checks. Only for development
 	// instances; the CLI warns on every use.
@@ -71,6 +72,18 @@ type TransferConfig struct {
 	Archive *bool `yaml:"archive"`
 }
 
+// EditConfig configures the editor command.
+type EditConfig struct {
+	// Folder is where a bare file name goes, relative to the home space unless
+	// it is absolute. The point of it is that "cernbox edit notes.txt" always
+	// means the same file, whatever directory you happen to be in.
+	Folder string `yaml:"folder"`
+	// Command overrides VISUAL and EDITOR for this CLI only, which is useful
+	// when the editor you want for a remote file is not the one you want for a
+	// commit message.
+	Command string `yaml:"command"`
+}
+
 // DefaultConfig returns the built-in defaults, which target production
 // CERNBox so that the CLI is useful with no configuration at all.
 func DefaultConfig() *Config {
@@ -92,6 +105,9 @@ func DefaultConfig() *Config {
 		Transfer: TransferConfig{
 			ChunkSize: "8M",
 			Archive:   &archive,
+		},
+		Edit: EditConfig{
+			Folder: DefaultEditFolder,
 		},
 	}
 }
@@ -167,6 +183,14 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Transfer.Jobs = n
 		}
+	}
+	if v := os.Getenv("CERNBOX_EDIT_FOLDER"); v != "" {
+		cfg.Edit.Folder = v
+	}
+	// Deliberately not EDITOR: this overrides it, so it needs its own name, or
+	// setting it would change every other tool on the machine too.
+	if v := os.Getenv("CERNBOX_EDITOR"); v != "" {
+		cfg.Edit.Command = v
 	}
 }
 

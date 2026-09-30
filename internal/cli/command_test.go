@@ -38,6 +38,11 @@ type testBox struct {
 	// fake never wrote report a fixed etag, which is all most tests need.
 	etags map[string]string
 
+	// failPath makes writes to one path fail, standing in for the upload troubles
+	// that have nothing to do with a conflict: a full quota, a broken connection,
+	// a storage that is briefly unhappy.
+	failPath string
+
 	// beforePut runs at the start of every PUT, before the If-Match check. It is
 	// how a test stands in for another client writing the same path in the window
 	// between a read and the write that depends on it — a race no test could
@@ -422,6 +427,10 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		if b.beforePut != nil {
 			b.beforePut(p)
+		}
+		if b.failPath != "" && p == b.failPath {
+			http.Error(w, "storage unavailable", http.StatusInternalServerError)
+			return
 		}
 		if want := r.Header.Get("If-Match"); want != "" {
 			if _, exists := b.files[p]; !exists {

@@ -168,6 +168,20 @@ The alternate screen takes its contents with it when it closes, so anything wort
 - **No streaming of days as they arrive.** A wide window is fetched by halving refused ranges, so days do not arrive in order and there is no natural per-day boundary to stream on. A long fetch shows a notice, not a count.
 - **No resume across runs.** Failures are listed and can be retried in the session; a journal on disk that survives `Ctrl-C` is not there.
 
+## Editing without thinking about transfers
+
+`edit` fetches a working copy, runs your editor on it, and uploads whenever the file changes — including while the editor is still open, which is the part that makes it feel like editing rather than like two transfers with a pause in between.
+
+**It polls the file rather than watching it.** This is the one decision worth explaining, because the obvious answer is inotify and the obvious answer is wrong here. How an editor saves varies: measured on this machine, vim writes in place, with its default settings *and* with `backupcopy=no`, while `sed -i` replaces the file, and the "atomic save" editors are known for doing the same. A watch follows the inode, so it works for one editor and silently stops working for the next, or after a user changes a single setting. Watching the path has neither problem. inotify is also Linux-only and this is built for macOS too, and a file-watching library would be the first new direct dependency in a module that has exactly one. A stat per second, with the content hashed only once the size or the timestamp moves, notices a save about as fast as a person can and does not care how the editor wrote it.
+
+The final check before exiting deliberately skips the cheap stat gate and hashes regardless. A file rewritten to the same length inside one timestamp tick looks untouched to a stat, and on a filesystem with coarse timestamps that is not far-fetched — so the one sync that must never miss anything does not rely on timestamps at all.
+
+**A local file is edited where it lies.** `edit ./notes.txt` opens your own file, and nothing is ever downloaded over it — the CERNBox side is read into memory to compare, never to install. That comparison is what decides whether a name already in use is a problem: the same content means this is the file's own earlier upload, so editing the same file twice needs no flag, while *different* content under that name is refused until `--force`, the way `put` refuses to overwrite a destination. A warning would be too late, since closing the editor is enough to trigger the upload.
+
+**Every upload is conditional.** The `ETag` the working copy came from is sent as `If-Match`, and refreshed after each save so the next one is conditional on the version just written. A file changed by somebody else meanwhile is therefore a refusal rather than a silent overwrite. When that happens the working copy stays on disk and its path is printed, because it is the only place that edit exists; deleting it would be the worst thing this command could do. `--force` drops the precondition.
+
+Two smaller decisions. The folder for a bare name is created on the first save, not when the editor opens, so quitting without saving leaves nothing behind. And the editor command is split on spaces and executed directly rather than handed to a shell, so `code -w` works while the file name never reaches an interpreter.
+
 ## Unix conventions
 
 The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.
