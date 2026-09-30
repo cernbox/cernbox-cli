@@ -272,6 +272,7 @@ make test-integration # run the tests that need it
 
 ## More
 
+- [docs/configuration.md](docs/configuration.md) — the configuration file: where it goes, every setting, and the environment variables
 - [docs/behaviour.md](docs/behaviour.md) — what the client does when the server is awkward, and what each kind of transfer actually costs
 - [docs/design.md](docs/design.md) — the architecture and the decisions behind it
 

@@ -120,6 +120,7 @@ func (a *App) outboxJobs(args []string, flags outboxFlags) ([]outboxJob, error) 
 		if err != nil {
 			return nil, err
 		}
+		job.configured = true
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -409,6 +410,10 @@ func newOutboxStatusCmd(app *App) *cobra.Command {
 			for _, job := range jobs {
 				scan, err := scanOutbox(job, flags.settle, time.Now())
 				if err != nil {
+					if job.configured && cberr.KindOf(err) == cberr.KindNotFound {
+						app.out.Warn("skipping %s: %v", job.local, errLine(err))
+						continue
+					}
 					return err
 				}
 				dirs += scan.dirs
@@ -458,6 +463,9 @@ type outboxJob struct {
 	layout string
 	after  string
 	link   bool
+	// configured marks a folder that came from the configuration file rather than
+	// from the command line, which changes what a missing folder means.
+	configured bool
 }
 
 func newOutboxJob(f OutboxFolder) (outboxJob, error) {
@@ -607,7 +615,11 @@ func (r outboxResult) report(out *output.Writer) {
 	case r.pending == 0 && r.skipped == 0:
 		out.Msg("Nothing to upload.")
 	}
-	if r.skipped > 0 {
+	switch r.skipped {
+	case 0:
+	case 1:
+		out.Msg("1 was already there.")
+	default:
 		out.Msg("%d were already there.", r.skipped)
 	}
 	if r.pending > 0 {
@@ -628,6 +640,15 @@ func (a *App) runOutbox(ctx context.Context, job outboxJob, settle time.Duration
 
 	scan, err := scanOutbox(job, settle, time.Now())
 	if err != nil {
+		// A configured folder that is not there is skipped rather than fatal. One
+		// stale entry, or a drive that is not mounted this morning, must not stop
+		// every other folder from being uploaded — least of all in a timer, where
+		// nobody is watching. A folder named on the command line is a different
+		// matter: that is a typo, and saying so is the useful answer.
+		if job.configured && cberr.KindOf(err) == cberr.KindNotFound {
+			a.out.Warn("skipping %s: %v", job.local, errLine(err))
+			return res, nil
+		}
 		return res, err
 	}
 	res.dirs = scan.dirs
