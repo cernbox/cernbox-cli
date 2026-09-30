@@ -112,7 +112,13 @@ func (a *App) summariseAccess(grants []accessGrant, space *client.Space) {
 	case len(grants) == 0:
 		a.out.Msg("Nothing grants access to this path on its own.")
 	default:
-		a.out.Msg("%s reach this path%s.", grantsPlural(people, groups, links),
+		// The verb has to agree with the count, or a single grant reads as
+		// "1 person reach this path".
+		reach := "reach"
+		if people+groups+links == 1 {
+			reach = "reaches"
+		}
+		a.out.Msg("%s %s this path%s.", grantsPlural(people, groups, links), reach,
 			inheritedNote(inherited))
 	}
 
@@ -133,36 +139,23 @@ func (a *App) summariseAccess(grants []accessGrant, space *client.Space) {
 	}
 }
 
-// describeSpaceAccess says what belonging to the space is worth.
+// describeSpaceAccess names the space's owner and the caller's own role.
 //
-// A project always grants access through three groups — readers, writers and
-// admins — which is the shape both project drivers are built on, so the shape is
-// stated even though the names cannot be. What is not obtainable is which groups
-// those are: the drivers read the three names to decide the *caller's* role and
-// then build the response from that decision alone, so the names never leave the
-// server. Saying the structure is far more use than the bare fact that somebody
-// else might have access.
-//
-// The caller's own role is worth naming for the same reason it is confusing: it
-// is derived, not assigned. Somebody in the writers group is an editor here and
-// nothing says so unless this does.
+// Only what the drive listing actually carries. The groups a project grants
+// access through are not obtainable — both drivers read them to decide the
+// caller's role and then build the response from that decision alone — and
+// saying so in the output turned out to be words rather than help.
 func (a *App) describeSpaceAccess(space *client.Space) {
 	// The header above already named the space and its type, so this says only
 	// what that does not.
 	switch {
 	case space.YourRole != "" && space.Owner != "":
-		a.out.Msg("Owned by %s. Your own role here is %s, which the server works out "+
-			"from your group membership.", space.Owner, space.YourRole)
+		a.out.Msg("Owned by %s. Your own role here is %s.", space.Owner, space.YourRole)
 	case space.YourRole != "":
-		a.out.Msg("Your own role here is %s, which the server works out from your "+
-			"group membership.", space.YourRole)
+		a.out.Msg("Your own role here is %s.", space.YourRole)
 	case space.Owner != "":
 		a.out.Msg("Owned by %s.", space.Owner)
 	}
-
-	a.out.Msg("A project also grants access through three groups — readers, writers " +
-		"and admins. Their names are not published by the server, so anyone in them " +
-		"reaches this without appearing above.")
 }
 
 // grantsReaching collects the permissions on the path and on every directory

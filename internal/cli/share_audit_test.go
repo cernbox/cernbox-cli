@@ -105,6 +105,34 @@ func TestShareAuditOrdersBroadestFirst(t *testing.T) {
 	}
 }
 
+// TestShareAuditAgreesWithItsOwnCount: one grant reaches, several reach.
+func TestShareAuditVerbAgreesWithTheCount(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/one.txt", "x")
+	box.sharesOn["/eos/user/e/einstein"] = ``
+	box.sharesOn["/eos/user/e/einstein/one.txt"] =
+		`{"id":"s1","roles":["b1e2218d-eef8-4d4c-b82d-0f1a1b48f3b5"],` +
+			`"grantedToV2":{"user":{"id":"marie"}}}`
+
+	_, stderr, err := run(t, box, "share", "audit", "/eos/user/e/einstein/one.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "1 person reaches this path") {
+		t.Errorf("a single grant should read as reaches:\n%s", stderr)
+	}
+
+	// And more than one still reads as reach.
+	_, stderr, err = run(t, auditBox(t), "share", "audit",
+		"/eos/user/e/einstein/Documents/2026/report.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "reach this path") || strings.Contains(stderr, "reaches this path") {
+		t.Errorf("several grants should read as reach:\n%s", stderr)
+	}
+}
+
 func TestShareAuditReportsNothingWhenNothingIsShared(t *testing.T) {
 	box := newTestBox(t)
 	box.putFile("/eos/user/e/einstein/private.txt", "x")
@@ -147,46 +175,6 @@ func TestShareAuditWarnsAboutNestedGrants(t *testing.T) {
 	}
 }
 
-// TestShareAuditSaysProjectMembersCanReachIt: membership of a project is access,
-// and no share reports it. Leaving it out would make an audit of a project path
-// read as far more private than it is.
-func TestShareAuditSaysProjectMembersCanReachIt(t *testing.T) {
-	box := newTestBox(t)
-	box.mkdir("/eos/project/c/cernbox/data")
-	box.putFile("/eos/project/c/cernbox/data/f.txt", "x")
-	box.sharesOn["/eos/project/c/cernbox"] = ``
-	box.sharesOn["/eos/project/c/cernbox/data"] = ``
-	box.sharesOn["/eos/project/c/cernbox/data/f.txt"] = ``
-
-	_, stderr, err := run(t, box, "share", "audit", "/eos/project/c/cernbox/data/f.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(stderr, "project/cernbox") {
-		t.Errorf("the space should be named:\n%s", stderr)
-	}
-	if !strings.Contains(stderr, "reaches this without appearing above") {
-		t.Errorf("project membership is access and has to be said:\n%s", stderr)
-	}
-	// The shape of a project's access is known even though the names are not,
-	// and naming the three tiers is most of what somebody wants.
-	for _, tier := range []string{"readers", "writers", "admins"} {
-		if !strings.Contains(stderr, tier) {
-			t.Errorf("the %s group is not mentioned:\n%s", tier, stderr)
-		}
-	}
-	// The owner and the caller's own role are in the drive response, so they are
-	// said rather than left to guesswork.
-	if !strings.Contains(stderr, "Owned by") {
-		t.Errorf("the owner is known and should be named:\n%s", stderr)
-	}
-	// And the part that is genuinely unavailable is declared as such, instead of
-	// an absence that reads like nobody else has access.
-	if !strings.Contains(stderr, "not published") {
-		t.Errorf("the unlistable group names should be declared, not silently omitted:\n%s", stderr)
-	}
-}
-
 // TestShareAuditNamesTheProjectOwnerAndYourRole: both come from the drive
 // listing, unlike the groups, which no driver puts in a response at all.
 func TestShareAuditNamesTheProjectOwnerAndYourRole(t *testing.T) {
@@ -204,11 +192,6 @@ func TestShareAuditNamesTheProjectOwnerAndYourRole(t *testing.T) {
 	if !strings.Contains(stderr, "Your own role here is editor") {
 		t.Errorf("the caller's own role is missing:\n%s", stderr)
 	}
-	// Where the role came from, because "why am I an editor?" is the first thing
-	// somebody asks when they expected to be an admin.
-	if !strings.Contains(stderr, "group membership") {
-		t.Errorf("the role should say it is derived from group membership:\n%s", stderr)
-	}
 }
 
 // TestShareAuditPersonalSpaceSaysNothingAboutMembership: a personal space has no
@@ -223,8 +206,8 @@ func TestShareAuditPersonalSpaceSaysNothingAboutMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(stderr, "not published") || strings.Contains(stderr, "Owned by") {
-		t.Errorf("a personal space needs no membership note:\n%s", stderr)
+	if strings.Contains(stderr, "Owned by") || strings.Contains(stderr, "your own role") {
+		t.Errorf("a personal space has no owner or role worth saying:\n%s", stderr)
 	}
 }
 
