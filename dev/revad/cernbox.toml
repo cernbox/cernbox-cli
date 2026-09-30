@@ -117,6 +117,18 @@ space_depth = 4
 [grpc.services.storageprovider.drivers.eos]
 namespace = "/"
 quota_node = "/eos/user"
+# The recycle bin accumulates across runs, and the driver refuses to list a day
+# holding more deletions than this — the whole listing, not the surplus. At the
+# 2000 default the suite eventually made a day unlistable, which broke every
+# trash test and, worse, left the sweep unable to clean up: purging needs keys,
+# and keys come from the listing it could no longer get. Raised so the bin stays
+# listable however many runs have gone before.
+#
+# The client's handling of a refusal is not weakened by this. Splitting a range
+# the storage will not take is still exercised by asking for 60 days, which
+# exceeds max_days_in_recycle_list, and reporting a day it cannot list at all is
+# covered by the unit tests.
+max_recycle_entries = 200000
 user_layout = "{{substr 0 1 .Username}}/{{.Username}}"
 use_grpc = true
 gatewaysvc = "localhost:19000"
