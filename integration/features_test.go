@@ -95,17 +95,27 @@ func TestTrashPurge(t *testing.T) {
 	}
 	e.runJSON(&items, "trash", "list")
 
+	// The keys purged, rather than the name: one write can leave more than one
+	// entry for a path, because this storage keeps no version history and an
+	// overwrite sends the content it replaced to the bin. Asserting that no
+	// entry called gone.txt survives would be asserting something about entries
+	// this test never touched.
 	mine := path.Base(e.remote)
+	purged := map[string]bool{}
 	for _, it := range items {
 		if it.Name == "gone.txt" && strings.Contains(it.OriginalPath, mine) {
 			e.mustRun("trash", "purge", it.Key)
+			purged[it.Key] = true
 		}
+	}
+	if len(purged) == 0 {
+		t.Fatalf("this run's deleted file is not in the bin (looking for %s)", mine)
 	}
 
 	e.runJSON(&items, "trash", "list")
 	for _, it := range items {
-		if it.Name == "gone.txt" {
-			t.Error("the purged item is still in the trash bin")
+		if purged[it.Key] {
+			t.Errorf("purged key %s is still in the trash bin", it.Key)
 		}
 	}
 }
@@ -164,11 +174,16 @@ func TestEditRoundTrip(t *testing.T) {
 	target := e.remotePath("edited.txt")
 	e.mustRun("put", e.writeLocal("edited.txt", []byte("from the server\n")), target)
 
-	// An editor that appends, waits long enough for a save to be noticed, then
-	// appends again — so the first version has to reach the server mid-session.
+	// The editor appends, then asks the server what it holds — while still
+	// running. That answer is the proof that a save arrives before the editor
+	// exits, and unlike counting versions it does not depend on the storage
+	// keeping any: this one keeps none, so an overwrite leaves its predecessor in
+	// the trash rather than in a version history.
+	midSession := e.localPath("mid-session.txt")
 	editor := e.writeLocal("editor.sh", []byte("#!/bin/sh\n"+
 		"printf 'first edit\\n' >> \"$1\"\n"+
 		"sleep 3\n"+
+		binary+" --endpoint "+endpoint+" --method basic cat "+target+" > "+midSession+" 2>/dev/null\n"+
 		"printf 'second edit\\n' >> \"$1\"\n"))
 	if err := os.Chmod(editor, 0o700); err != nil {
 		t.Fatal(err)
@@ -182,15 +197,12 @@ func TestEditRoundTrip(t *testing.T) {
 		t.Errorf("content = %q, want %q", got, want)
 	}
 
-	// And the file has a version history, which is what proves the mid-session
-	// save was a separate write rather than one upload at the end.
-	var versions []struct {
-		Key string `json:"key"`
+	seen, err := os.ReadFile(midSession)
+	if err != nil {
+		t.Fatalf("the editor could not read the server back: %v", err)
 	}
-	e.runJSON(&versions, "versions", "list", target)
-	if len(versions) < 2 {
-		t.Errorf("%d versions: the save made while the editor was open did not reach the server separately",
-			len(versions))
+	if string(seen) != "from the server\nfirst edit\n" {
+		t.Errorf("mid-session the server had %q, want the first edit already saved", seen)
 	}
 }
 

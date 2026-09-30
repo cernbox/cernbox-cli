@@ -320,7 +320,10 @@ func (e *env) runInPty(keys string, args ...string) string {
 	}
 
 	c := exec.Command("script", "-qec", strings.Join(quoted, " "), "/dev/null")
-	c.Env = base.Env
+	// script(1) gives a pty but leaves TERM alone, and a terminal the CLI cannot
+	// draw on is one it refuses — correctly, which is why this has to be set here
+	// rather than worked around in the command.
+	c.Env = append(base.Env, "TERM=xterm")
 	c.Stdin = strings.NewReader(keys)
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
