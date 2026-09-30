@@ -254,10 +254,13 @@ cernbox trash list                    # what you deleted in the last two days
 cernbox trash list --since 30d        # further back
 cernbox trash restore KEY
 cernbox versions list report.pdf      # earlier versions of a file
+cernbox versions diff report.md       # what changed since the last save
 cernbox versions restore report.pdf VERSION
 ```
 
 `cernbox trash browse` is usually the one you want. Deleted files remember where they lived, so it shows the bin as the folders it came from: walk into them, pick what you want with SPACE, and press `r` to bring it back. Nothing moves until you confirm, and you never have to copy a key. `cernbox trash restore` with nothing after it opens the same thing.
+
+`versions diff` shows a unified diff: with no version, the most recent one against the file as it is; with one, that version against now; with two, one against the other. `-U` sets how much surrounding context to show, and a file that is not text is refused rather than printed as noise.
 
 A trash listing covers a stretch of time rather than the whole bin, because that is what the server answers, and two days is as far back as it goes unless asked. `--since 30d`, or `--from` and `--to` for a particular period, look further; the listing always says which period it searched, so "nothing there" is never mistaken for "nothing there at all".
 

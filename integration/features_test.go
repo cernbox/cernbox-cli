@@ -588,6 +588,38 @@ func TestVersionsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestVersionsDiff skips where the storage keeps no history, as TestVersionsRoundTrip
+// does. Note that reading a version's *content* is broken in the dev environment
+// for reasons that have nothing to do with this command: revad rejects its own
+// data server's certificate on that path, so "versions download" fails with a 500
+// there too. This test will start covering the diff the moment that is fixed.
+func TestVersionsDiff(t *testing.T) {
+	e := setup(t)
+	target := e.remotePath("diffable.txt")
+
+	e.mustRun("put", e.writeLocal("diffable.txt", []byte("alpha\nbeta\ngamma\n")), target)
+	e.mustRun("put", "--force", e.writeLocal("diffable.txt", []byte("alpha\nBETA\ngamma\n")), target)
+
+	var versions []struct {
+		Key string `json:"key"`
+	}
+	e.runJSON(&versions, "versions", "list", target)
+	if len(versions) == 0 {
+		t.Skip("this storage keeps no version history")
+	}
+
+	out := e.mustRun("versions", "diff", target)
+	for _, want := range []string{"@@ -", "-beta", "+BETA"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diff is missing %q:\n%s", want, out)
+		}
+	}
+	// An unchanged line is context, not a change.
+	if strings.Contains(out, "-alpha") || strings.Contains(out, "+alpha") {
+		t.Errorf("an unchanged line was marked as changed:\n%s", out)
+	}
+}
+
 func TestVersionsListRejectsDirectory(t *testing.T) {
 	e := setup(t)
 	_, _, code := e.run("versions", "list", e.remote)

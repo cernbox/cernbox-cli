@@ -470,6 +470,7 @@ func (a *App) argCompletions() map[string]completeFunc {
 		"trash purge":   none,
 
 		"versions list":     byPosition(remote),
+		"versions diff":     byPosition(remote, a.completeVersion, a.completeVersion),
 		"versions restore":  byPosition(remote, a.completeVersion),
 		"versions download": byPosition(remote, a.completeVersion),
 

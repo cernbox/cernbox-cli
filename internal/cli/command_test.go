@@ -142,6 +142,10 @@ type trashEntry struct {
 type versionEntry struct {
 	key  string
 	body string
+	// modified is when this version was made. Zero means the fake reports no
+	// timestamp, which is what it used to do for every version — and made it
+	// impossible to test anything that picks a version by date.
+	modified time.Time
 }
 
 const (
@@ -788,11 +792,16 @@ func (b *testBox) serveVersions(w http.ResponseWriter, r *http.Request) {
 				`<d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>`+
 				`</d:propstat></d:response>`, testMetaPrefix, resourceID)}
 		for _, v := range b.versions[resourceID] {
+			modified := ""
+			if !v.modified.IsZero() {
+				modified = fmt.Sprintf("<d:getlastmodified>%s</d:getlastmodified>",
+					v.modified.UTC().Format(http.TimeFormat))
+			}
 			entries = append(entries, fmt.Sprintf(
 				`<d:response><d:href>%s/%s/v/%s</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop>`+
-					`<d:resourcetype></d:resourcetype><d:getcontentlength>%d</d:getcontentlength>`+
+					`<d:resourcetype></d:resourcetype><d:getcontentlength>%d</d:getcontentlength>%s`+
 					`<d:getetag>&quot;etag-%s&quot;</d:getetag></d:prop></d:propstat></d:response>`,
-				testMetaPrefix, resourceID, v.key, len(v.body), v.key))
+				testMetaPrefix, resourceID, v.key, len(v.body), modified, v.key))
 		}
 		w.WriteHeader(http.StatusMultiStatus)
 		fmt.Fprint(w, `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">`+

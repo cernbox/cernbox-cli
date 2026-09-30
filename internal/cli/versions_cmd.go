@@ -1,13 +1,18 @@
 package cli
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/output"
+	"github.com/cernbox/cernbox-cli/pkg/textdiff"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +24,8 @@ func newVersionsCmd(app *App) *cobra.Command {
 		Long: "Work with a file's earlier versions.\n\n" +
 			"Versions follow the file itself, so the history survives a rename.",
 	}
-	cmd.AddCommand(newVersionsListCmd(app), newVersionsRestoreCmd(app), newVersionsDownloadCmd(app))
+	cmd.AddCommand(newVersionsListCmd(app), newVersionsDiffCmd(app),
+		newVersionsRestoreCmd(app), newVersionsDownloadCmd(app))
 	return cmd
 }
 
@@ -147,4 +153,145 @@ func newVersionsDownloadCmd(app *App) *cobra.Command {
 
 	cmd.Flags().StringVarP(&out, "output-file", "F", "", "write to this local path")
 	return cmd
+}
+
+// maxDiffSize is the largest version this will read. Diffing means holding both
+// sides in memory as lines, and something this big is not a text file anybody is
+// reading a diff of.
+const maxDiffSize = 16 << 20
+
+func newVersionsDiffCmd(app *App) *cobra.Command {
+	var context int
+	var plain bool
+
+	cmd := &cobra.Command{
+		Use:   "diff PATH [VERSION] [VERSION]",
+		Short: "Show what changed between versions of a file",
+		Long: "Show what changed, as a unified diff.\n\n" +
+			"With one version, that version against the file as it is now. With two,\n" +
+			"one against the other. With none, the most recent version against now —\n" +
+			"which answers 'what did I just change'.",
+		Example: "  cernbox versions diff report.md\n" +
+			"  cernbox versions diff report.md 1790771950.00001662\n" +
+			"  cernbox versions diff report.md OLDER NEWER",
+		Args: cobra.RangeArgs(1, 3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := app.ctx(cmd)
+			defer cancel()
+
+			info, err := app.statResolved(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			if info.IsDir {
+				return cberr.Usagef("%s is a directory: only files have versions", info.Path)
+			}
+
+			left, right, err := app.diffSides(ctx, info, args[1:])
+			if err != nil {
+				return err
+			}
+
+			out := textdiff.Unified(left.text, right.text, textdiff.Options{
+				Context:  context,
+				OldLabel: left.label,
+				NewLabel: right.label,
+				Colour:   !plain && app.out.UsesColor(),
+			})
+			if out == "" {
+				app.out.Msg("%s and %s are identical.", left.label, right.label)
+				return nil
+			}
+			// Written straight out: a diff is the command's data, already laid out
+			// in lines, so it goes to stdout as it is and pipes cleanly.
+			_, err = fmt.Fprint(app.stdout, out)
+			return err
+		},
+	}
+
+	cmd.Flags().IntVarP(&context, "context", "U", 3, "unchanged lines to show around each change")
+	cmd.Flags().BoolVar(&plain, "plain", false, "never colour the output")
+	return cmd
+}
+
+// diffSide is one thing being compared.
+type diffSide struct {
+	label string
+	text  string
+}
+
+// diffSides works out what to compare and fetches both.
+//
+// The default is the newest version against the file as it is, because that is
+// the question somebody asking for a diff almost always has.
+func (a *App) diffSides(ctx context.Context, info *client.ResourceInfo, keys []string) (diffSide, diffSide, error) {
+	var none diffSide
+
+	switch len(keys) {
+	case 0:
+		versions, err := a.client.ListVersions(ctx, info.ID)
+		if err != nil {
+			return none, none, err
+		}
+		if len(versions) == 0 {
+			return none, none, cberr.Usagef("%s has no earlier versions to compare with", info.Path)
+		}
+		// The first is the most recent: ListVersions sorts newest first.
+		left, err := a.readVersion(ctx, info, versions[0].Key)
+		if err != nil {
+			return none, none, err
+		}
+		right, err := a.readCurrent(ctx, info)
+		return left, right, err
+
+	case 1:
+		left, err := a.readVersion(ctx, info, keys[0])
+		if err != nil {
+			return none, none, err
+		}
+		right, err := a.readCurrent(ctx, info)
+		return left, right, err
+
+	default:
+		left, err := a.readVersion(ctx, info, keys[0])
+		if err != nil {
+			return none, none, err
+		}
+		right, err := a.readVersion(ctx, info, keys[1])
+		return left, right, err
+	}
+}
+
+func (a *App) readCurrent(ctx context.Context, info *client.ResourceInfo) (diffSide, error) {
+	body, _, err := a.client.Download(ctx, info.Path, 0)
+	if err != nil {
+		return diffSide{}, err
+	}
+	return readDiffSide(body, path.Base(info.Path)+" (now)")
+}
+
+func (a *App) readVersion(ctx context.Context, info *client.ResourceInfo, key string) (diffSide, error) {
+	body, _, err := a.client.DownloadVersion(ctx, info.ID, key)
+	if err != nil {
+		return diffSide{}, err
+	}
+	return readDiffSide(body, path.Base(info.Path)+" ("+key+")")
+}
+
+// readDiffSide reads one side, refusing what a line diff would only mangle.
+func readDiffSide(body io.ReadCloser, label string) (diffSide, error) {
+	defer body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(body, maxDiffSize+1))
+	if err != nil {
+		return diffSide{}, err
+	}
+	if len(data) > maxDiffSize {
+		return diffSide{}, cberr.Usagef("%s is too big to diff; use 'versions download'", label)
+	}
+	if textdiff.IsBinary(data) {
+		return diffSide{}, cberr.Usagef("%s is not text, so there is nothing to read in a diff; "+
+			"use 'versions download' to compare it another way", label)
+	}
+	return diffSide{label: label, text: string(data)}, nil
 }

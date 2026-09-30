@@ -99,6 +99,10 @@ func (w *Writer) Format() Format { return w.format }
 // IsQuiet reports whether informational output is suppressed.
 func (w *Writer) IsQuiet() bool { return w.quiet }
 
+// UsesColor reports whether ANSI styling is on, for callers that render their own
+// coloured output rather than going through a table.
+func (w *Writer) UsesColor() bool { return w.color }
+
 // Render writes a complete table in the writer's format.
 func (w *Writer) Render(t Table) error {
 	switch w.format {

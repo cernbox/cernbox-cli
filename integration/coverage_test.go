@@ -78,6 +78,7 @@ var coveredCommands = map[string]string{
 	"trash restore":     "TestTrashRoundTrip",
 	"trash purge":       "TestTrashPurge",
 	"versions list":     "TestVersionsRoundTrip, TestVersionsListRejectsDirectory",
+	"versions diff":     "TestVersionsDiff (skips where the storage keeps no versions)",
 	"versions restore":  "TestVersionsRoundTrip",
 	"versions download": "TestVersionsRoundTrip",
 

@@ -280,6 +280,18 @@ Rows come broadest first, so they read as an explanation rather than a dump. Thr
 
 A directory it cannot read is a warning rather than a failure: the audit is still true about the levels it did see, which beats refusing to answer. The cost is two requests per level — a stat for the resource id, then its permissions — so a deep path costs more than a shallow one.
 
+## Diffing versions
+
+`versions diff` produces a unified diff, in the format `diff -u` produces — checked against it rather than assumed, on the same input, byte for byte.
+
+The diff is computed here rather than by shelling out to `diff(1)`, which is not guaranteed to be installed and whose output varies between implementations. The algorithm is Myers' 1986 greedy method, O(ND) in the size of the difference, with the common prefix and suffix stripped first. That ordering matters for the shape of the problem: two versions of a file differ in a few places however long the file is, so almost all of it never reaches the algorithm.
+
+Two refusals rather than useless output. A file with a NUL byte in its first few kilobytes is treated as binary — the same test `diff` and `git` use — because a line diff of a PNG is noise. And anything over 16 MB is refused toward `versions download`, since diffing means holding both sides in memory as lines.
+
+With no version named, the comparison is the most recent one against the file as it is, which is the question people have. That relies on `ListVersions` sorting newest first, which it does; a test pins it by having the server return them oldest first, because picking the wrong version would produce a perfectly plausible diff of the wrong pair.
+
+**Reading a version's content is broken in the dev environment**, for reasons unconnected to this command: revad rejects its own data server's certificate on that path, so `versions download` answers 500 there too. It went unnoticed because `TestVersionsRoundTrip` skips when the storage keeps no history, and the dev EOS enables versioning nowhere by default.
+
 ## Unix conventions
 
 The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.
