@@ -409,61 +409,257 @@ func newStatCmd(app *App) *cobra.Command {
 }
 
 func newFindCmd(app *App) *cobra.Command {
-	var pattern string
-	var limit int
+	var opts findOptions
 
 	cmd := &cobra.Command{
 		Use:   "find PATH",
-		Short: "Search for files by name",
+		Short: "Search for files by name, size, age or kind",
 		Long: "Search a directory and everything under it.\n\n" +
-			"Pass --name with the text to look for. The server searches when it can,\n" +
-			"otherwise the CLI walks the tree, which is slower but always works.",
-		Example: "  cernbox find /eos/user/g/gdelmont --name report",
-		Args:    cobra.ExactArgs(1),
+			"--name matches the file name: as a glob when it contains * or ?, and as text\n" +
+			"appearing anywhere in the name otherwise. --size, --newer, --older and --type\n" +
+			"narrow it further, and any of them can be used on its own.\n\n" +
+			"The server searches by name when it can. The other tests it cannot apply, so\n" +
+			"asking for one means walking the tree — slower, but the only way to get an\n" +
+			"answer that is not quietly incomplete.",
+		Example: "  cernbox find . --name report\n" +
+			"  cernbox find . --name '*.root' --size +1G\n" +
+			"  cernbox find data --newer 7d --type f\n" +
+			"  cernbox find . --size +100M --print0 | xargs -0 -n1 echo",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
 
-			if pattern == "" {
-				return cberr.Usagef("pass --name with the text to search for")
+			filter, err := opts.filter()
+			if err != nil {
+				return err
 			}
+			if opts.print0 && app.out.Format() != output.FormatTable {
+				return cberr.Usagef("--print0 writes bare paths, so it cannot be combined with --output %s",
+					app.out.Format())
+			}
+
 			p, err := app.resolve(ctx, args[0])
 			if err != nil {
 				return err
 			}
-			results, err := app.client.Search(ctx, p, client.SearchOptions{Pattern: pattern, Limit: limit})
+
+			var results []client.ResourceInfo
+			if filter.nameOnly() {
+				results, err = app.client.Search(ctx, p,
+					client.SearchOptions{Pattern: opts.name, Limit: opts.limit})
+			} else {
+				// The server can only match a name. Letting it apply its limit and
+				// then filtering here would drop results it never returned, and
+				// report a short answer as though it were the whole one.
+				err = client.ErrSearchUnsupported
+			}
 			if errors.Is(err, client.ErrSearchUnsupported) {
-				app.out.Msg("The server cannot search. Looking through the files instead...")
-				results, err = app.walkSearch(ctx, p, pattern, limit)
+				if filter.nameOnly() {
+					app.out.Msg("The server cannot search. Looking through the files instead...")
+				}
+				results, err = app.walkSearch(ctx, p, filter, opts.limit)
 			}
 			if err != nil {
 				return err
+			}
+
+			if opts.print0 {
+				// NUL separated and nothing else, so that xargs -0 can take it and
+				// a name with a newline in it cannot break the stream.
+				for _, r := range results {
+					fmt.Fprintf(app.stdout, "%s\x00", r.Path)
+				}
+				return nil
 			}
 
 			table := output.Table{Headers: []string{"TYPE", "SIZE", "PATH"}, Items: results}
 			for _, r := range results {
 				table.Rows = append(table.Rows, []string{entryType(r), output.HumanSize(r.Size), r.Path})
 			}
-			return app.out.Render(table)
+			if err := app.out.Render(table); err != nil {
+				return err
+			}
+			if opts.limit > 0 && len(results) >= opts.limit {
+				// Stating the fact rather than claiming there is more: the search
+				// stopped here, and whether anything was left is not known.
+				app.out.Msg("Stopped at %d results, which is the --limit.", opts.limit)
+			}
+			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&pattern, "name", "", "text to match against file names")
-	cmd.Flags().IntVar(&limit, "limit", 200, "maximum number of results")
+	f := cmd.Flags()
+	f.StringVar(&opts.name, "name", "", "name to match: a glob with * or ?, otherwise text anywhere in the name")
+	f.StringVar(&opts.size, "size", "", "size to match: +1G larger, -10M smaller, 1G exactly")
+	f.StringVar(&opts.newer, "newer", "", "changed within this span, e.g. 7d, or since a date")
+	f.StringVar(&opts.older, "older", "", "not changed for this long, e.g. 30d, or before a date")
+	f.StringVar(&opts.kind, "type", "", "only files (f) or only directories (d)")
+	f.BoolVar(&opts.print0, "print0", false, "write bare paths separated by NUL, for xargs -0")
+	f.IntVar(&opts.limit, "limit", 200, "maximum number of results")
 	return cmd
+}
+
+// findOptions are the search flags as typed.
+type findOptions struct {
+	name   string
+	size   string
+	newer  string
+	older  string
+	kind   string
+	print0 bool
+	limit  int
+}
+
+// findFilter is the same thing once parsed, so that a bad flag fails before any
+// request rather than part way through a walk.
+type findFilter struct {
+	name string
+	glob bool
+
+	// sizeOp is '+' for larger, '-' for smaller, '=' for exactly, 0 for any.
+	sizeOp byte
+	size   int64
+
+	newerThan time.Time
+	olderThan time.Time
+
+	dirsOnly  bool
+	filesOnly bool
+}
+
+func (o findOptions) filter() (findFilter, error) {
+	var f findFilter
+
+	f.name = strings.ToLower(o.name)
+	f.glob = strings.ContainsAny(o.name, "*?[")
+	if f.glob {
+		// Checked now: an unmatchable pattern should be a usage error, not an
+		// empty result that looks like an answer.
+		if _, err := path.Match(f.name, "probe"); err != nil {
+			return f, cberr.Usagef("invalid --name pattern %q: %v", o.name, err)
+		}
+	}
+
+	if o.size != "" {
+		op, rest := byte('='), o.size
+		if o.size[0] == '+' || o.size[0] == '-' {
+			op, rest = o.size[0], o.size[1:]
+		}
+		n, err := ParseSize(rest)
+		if err != nil || n < 0 {
+			return f, cberr.Usagef("invalid --size %q: want something like +1G, -10M or 4096", o.size)
+		}
+		f.sizeOp, f.size = op, n
+	}
+
+	var err error
+	if o.newer != "" {
+		if f.newerThan, err = parseWhen(o.newer); err != nil {
+			return f, cberr.Usagef("invalid --newer %q: want a span like 7d or a date like 2026-09-01", o.newer)
+		}
+	}
+	if o.older != "" {
+		if f.olderThan, err = parseWhen(o.older); err != nil {
+			return f, cberr.Usagef("invalid --older %q: want a span like 30d or a date like 2026-09-01", o.older)
+		}
+	}
+
+	switch strings.ToLower(o.kind) {
+	case "":
+	case "f", "file":
+		f.filesOnly = true
+	case "d", "dir", "directory":
+		f.dirsOnly = true
+	default:
+		return f, cberr.Usagef("invalid --type %q: want f for files or d for directories", o.kind)
+	}
+
+	if f.empty() {
+		return f, cberr.Usagef("pass something to search for: --name, --size, --newer, --older or --type")
+	}
+	return f, nil
+}
+
+// parseWhen reads either a span back from now or an absolute date.
+func parseWhen(s string) (time.Time, error) {
+	if t, err := time.Parse(expiryLayout, s); err == nil {
+		return t, nil
+	}
+	d, err := parseLookback(s)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Now().Add(-d), nil
+}
+
+func (f findFilter) empty() bool {
+	return f.name == "" && f.sizeOp == 0 &&
+		f.newerThan.IsZero() && f.olderThan.IsZero() && !f.dirsOnly && !f.filesOnly
+}
+
+// nameOnly reports whether the server could answer this on its own.
+func (f findFilter) nameOnly() bool {
+	return f.name != "" && !f.glob && f.sizeOp == 0 &&
+		f.newerThan.IsZero() && f.olderThan.IsZero() && !f.dirsOnly && !f.filesOnly
+}
+
+// matches reports whether one entry satisfies every test that was asked for.
+func (f findFilter) matches(info client.ResourceInfo) bool {
+	if f.dirsOnly && !info.IsDir {
+		return false
+	}
+	if f.filesOnly && info.IsDir {
+		return false
+	}
+
+	if f.name != "" {
+		name := strings.ToLower(info.Name)
+		if f.glob {
+			if ok, _ := path.Match(f.name, name); !ok {
+				return false
+			}
+		} else if !strings.Contains(name, f.name) {
+			return false
+		}
+	}
+
+	switch f.sizeOp {
+	case '+':
+		if info.Size <= f.size {
+			return false
+		}
+	case '-':
+		if info.Size >= f.size {
+			return false
+		}
+	case '=':
+		if info.Size != f.size {
+			return false
+		}
+	}
+
+	// A zero modification time means the server did not report one, which is not
+	// the same as 1970: an entry with no time cannot satisfy a test about time.
+	if !f.newerThan.IsZero() && (info.Modified.IsZero() || info.Modified.Before(f.newerThan)) {
+		return false
+	}
+	if !f.olderThan.IsZero() && (info.Modified.IsZero() || info.Modified.After(f.olderThan)) {
+		return false
+	}
+	return true
 }
 
 // walkSearch matches names by walking the tree, for servers whose search
 // endpoint is not implemented.
-func (a *App) walkSearch(ctx context.Context, root, pattern string, limit int) ([]client.ResourceInfo, error) {
-	needle := strings.ToLower(pattern)
+func (a *App) walkSearch(ctx context.Context, root string, filter findFilter, limit int) ([]client.ResourceInfo, error) {
 	var results []client.ResourceInfo
 
 	err := a.client.Walk(ctx, root, func(info client.ResourceInfo) error {
 		if info.Path == root {
 			return nil
 		}
-		if strings.Contains(strings.ToLower(info.Name), needle) {
+		if filter.matches(info) {
 			results = append(results, info)
 		}
 		if limit > 0 && len(results) >= limit {

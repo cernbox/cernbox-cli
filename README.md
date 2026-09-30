@@ -66,6 +66,7 @@ cernbox ls -l /eos/user/g/gdelmont     # long listing
 cernbox ls -lt                          # newest first
 cernbox stat report.pdf                 # everything about one file
 cernbox find . --name report            # search by name
+cernbox find . --name '*.root' --size +1G   # and by size, age or kind
 cernbox du -h -d 2 data                 # what is taking up space
 cernbox du -h --top 20                  # the 20 biggest things you have
 cernbox du -h --versions                # how much of that is old versions
@@ -73,6 +74,8 @@ cernbox cat notes.txt
 ```
 
 If a quota looks bigger than the files you can see, it usually is: earlier versions of a file are charged to you but appear in no listing. `du --versions` splits each size into the part listings account for and the part they do not, which is almost always that history. [docs/behaviour.md](docs/behaviour.md) explains how it is measured.
+
+`find` takes more than a name. `--name` matches a glob when it contains `*` or `?` and plain text anywhere in the name otherwise; `--size +1G` and `-10M` mean larger and smaller; `--newer 7d` and `--older 30d` take a span or a date; `--type f` and `--type d` narrow to files or directories. `--print0` writes bare paths for `xargs -0`.
 
 `mkdir`, `touch`, `rm` and `mv` work as you would expect. They follow the flags you already type — `-p`, `-r`, `-f` — and are a little more careful than the local versions: `mv` and `cp` will not overwrite without `-f`, and `touch` will not empty a file that already exists.
 

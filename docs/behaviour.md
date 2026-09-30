@@ -14,7 +14,7 @@ Running the CLI against a real reva turned up several endpoints that exist but d
 | Gap | What the CLI does |
 | --- | --- |
 | `LOCK` returns a hardcoded token and records nothing; `UNLOCK` returns 501 | No `lock` command at all. One built on this would report success and lock nothing |
-| `search-files` REPORT is a stub returning 501 | `find` asks the server first, then falls back to walking the tree client-side |
+| `search-files` REPORT is a stub returning 501 | `find` asks the server first, then falls back to walking the tree client-side — and asks only when the search is a plain name, since that is all the server could apply |
 | OCS `remote_shares` is an empty handler that writes nothing | `ocm received` reads the graph `sharedWithMe` endpoint, filtering on the OCM id prefix |
 | App-token creation is not exposed publicly | `token create` explains where to create one; `list` and `revoke` work normally |
 | Reva's demo app provider advertises no mime types, so nothing can open anything | `open --web` works regardless; the application link needs a real provider such as Collabora |
@@ -226,6 +226,16 @@ The final check before exiting deliberately skips the cheap stat gate and hashes
 **Every upload is conditional.** The `ETag` the working copy came from is sent as `If-Match`, and refreshed after each save so the next one is conditional on the version just written. A file changed by somebody else meanwhile is therefore a refusal rather than a silent overwrite. When that happens the working copy stays on disk and its path is printed, because it is the only place that edit exists; deleting it would be the worst thing this command could do. `--force` drops the precondition.
 
 Two smaller decisions. The folder for a bare name is created on the first save, not when the editor opens, so quitting without saving leaves nothing behind. And the editor command is split on spaces and executed directly rather than handed to a shell, so `code -w` works while the file name never reaches an interpreter.
+
+## Searching
+
+`find` takes a name, a size, an age, a kind, or any combination, and they are an AND. `--name` is a glob when it contains `*` or `?` and a case-insensitive substring otherwise — so `--name report` keeps matching `final-report-2026.pdf` as it always did, while `--name '*.root'` matches the whole name and nothing else.
+
+Only one of these is something the server could ever do. reva's `search-files` REPORT is a stub answering 501, so in practice every search walks the tree; but the request is still worth making, because a deployment that implements it answers in one round trip instead of one per directory.
+
+What matters is **when** it is worth making. The server can only match a name, so a search carrying any other test is walked directly rather than sent and filtered afterwards. Filtering the server's answer would mean applying our tests to results it had already truncated at its own limit, and reporting what was left as though it were the whole answer. A short answer presented as a complete one is worse than a slow one.
+
+Two smaller decisions. An entry the server reports no modification time for matches neither `--newer` nor `--older`, because no time is not the same as 1970. And `--print0` writes paths separated by NUL and nothing else — no table, no headers, refused under `--output json` — so `xargs -0` can take it and a name containing a newline cannot break the stream.
 
 ## Who can reach a file
 

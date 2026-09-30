@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -260,6 +261,73 @@ func TestEditLocalFileMirrorsItToCERNBox(t *testing.T) {
 	e.mustRun("edit", "file:"+local, "--in", folder, "--editor", editor)
 	if remote := e.mustRun("cat", folder+"/mirrored.txt"); !strings.Contains(remote, "appended\nappended") {
 		t.Errorf("the second run did not upload: %q", remote)
+	}
+}
+
+// ── searching ────────────────────────────────────────────────────────────────
+
+// TestFindPredicates checks the tests against a real server, where the search
+// endpoint really does answer 501 and the walk really happens.
+func TestFindPredicates(t *testing.T) {
+	e := setup(t)
+	dir := e.remotePath("search")
+	e.mustRun("mkdir", "-p", dir+"/raw")
+	e.mustRun("put", e.writeLocal("run1.root", make([]byte, 300000)), dir+"/raw/run1.root")
+	e.mustRun("put", e.writeLocal("run2.root", []byte("tiny")), dir+"/raw/run2.root")
+	e.mustRun("put", e.writeLocal("notes.txt", []byte("text")), dir+"/notes.txt")
+
+	type hit struct {
+		Path  string `json:"path"`
+		Size  int64  `json:"size"`
+		IsDir bool   `json:"is_dir"`
+	}
+	names := func(hits []hit) string {
+		var out []string
+		for _, h := range hits {
+			out = append(out, path.Base(h.Path))
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+
+	var hits []hit
+	e.runJSON(&hits, "find", dir, "--name", "*.root")
+	if got := names(hits); got != "run1.root,run2.root" {
+		t.Errorf("--name '*.root' found %s", got)
+	}
+
+	e.runJSON(&hits, "find", dir, "--size", "+100K", "--type", "f")
+	if got := names(hits); got != "run1.root" {
+		t.Errorf("--size +100K --type f found %s", got)
+	}
+
+	e.runJSON(&hits, "find", dir, "--type", "d")
+	if got := names(hits); got != "raw" {
+		t.Errorf("--type d found %s", got)
+	}
+	for _, h := range hits {
+		if !h.IsDir {
+			t.Errorf("--type d returned a file: %+v", h)
+		}
+	}
+
+	// Everything was just written, so nothing is old and everything is new.
+	e.runJSON(&hits, "find", dir, "--older", "1d")
+	if len(hits) != 0 {
+		t.Errorf("--older 1d found %d entries in a directory made seconds ago", len(hits))
+	}
+	e.runJSON(&hits, "find", dir, "--newer", "1d", "--type", "f")
+	if got := names(hits); got != "notes.txt,run1.root,run2.root" {
+		t.Errorf("--newer 1d --type f found %s", got)
+	}
+
+	// And the form meant for a pipe is paths and NULs, nothing else.
+	out := e.mustRun("find", dir, "--name", "*.root", "--print0")
+	if strings.Contains(out, "TYPE") || strings.Contains(out, "\n") {
+		t.Errorf("--print0 wrote more than bare paths: %q", out)
+	}
+	if n := strings.Count(out, "\x00"); n != 2 {
+		t.Errorf("--print0 wrote %d NUL-separated paths, want 2: %q", n, out)
 	}
 }
 

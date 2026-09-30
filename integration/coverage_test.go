@@ -25,7 +25,7 @@ var coveredCommands = map[string]string{
 	// Browsing and metadata.
 	"stat": "TestMoveAndCat, TestStatOnMissingPathExitsFive",
 	"ls":   "TestLsLongAndRecursive, TestLsCSV",
-	"find": "TestFindFallsBackToWalking",
+	"find": "TestFindFallsBackToWalking, TestFindPredicates",
 	"du":   "TestDu",
 	"cat":  "TestMoveAndCat",
 

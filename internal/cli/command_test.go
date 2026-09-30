@@ -544,6 +544,13 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusCreated)
 
+	case "REPORT":
+		// reva's search-files handler is a stub that answers 501, and the client
+		// reads exactly that as "walk the tree instead". Falling through to 405
+		// here meant the fallback could never be reached in a test, so every
+		// search test was really testing the error path.
+		http.Error(w, "not implemented", http.StatusNotImplemented)
+
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
