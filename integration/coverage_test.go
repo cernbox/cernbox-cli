@@ -88,6 +88,11 @@ var coveredCommands = map[string]string{
 	"outbox watch":  "TestOutboxWatchUploadsOnArrival",
 	"outbox status": "TestOutboxPushAndDelete",
 
+	// The inbox.
+	"inbox pull":   "TestInboxCollectsAnArrival, TestInboxAfterMoveClearsTheFolder, TestInboxAfterDeleteVerifiesBeforeRemoving, TestInboxNeedsADestination",
+	"inbox status": "TestInboxStatusExplainsWhatItIsWaitingFor",
+	"inbox watch":  "TestInboxWatchCollectsOnATimer",
+
 	// Spaces.
 	"quota":      "TestQuotaForBothSpaceTypes",
 	"space list": "TestSpaceListIncludesHome, TestSpaceListFilteredByType",

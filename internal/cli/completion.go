@@ -466,6 +466,12 @@ func (a *App) argCompletions() map[string]completeFunc {
 		"outbox watch":  byPosition(local),
 		"outbox status": byPosition(local),
 
+		// An inbox is named by its CERNBox folder, so these complete remotely
+		// where the outbox ones complete locally.
+		"inbox pull":   byPosition(remote),
+		"inbox watch":  byPosition(remote),
+		"inbox status": byPosition(remote),
+
 		"trash list":    none,
 		"trash browse":  none,
 		"trash restore": none,
@@ -499,6 +505,8 @@ var flagCompletions = map[string]map[string][]string{
 	"archive":      {"format": {"tar", "zip"}},
 	"share create": {"role": {"viewer", "editor", "manager", "denied"}},
 	"share update": {"role": {"viewer", "editor", "manager", "denied"}},
+	"inbox pull":   {"layout": {"flat", "date"}, "after": {"keep", "move", "delete"}},
+	"inbox watch":  {"layout": {"flat", "date"}, "after": {"keep", "move", "delete"}},
 	"link create":  {"role": {"viewer", "editor", "upload"}},
 	"link update":  {"role": {"viewer", "editor", "upload"}},
 	"space list":   {"type": {"personal", "project"}},

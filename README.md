@@ -189,6 +189,28 @@ It is one way, always: nothing in CERNBox is changed except by adding to it, and
 
 [docs/configuration.md](docs/configuration.md) has the full reference, including where the configuration file lives.
 
+## A folder that collects itself
+
+The inbox is the outbox the other way round: a CERNBox folder whose arrivals come down to a local one. It pairs with an upload link — somebody drops a file in without an account and it turns up on your laptop — and with a project folder collaborators write into.
+
+```bash
+cernbox inbox pull                   # download what is waiting, then stop
+cernbox inbox watch                  # keep going as things appear
+cernbox inbox status                 # what is waiting, and what it is waiting on
+```
+
+```yaml
+inbox:
+  - remote: /eos/project/c/cernbox/incoming
+    local: ~/from-cernbox
+    layout: date
+    after: move
+```
+
+The keys mean what the outbox's mean, with `remote` and `local` the other way about: `layout` `flat` or `date`, and `after` `keep`, `move` to `.collected/` **in CERNBox**, or `delete`. Nothing local is ever written over — a name already taken by a different file gets a `(2)` — and `keep` is the default because it is the only choice that cannot lose anything.
+
+Two differences from the outbox worth knowing. `inbox watch` **asks on a timer**, because nothing on this surface will tell a client that a remote folder changed, so `--interval` is a direct cost: one listing per folder per pass. And whether a file has finished arriving is judged against **the server's clock**, since the server wrote the timestamp being compared; `cernbox doctor` is what tells you if the two clocks disagree.
+
 ## Copying and mirroring
 
 ```bash

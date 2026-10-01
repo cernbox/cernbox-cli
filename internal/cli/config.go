@@ -30,6 +30,10 @@ type Config struct {
 	// "cernbox outbox push" needs no arguments.
 	Outbox []OutboxFolder `yaml:"outbox"`
 
+	// Inbox lists CERNBox folders whose contents are downloaded locally, so that
+	// "cernbox inbox pull" needs no arguments.
+	Inbox []InboxFolder `yaml:"inbox"`
+
 	// Insecure disables transport security checks. Only for development
 	// instances; the CLI warns on every use.
 	Insecure bool `yaml:"insecure"`
@@ -103,6 +107,22 @@ type OutboxFolder struct {
 	After string `yaml:"after"`
 	// Link creates a public link for each upload and prints it.
 	Link bool `yaml:"link"`
+}
+
+// InboxFolder is one CERNBox folder whose arrivals are downloaded locally. It
+// is the outbox the other way round, and deliberately the same shape.
+type InboxFolder struct {
+	// Remote is the CERNBox folder to collect from.
+	Remote string `yaml:"remote"`
+	// Local is where its contents go. A leading ~ is expanded.
+	Local string `yaml:"local"`
+	// Layout is "flat", or "date" to file each arrival under YYYY/MM/DD taken
+	// from the file's own timestamp.
+	Layout string `yaml:"layout"`
+	// After is what happens to the CERNBox copy once it is safely down: "keep",
+	// "move" to a .collected folder, or "delete". Empty means keep, because that
+	// is the only choice that cannot lose anything.
+	After string `yaml:"after"`
 }
 
 // DefaultConfig returns the built-in defaults, which target production

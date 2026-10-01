@@ -71,6 +71,13 @@ outbox:
     link: true
   - local: ~/scratch
     remote: Scratch
+
+# CERNBox folders whose contents are downloaded. See below.
+inbox:
+  - remote: /eos/project/c/cernbox/incoming
+    local: ~/from-cernbox
+    layout: date
+    after: move
 ```
 
 ## The outbox
@@ -88,6 +95,23 @@ This is the one section with no equivalent flag or variable for the whole list: 
 `after: keep` is the default because it is the only choice that cannot lose anything. `delete` is the one irreversible option, so it belongs in a file where you wrote it down deliberately rather than in a flag you might repeat from shell history.
 
 A configured folder that does not exist is a warning, not a failure — an unmounted drive or a folder you have not created yet must not stop the others from uploading, least of all from a timer where nobody is watching. A folder named on the command line is treated as a typo and fails.
+
+## The inbox
+
+The same shape as the outbox, with the two sides swapped, and the same rule about the list living only in a file.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `remote` | required | the CERNBox folder to collect from |
+| `local` | required | where its contents go; a leading `~` is expanded |
+| `layout` | `flat` | `date` files each arrival under `YYYY/MM/DD`, taken from the file's own timestamp |
+| `after` | `keep` | `keep`, `move` to `.collected/` in CERNBox, or `delete` once the download is verified |
+
+Two things behave differently from the outbox, and neither is cosmetic.
+
+`inbox watch` polls. The outbox is told when a local folder changes, by the filesystem; nothing here will tell a client that a remote folder did. So `--interval` (default one minute) is a direct cost of one listing per folder per pass, and for anything that has to survive sleep, a lost network and a reboot, `inbox pull` from a timer is the better shape.
+
+Whether a file has finished arriving is judged against the **server's** clock. A file still being uploaded keeps its modification time current, so one listing is enough to tell it from a finished one — but that compares a timestamp the server wrote against a now, and taking now from this machine would make the test wrong by however far the two clocks are apart. If the clock cannot be read the local one is used and a warning says so; `cernbox doctor` reports the drift.
 
 ## Environment variables
 

@@ -131,6 +131,13 @@ type testBox struct {
 	// than five minutes out of step.
 	clockSkew time.Duration
 
+	// mtimes overrides the modification time reported for a path. The fake
+	// answers a fixed date for everything otherwise, which is fine until
+	// something compares that date against now: an inbox decides whether a file
+	// has finished arriving that way, and a file from January always looks
+	// finished.
+	mtimes map[string]time.Time
+
 	// trashOnDelete puts a deleted file in the recycle bin, with one entry per
 	// version as well as the file itself. That last part is measured rather than
 	// assumed: deleting a twice-written probe from EOS left two entries, so
@@ -181,6 +188,7 @@ func newTestBox(t *testing.T) *testBox {
 		versions:  map[string][]versionEntry{},
 		etags:     map[string]string{},
 		shortOnce: map[string]int{},
+		mtimes:    map[string]time.Time{},
 	}
 	b.ts = httptest.NewServer(http.HandlerFunc(b.route))
 	t.Cleanup(b.ts.Close)
@@ -718,7 +726,15 @@ func pathFromItemURL(u string) string {
 }
 
 func (b *testBox) davXML(p string, isDir bool, size int) string {
-	return davXMLWithETag(p, isDir, size, b.etagOf(p))
+	return davXMLWithModified(p, isDir, size, b.etagOf(p), b.modifiedOf(p))
+}
+
+// modifiedOf is what the box reports for a path's modification time.
+func (b *testBox) modifiedOf(p string) string {
+	if t, ok := b.mtimes[p]; ok {
+		return t.UTC().Format(http.TimeFormat)
+	}
+	return "Mon, 02 Jan 2026 15:04:05 GMT"
 }
 
 // binEntry adds one recycle-bin entry for a deleted path. Keys are made unique
@@ -740,7 +756,7 @@ func fakeResourceID(p string) string {
 	return "s1$ABC!" + strings.ReplaceAll(p, "/", "_")
 }
 
-func davXMLWithETag(p string, isDir bool, size int, etag string) string {
+func davXMLWithModified(p string, isDir bool, size int, etag, modified string) string {
 	href := testDavPrefix + p
 	rt := "<d:resourcetype></d:resourcetype>"
 	if isDir {
@@ -754,9 +770,9 @@ func davXMLWithETag(p string, isDir bool, size int, etag string) string {
 		`<d:getetag>&quot;%s&quot;</d:getetag>`+
 		`<oc:fileid>%s</oc:fileid>`+
 		`<oc:privatelink>https://cernbox.test/files/spaces/s1%s</oc:privatelink>`+
-		`<d:getlastmodified>Mon, 02 Jan 2026 15:04:05 GMT</d:getlastmodified>`+
+		`<d:getlastmodified>%s</d:getlastmodified>`+
 		`</d:prop></d:propstat></d:response>`,
-		href, path.Base(p), rt, size, size, etag, fakeResourceID(p), p)
+		href, path.Base(p), rt, size, size, etag, fakeResourceID(p), p, modified)
 }
 
 // serveTrash implements the trash-bin endpoints: a PROPFIND listing, MOVE to
