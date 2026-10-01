@@ -67,8 +67,21 @@ nfpms:
 checksum:
   name_template: "checksums.txt"
 
+# Snapshot builds are the nightlies, and their version cannot come from the tag.
+# The nightly job moves a tag literally named "nightly" onto the commit before
+# building, so .Version is "nightly" and incpatch cannot parse it — which failed
+# the Release job every night while every test job passed. The tag persists
+# between runs, so reordering the steps would not have helped.
+#
+# A commit identifies a nightly; there is no version to increment. Two
+# properties of what replaced it are deliberate: it is valid semver, because
+# nfpm parses it to build the package version and renders the prerelease as
+# 0.0.0~nightly.<commit>, where the tilde sorts before the release; and the
+# 0.0.0 keeps every nightly below every real release, so an update never
+# prefers one. incpatch did the opposite — it produced a version above the
+# newest tag.
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  version_template: "0.0.0-nightly.{{ .ShortCommit }}"
 
 changelog:
   sort: asc
