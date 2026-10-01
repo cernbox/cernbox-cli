@@ -348,16 +348,22 @@ func (a *App) checkUnattended() error {
 	if a.hasTerminal() {
 		return nil
 	}
-	if a.chain == nil {
+	if a.chain == nil || a.unattendedProvider(context.Background()) != "" {
 		return nil
 	}
-	// A provider that is available and needs nobody present. The device flow
-	// prints a URL and waits for somebody to visit it, so it is never one of these.
-	//
-	// Basic is the awkward case, and Available() cannot answer it: that method
-	// reports true when a password *could* be obtained, including by prompting for
-	// one. So it counts here only when the password is already in the environment,
-	// which is how a service would be given one.
+	return cberr.Usagef("watching needs a credential that works without a terminal: " +
+		"a Kerberos ticket, or an app token in CERNBOX_APP_TOKEN")
+}
+
+// unattendedProvider names a credential that is available and needs nobody
+// present, or returns "" when there is none.
+//
+// The device flow prints a URL and waits for somebody to visit it, so it is
+// never one of these. Basic is the awkward case, and Available() cannot answer
+// it: that method reports true when a password *could* be obtained, including
+// by prompting for one. So it counts here only when the password is already in
+// the environment, which is how a service would be given one.
+func (a *App) unattendedProvider(ctx context.Context) string {
 	unattended := map[string]bool{
 		auth.MethodKerberos: true,
 		auth.MethodAppToken: true,
@@ -365,12 +371,11 @@ func (a *App) checkUnattended() error {
 		auth.MethodBasic:    os.Getenv("CERNBOX_PASSWORD") != "",
 	}
 	for _, p := range a.chain.Providers() {
-		if unattended[p.Name()] && p.Available(context.Background()) {
-			return nil
+		if unattended[p.Name()] && p.Available(ctx) {
+			return p.Name()
 		}
 	}
-	return cberr.Usagef("watching needs a credential that works without a terminal: " +
-		"a Kerberos ticket, or an app token in CERNBOX_APP_TOKEN")
+	return ""
 }
 
 // ── status ───────────────────────────────────────────────────────────────────

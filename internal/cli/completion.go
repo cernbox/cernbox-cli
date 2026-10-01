@@ -406,6 +406,7 @@ func (a *App) argCompletions() map[string]completeFunc {
 		"logout": none,
 		"status": none,
 		"whoami": none,
+		"doctor": none,
 
 		"ls":   remote,
 		"stat": byPosition(remote),

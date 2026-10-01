@@ -176,6 +176,11 @@ type request struct {
 	// from a pipe or a non-seekable source cannot produce the bytes twice and
 	// sets this.
 	noRetry bool
+
+	// anyStatus accepts whatever the server answers. It is for a request made
+	// for its headers rather than its result, where a 401 or a 404 carries what
+	// the caller came for just as a 200 does.
+	anyStatus bool
 }
 
 // requestBody is a body together with its length.
@@ -310,6 +315,9 @@ func (c *Client) attempt(ctx context.Context, r request) (*http.Response, error)
 }
 
 func (c *Client) acceptable(r request, status int) bool {
+	if r.anyStatus {
+		return true
+	}
 	if len(r.expects) == 0 {
 		return status >= 200 && status < 300
 	}

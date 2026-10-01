@@ -163,6 +163,7 @@ func newRootCmd(app *App) *cobra.Command {
 		newLogoutCmd(app),
 		newStatusCmd(app),
 		newWhoamiCmd(app),
+		newDoctorCmd(app),
 
 		newLsCmd(app),
 		newStatCmd(app),
@@ -405,6 +406,10 @@ func noServerNeeded(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
 		case "version", "completion", "help":
+			return true
+		case "doctor":
+			// The doctor connects itself, so that a configuration it cannot load
+			// is one of the things it reports rather than the reason it never ran.
 			return true
 		}
 	}

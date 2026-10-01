@@ -259,19 +259,44 @@ func isBareEditName(arg string) bool {
 	return !strings.ContainsAny(arg, "/:")
 }
 
-// editorCommand works out what to run, in the order a user would expect: the
-// flag they just typed, then this CLI's own setting, then the two variables
-// every other tool reads, then vi — which is what git and crontab fall back to.
-func (a *App) editorCommand(opts editOptions) ([]string, error) {
-	candidates := []string{opts.editor, a.cfg.Edit.Command, os.Getenv("VISUAL"), os.Getenv("EDITOR"), "vi"}
+// editorCandidate is one place an editor command can come from, with the name
+// of that place for messages about it.
+type editorCandidate struct {
+	command string
+	source  string
+}
 
-	var chosen string
-	for _, c := range candidates {
-		if strings.TrimSpace(c) != "" {
-			chosen = strings.TrimSpace(c)
-			break
+// editorCandidates lists where an editor can come from, in the order they win:
+// the flag they just typed, then this CLI's own setting, then the two variables
+// every other tool reads, then vi — which is what git and crontab fall back to.
+//
+// It is a list rather than a chain of ifs so that "cernbox doctor" can report
+// which setting is in force without keeping its own copy of the order, which
+// would be a copy that silently stops matching.
+func (a *App) editorCandidates(flagValue string) []editorCandidate {
+	return []editorCandidate{
+		{flagValue, "--editor"},
+		{a.cfg.Edit.Command, "edit.command or CERNBOX_EDITOR"},
+		{os.Getenv("VISUAL"), "VISUAL"},
+		{os.Getenv("EDITOR"), "EDITOR"},
+		{"vi", "the built-in fallback"},
+	}
+}
+
+// editorSetting returns the editor that would be run and where the setting came
+// from. There is always an answer, because the last candidate is a fallback.
+func (a *App) editorSetting(flagValue string) (command, source string) {
+	for _, c := range a.editorCandidates(flagValue) {
+		if strings.TrimSpace(c.command) != "" {
+			return strings.TrimSpace(c.command), c.source
 		}
 	}
+	return "", ""
+}
+
+// editorCommand works out what to run and how to invoke it.
+func (a *App) editorCommand(opts editOptions) ([]string, error) {
+	chosen, _ := a.editorSetting(opts.editor)
 
 	// Split rather than handed to a shell: the file name never reaches an
 	// interpreter this way, and "code -w" or "emacs -nw" still work. An editor

@@ -292,6 +292,26 @@ With no version named, the comparison is the most recent one against the file as
 
 **Reading a version's content is broken in the dev environment**, for reasons unconnected to this command: revad rejects its own data server's certificate on that path, so `versions download` answers 500 there too. It went unnoticed because `TestVersionsRoundTrip` skips when the storage keeps no history, and the dev EOS enables versioning nowhere by default.
 
+## Checking a deployment
+
+`doctor` exists because a failure in CERNBox usually arrives as a status code with nothing attached to it. Every check in it is one that cost real time to work out by hand: a storage that had stopped accepting writes and answered every upload with a bare 500; a `CERNBOX_CONFIG` pointing at a file that was not there, ignored in silence; a credential that worked in a terminal and not from a timer; a certificate that made the address and the network look broken when neither was. Each of those is one request to check, which is the whole argument for the command.
+
+A few decisions in it are worth stating, because the obvious alternative is worse in each case.
+
+**It tries things instead of reading settings.** The write probe is the clearest example and the one nothing else can stand in for: a storage can be reachable, the credential valid and the quota half empty, and writes still refused, because EOS stops accepting them when the disks behind it run short of headroom. A quota reading says everything is fine. A one-byte file says it is not.
+
+**Checks stop at the first failure they depend on.** Without that, an unreachable endpoint produces eleven failures that all say the same thing and the reader has to work out which one is the cause — which is the job the command is supposed to do for them.
+
+**Warnings never fail the exit code.** A check that is permanently yellow on a healthy account would make the exit code useless, and an exit code nobody can rely on is one everybody ignores. Only a problem exits non-zero, and the error names which checks it was.
+
+**It clears up after itself completely.** Deleting the probe is not enough: a deletion goes to the recycle bin, so a daily check would quietly add a year of entries to the one place users already complain about. It purges what it wrote — and every entry, not the first, because a file that has versions leaves one bin entry per version. That was measured rather than assumed: the probe, written twice, left two.
+
+**The clock check ignores a second of drift.** An HTTP `Date` carries whole seconds, so a perfectly set machine reads as up to a second out of step. Reporting it would be a warning that never goes away and never means anything. The thresholds above it are Kerberos's: a warning at a minute, a problem at five, which is where it starts refusing tickets and saying nothing about clocks.
+
+**It does not check versioning, and that is a decision rather than an omission.** The check is tempting and it works: write the probe twice, list its history, read a revision back, and you catch a deployment that offers a history it cannot serve — which the dev environment does, as [Diffing versions](#diffing-versions) records. What it cannot do is tell that apart from a space that is not meant to keep versions at all. Spaces are becoming heterogeneous, with capabilities per space rather than per server, so "no versions here" will be a correct answer for some of them while the only flag this command can see is the server-wide one. A check whose failure reading is wrong for a supported configuration is worse than no check.
+
+**Nothing it prints is a secret.** The output exists to be pasted into a support thread, so it names the provider, the expiry and the paths, and never a token, a password or the contents of a credential cache. A test asserts it.
+
 ## Unix conventions
 
 The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.

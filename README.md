@@ -36,6 +36,19 @@ cernbox logout
 
 For scripts and scheduled jobs, use an app token: create one in the CERNBox web interface and put it in `CERNBOX_APP_TOKEN`. `cernbox token list` and `cernbox token revoke` manage the ones you have.
 
+## When something does not work
+
+```bash
+cernbox status     # what is configured: server, user, credential, token cache
+cernbox doctor     # what actually works, and what to do about what does not
+```
+
+`doctor` tries things rather than reporting settings: the server answers, the two clocks agree, the credential is accepted and would still work from a scheduled job, a file can actually be written, the recycle bin can be listed, the configured folders and the editor are there. Every line that is not a pass names the next step, and the output is meant to be pasted into a support request: it names providers, expiry times and paths, and never a token or a password.
+
+Checks stop at the first failure they depend on, so a server nobody can reach is reported once rather than as ten mysterious failures. Only a problem makes it exit non-zero — a warning never does, so `cernbox doctor` works as a health check, and `--output json` gives you `.problems` to watch.
+
+It writes one small file in your home space and removes it again, which is the only thing it changes. `--skip-write` leaves that out.
+
 ## Paths
 
 Paths look like the ones you already use:

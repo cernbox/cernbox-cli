@@ -101,6 +101,9 @@ var coveredCommands = map[string]string{
 	"token revoke": "TestTokenRevokeUnknownIDIsIdempotent",
 	"token create": "TestTokenCreateExplainsWhereToGo",
 
+	// Diagnostics.
+	"doctor": "TestDoctorChecksThisDeployment, TestDoctorLeavesNothingBehind, TestDoctorSkipWriteChangesNothing, TestDoctorFailsOnAnEndpointThatIsNotThere",
+
 	// Miscellaneous.
 	"version": "TestVersionWorksWithoutCredentials",
 }

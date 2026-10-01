@@ -120,6 +120,22 @@ type testBox struct {
 	// trashMoveDelay slows a restore, so a test can watch what happens while one
 	// is in flight rather than only after it.
 	trashMoveDelay time.Duration
+
+	// failPut refuses every write. It stands in for a storage that has stopped
+	// accepting them — which EOS does when the disks behind it run short of
+	// headroom, answering with a 500 that says nothing about why.
+	failPut bool
+
+	// clockSkew shifts the Date header, which is the only clock a client can
+	// see. Credentials are the reason to care: Kerberos refuses a ticket more
+	// than five minutes out of step.
+	clockSkew time.Duration
+
+	// trashOnDelete puts a deleted file in the recycle bin, with one entry per
+	// version as well as the file itself. That last part is measured rather than
+	// assumed: deleting a twice-written probe from EOS left two entries, so
+	// anything that clears up after itself has to clear all of them.
+	trashOnDelete bool
 }
 
 // trashFakeLayout is the layout ocdav parses the trash range with. A value it
@@ -195,6 +211,12 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 			b.afterRequest(b)
 		}
 	}()
+
+	// Set before anything is written, because net/http supplies a Date of its
+	// own for a response that does not already carry one.
+	if b.clockSkew != 0 {
+		w.Header().Set("Date", time.Now().Add(b.clockSkew).UTC().Format(http.TimeFormat))
+	}
 
 	b.requests = append(b.requests, r.Method+" "+r.URL.Path)
 
@@ -468,7 +490,7 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 		if b.beforePut != nil {
 			b.beforePut(p)
 		}
-		if b.failPath != "" && p == b.failPath {
+		if b.failPut || (b.failPath != "" && p == b.failPath) {
 			http.Error(w, "storage unavailable", http.StatusInternalServerError)
 			return
 		}
@@ -507,6 +529,14 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 
 	case http.MethodDelete:
+		if b.trashOnDelete {
+			if body, ok := b.files[p]; ok {
+				b.binEntry(p, body)
+				for _, v := range b.versions[fakeResourceID(p)] {
+					b.binEntry(p, v.body)
+				}
+			}
+		}
 		// DELETE on a collection is recursive in WebDAV, so the children go too —
 		// otherwise a deleted directory leaves orphans a later listing still finds.
 		delete(b.files, p)
@@ -658,6 +688,25 @@ func (b *testBox) davXML(p string, isDir bool, size int) string {
 	return davXMLWithETag(p, isDir, size, b.etagOf(p))
 }
 
+// binEntry adds one recycle-bin entry for a deleted path. Keys are made unique
+// by counting, because the bin holds several entries under the same name.
+func (b *testBox) binEntry(p, body string) {
+	key := fmt.Sprintf("bin-%d", len(b.trash)+1)
+	b.trash[key] = trashEntry{
+		name:     path.Base(p),
+		location: strings.TrimPrefix(p, "/eos/user/e/einstein/"),
+		body:     body,
+		deleted:  time.Now(),
+	}
+}
+
+// fakeResourceID is the id the fake reports for a path. One function, used both
+// by the listing and by whatever needs to look something up by id, so the two
+// cannot disagree about what a resource is called.
+func fakeResourceID(p string) string {
+	return "s1$ABC!" + strings.ReplaceAll(p, "/", "_")
+}
+
 func davXMLWithETag(p string, isDir bool, size int, etag string) string {
 	href := testDavPrefix + p
 	rt := "<d:resourcetype></d:resourcetype>"
@@ -670,11 +719,11 @@ func davXMLWithETag(p string, isDir bool, size int, etag string) string {
 		`<d:displayname>%s</d:displayname>%s`+
 		`<d:getcontentlength>%d</d:getcontentlength><oc:size>%d</oc:size>`+
 		`<d:getetag>&quot;%s&quot;</d:getetag>`+
-		`<oc:fileid>s1$ABC!%s</oc:fileid>`+
+		`<oc:fileid>%s</oc:fileid>`+
 		`<oc:privatelink>https://cernbox.test/files/spaces/s1%s</oc:privatelink>`+
 		`<d:getlastmodified>Mon, 02 Jan 2026 15:04:05 GMT</d:getlastmodified>`+
 		`</d:prop></d:propstat></d:response>`,
-		href, path.Base(p), rt, size, size, etag, strings.ReplaceAll(p, "/", "_"), p)
+		href, path.Base(p), rt, size, size, etag, fakeResourceID(p), p)
 }
 
 // serveTrash implements the trash-bin endpoints: a PROPFIND listing, MOVE to
