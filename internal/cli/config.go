@@ -123,6 +123,9 @@ type InboxFolder struct {
 	// "move" to a .collected folder, or "delete". Empty means keep, because that
 	// is the only choice that cannot lose anything.
 	After string `yaml:"after"`
+	// Exec is a command run for each file collected, with the file's local path
+	// as its last argument. It is split on spaces and never handed to a shell.
+	Exec string `yaml:"exec"`
 }
 
 // DefaultConfig returns the built-in defaults, which target production

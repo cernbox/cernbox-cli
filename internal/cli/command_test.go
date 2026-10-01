@@ -757,7 +757,11 @@ func fakeResourceID(p string) string {
 }
 
 func davXMLWithModified(p string, isDir bool, size int, etag, modified string) string {
-	href := testDavPrefix + p
+	// Escaped, as a real server sends it: the client unescapes an href before
+	// using it, so an unescaped one works only for names with nothing in them
+	// that needs escaping. A file called "my report.pdf" did not arrive at all,
+	// and no test anywhere used a name with a space in it to notice.
+	href := (&url.URL{Path: testDavPrefix + p}).EscapedPath()
 	rt := "<d:resourcetype></d:resourcetype>"
 	if isDir {
 		href += "/"

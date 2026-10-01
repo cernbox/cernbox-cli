@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +44,11 @@ const (
 
 	// collectedDir is where "--after move" puts a file once it is safely down.
 	collectedDir = ".collected"
+
+	// defaultExecTimeout bounds a hook. One that hangs would otherwise stop an
+	// unattended watch for ever, and the folder would quietly stop being
+	// collected with nothing to show why.
+	defaultExecTimeout = 5 * time.Minute
 )
 
 func newInboxCmd(app *App) *cobra.Command {
@@ -69,6 +76,8 @@ type inboxFlags struct {
 	layout string
 	after  string
 	settle time.Duration
+	exec   string
+	execIn time.Duration
 }
 
 func (o *inboxFlags) register(cmd *cobra.Command) {
@@ -79,6 +88,10 @@ func (o *inboxFlags) register(cmd *cobra.Command) {
 		"what to do with the CERNBox copy once it is down: keep, move, or delete")
 	cmd.Flags().DurationVar(&o.settle, "settle", defaultSettle,
 		"how long a file must sit unchanged before it counts as finished")
+	cmd.Flags().StringVar(&o.exec, "exec", "",
+		"command to run for each file collected, with its local path as the last argument")
+	cmd.Flags().DurationVar(&o.execIn, "exec-timeout", defaultExecTimeout,
+		"how long --exec may take before it is killed")
 }
 
 // inboxJobs works out which folders to collect from.
@@ -92,10 +105,12 @@ func (a *App) inboxJobs(args []string, flags inboxFlags) ([]inboxJob, error) {
 			Local:  flags.to,
 			Layout: flags.layout,
 			After:  flags.after,
+			Exec:   flags.exec,
 		})
 		if err != nil {
 			return nil, err
 		}
+		job.execIn = flags.execIn
 		return []inboxJob{job}, nil
 	}
 
@@ -117,11 +132,15 @@ func (a *App) inboxJobs(args []string, flags inboxFlags) ([]inboxJob, error) {
 		if flags.after != "" {
 			f.After = flags.after
 		}
+		if flags.exec != "" {
+			f.Exec = flags.exec
+		}
 		job, err := newInboxJob(f)
 		if err != nil {
 			return nil, err
 		}
 		job.configured = true
+		job.execIn = flags.execIn
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -323,6 +342,10 @@ type inboxJob struct {
 	local  string
 	layout string
 	after  string
+	// exec is run for each file collected, split on spaces rather than handed to
+	// a shell.
+	exec   []string
+	execIn time.Duration
 	// configured marks a folder that came from the configuration file rather than
 	// from the command line, which changes what a missing folder means.
 	configured bool
@@ -338,6 +361,12 @@ func newInboxJob(f InboxFolder) (inboxJob, error) {
 	}
 
 	job := inboxJob{remote: f.Remote, local: local, layout: f.Layout, after: f.After}
+	// Split rather than handed to a shell: a file name never reaches an
+	// interpreter this way, which matters more here than anywhere else in the
+	// CLI, because the names come from whoever is putting things in the folder —
+	// possibly a stranger with an upload link. Something that needs shell
+	// features goes in a script.
+	job.exec = strings.Fields(f.Exec)
 	if job.layout == "" {
 		job.layout = "flat"
 	}
@@ -534,6 +563,18 @@ func (a *App) collectInboxItem(ctx context.Context, job inboxJob, it inboxItem) 
 		// Already safely down. The policy still runs, so that a pass which
 		// downloaded and then failed to tidy up finishes the job rather than
 		// leaving the file to be considered for ever.
+		//
+		// The hook runs again too, but only where its having run can be told
+		// from the state of the folder. With move or delete, a file still in the
+		// inbox is a file whose hook did not finish — that is what suppressing
+		// the policy on a failed hook leaves behind — so running it again is the
+		// retry. With keep there is no such evidence, and running it again every
+		// pass would mean running it for ever.
+		if len(job.exec) > 0 && job.after != "keep" {
+			if err := a.runInboxHook(ctx, job, it, local); err != nil {
+				return false, 0, nil
+			}
+		}
 		return false, 0, a.afterInbox(ctx, job, it)
 	}
 	if pathTaken(local) {
@@ -559,7 +600,63 @@ func (a *App) collectInboxItem(ctx context.Context, job inboxJob, it inboxItem) 
 	if err != nil {
 		return false, 0, err
 	}
+
+	// The hook runs before the policy, and a failure stops the policy. That
+	// ordering is the point: if the hook is why the inbox exists, moving or
+	// deleting the CERNBox copy after it failed would throw away the only
+	// evidence that something is unfinished. The file was downloaded either
+	// way, which is why it still counts as collected.
+	if len(job.exec) > 0 {
+		if err := a.runInboxHook(ctx, job, it, local); err != nil {
+			return true, size, nil
+		}
+	}
 	return true, size, a.afterInbox(ctx, job, it)
+}
+
+// runInboxHook runs the command for one collected file.
+//
+// The file's local path is the last argument, which is where find -exec and
+// everything like it puts it, and the details go in the environment as well so
+// that a script can have them without parsing anything. Both streams go to
+// stderr: a hook that prints must not land in the middle of --output json.
+func (a *App) runInboxHook(ctx context.Context, job inboxJob, it inboxItem, local string) error {
+	timeout := job.execIn
+	if timeout <= 0 {
+		timeout = defaultExecTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	args := append(append([]string{}, job.exec[1:]...), local)
+	cmd := exec.CommandContext(ctx, job.exec[0], args...)
+	cmd.Stdout, cmd.Stderr = a.stderr, a.stderr
+	// Killing the process on a timeout is not enough on its own. Wait also waits
+	// for the pipes behind those two writers to close, and a grandchild of the
+	// hook keeps them open after its parent is gone — a hook that ran "sleep 60"
+	// took the whole minute despite a timeout of 300ms. WaitDelay bounds that
+	// wait and closes the pipes itself.
+	cmd.WaitDelay = time.Second
+	cmd.Env = append(os.Environ(),
+		"CERNBOX_INBOX_FILE="+local,
+		"CERNBOX_INBOX_REMOTE="+it.path,
+		"CERNBOX_INBOX_NAME="+it.name,
+		"CERNBOX_INBOX_SIZE="+strconv.FormatInt(it.size, 10),
+	)
+
+	err := cmd.Run()
+	if err == nil {
+		return nil
+	}
+	switch {
+	case ctx.Err() != nil:
+		a.out.Warn("%s: %s did not finish within %s, so %s was left in the inbox",
+			it.name, job.exec[0], timeout, it.name)
+	default:
+		a.out.Warn("%s: %s failed (%v), so %s was left in the inbox",
+			it.name, job.exec[0], errLine(err), it.name)
+	}
+	return err
 }
 
 // freeLocalName finds a name next to local that nothing is using.

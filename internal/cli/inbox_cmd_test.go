@@ -266,3 +266,189 @@ func keysOf(m map[string]string) []string {
 	}
 	return out
 }
+
+// ── the exec hook ────────────────────────────────────────────────────────────
+
+// hookScript writes a shell script that records every file it was handed, and
+// returns the script's path and the path of its log.
+func hookScript(t *testing.T, exitCode int) (script, log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls.log")
+	script = filepath.Join(dir, "hook.sh")
+	body := "#!/bin/sh\n" +
+		"printf '%s|%s|%s|%s\\n' \"$1\" \"$CERNBOX_INBOX_NAME\" " +
+		"\"$CERNBOX_INBOX_SIZE\" \"$CERNBOX_INBOX_REMOTE\" >> " + log + "\n" +
+		"exit " + itoa(exitCode) + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, log
+}
+
+func hookCalls(t *testing.T, log string) []string {
+	t.Helper()
+	body, err := os.ReadFile(log)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(body)), "\n")
+}
+
+func TestInboxHookRunsForEachFileCollected(t *testing.T) {
+	box, remote, local := inboxSetup(t, "measurement.csv", "1,2,3")
+	script, log := hookScript(t, 0)
+
+	if _, _, err := run(t, box, "inbox", "pull", remote,
+		"--to", local, "--settle", "0", "--exec", script); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := hookCalls(t, log)
+	if len(calls) != 1 {
+		t.Fatalf("the hook ran %d times, want once: %v", len(calls), calls)
+	}
+	want := filepath.Join(local, "measurement.csv") + "|measurement.csv|5|" + remote + "/measurement.csv"
+	if calls[0] != want {
+		t.Errorf("the hook was handed\n  %s\nwant\n  %s", calls[0], want)
+	}
+}
+
+// TestInboxHookDoesNotRunForSomethingAlreadyHere: with keep there is no way to
+// tell from the folder whether a hook has run, so running it on every pass
+// would mean running it for ever.
+func TestInboxHookDoesNotRunForSomethingAlreadyHere(t *testing.T) {
+	box, remote, local := inboxSetup(t, "measurement.csv", "1,2,3")
+	script, log := hookScript(t, 0)
+
+	for range 3 {
+		if _, _, err := run(t, box, "inbox", "pull", remote,
+			"--to", local, "--settle", "0", "--exec", script); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls := hookCalls(t, log); len(calls) != 1 {
+		t.Errorf("the hook ran %d times over three passes, want once: %v", len(calls), calls)
+	}
+}
+
+// TestInboxHookFailureLeavesTheFileInTheInbox is the ordering that makes the
+// hook worth having: if the hook is why the inbox exists, moving the CERNBox
+// copy out of the way after it failed throws away the only evidence that
+// something is unfinished.
+func TestInboxHookFailureLeavesTheFileInTheInbox(t *testing.T) {
+	box, remote, local := inboxSetup(t, "measurement.csv", "1,2,3")
+	script, _ := hookScript(t, 3)
+
+	_, stderr, err := run(t, box, "inbox", "pull", remote,
+		"--to", local, "--settle", "0", "--after", "move", "--exec", script)
+	if err != nil {
+		t.Fatalf("a failing hook is a warning, not the end of the run: %v", err)
+	}
+	if !strings.Contains(stderr, "left in the inbox") {
+		t.Errorf("nothing said what the failure meant:\n%s", stderr)
+	}
+
+	files := box.snapshotFiles()
+	if _, still := files[remote+"/measurement.csv"]; !still {
+		t.Error("the CERNBox copy was moved even though the hook failed")
+	}
+	// The file is still downloaded: that part worked, and pretending otherwise
+	// would mean fetching it again.
+	if _, err := os.Stat(filepath.Join(local, "measurement.csv")); err != nil {
+		t.Errorf("the local copy should be there: %v", err)
+	}
+}
+
+// TestInboxHookRetriesWhereTheFolderRemembers: with move or delete, a file
+// still in the inbox is one whose hook did not finish, so the next pass runs it
+// again — which is what makes a failure recoverable rather than permanent.
+func TestInboxHookRetriesWhereTheFolderRemembers(t *testing.T) {
+	box, remote, local := inboxSetup(t, "measurement.csv", "1,2,3")
+	failing, _ := hookScript(t, 3)
+	working, log := hookScript(t, 0)
+
+	if _, _, err := run(t, box, "inbox", "pull", remote,
+		"--to", local, "--settle", "0", "--after", "move", "--exec", failing); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, box, "inbox", "pull", remote,
+		"--to", local, "--settle", "0", "--after", "move", "--exec", working); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls := hookCalls(t, log); len(calls) != 1 {
+		t.Errorf("the working hook ran %d times, want once on the retry: %v", len(calls), calls)
+	}
+	files := box.snapshotFiles()
+	if _, still := files[remote+"/measurement.csv"]; still {
+		t.Error("the retry succeeded, so the copy should have been moved")
+	}
+	if _, moved := files[remote+"/"+collectedDir+"/measurement.csv"]; !moved {
+		t.Errorf("not in %s: %v", collectedDir, keysOf(files))
+	}
+}
+
+// TestInboxHookGetsNoShell matters more here than anywhere else in the CLI: the
+// names come from whoever is putting things in the folder, which with an upload
+// link is a stranger.
+func TestInboxHookGetsNoShell(t *testing.T) {
+	box := newTestBox(t)
+	remote := "/eos/user/e/einstein/incoming"
+	box.mkdir(remote)
+	// A name a shell would both split into three words and act on. No slashes
+	// in it: a name with one is not a name, it is a path, and the file would not
+	// be in this folder at all — which this test got wrong twice before saying
+	// anything useful.
+	const nasty = "safe.txt; touch pwned"
+	box.putFile(remote+"/"+nasty, "x")
+	local := t.TempDir()
+	script, log := hookScript(t, 0)
+
+	if _, _, err := run(t, box, "inbox", "pull", remote,
+		"--to", local, "--settle", "0", "--exec", script); err != nil {
+		t.Fatal(err)
+	}
+
+	// The name arrived whole, as one argument: nothing split it and nothing
+	// interpreted it. That is the property worth pinning, because the names come
+	// from whoever is putting things in the folder, which with an upload link is
+	// a stranger.
+	calls := hookCalls(t, log)
+	if len(calls) != 1 {
+		t.Fatalf("the hook ran %d times: %v", len(calls), calls)
+	}
+	if want := filepath.Join(local, nasty) + "|" + nasty + "|"; !strings.HasPrefix(calls[0], want) {
+		t.Errorf("the hook was handed\n  %s\nwant it to start with\n  %s", calls[0], want)
+	}
+}
+
+func TestInboxHookIsKilledWhenItHangs(t *testing.T) {
+	box, remote, local := inboxSetup(t, "measurement.csv", "1,2,3")
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hang.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, stderr, err := run(t, box, "inbox", "pull", remote, "--to", local,
+		"--settle", "0", "--after", "move", "--exec", script, "--exec-timeout", "300ms")
+	if err != nil {
+		t.Fatalf("a hook that hangs is a warning, not the end of the run: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Errorf("waited %s for a hook with a 300ms timeout", elapsed)
+	}
+	if !strings.Contains(stderr, "did not finish") {
+		t.Errorf("nothing said the hook was killed:\n%s", stderr)
+	}
+	// And the policy did not run, so the next pass can try again.
+	if _, still := box.snapshotFiles()[remote+"/measurement.csv"]; !still {
+		t.Error("the copy was moved even though the hook never finished")
+	}
+}

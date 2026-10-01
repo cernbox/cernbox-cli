@@ -209,6 +209,20 @@ inbox:
 
 The keys mean what the outbox's mean, with `remote` and `local` the other way about: `layout` `flat` or `date`, and `after` `keep`, `move` to `.collected/` **in CERNBox**, or `delete`. Nothing local is ever written over — a name already taken by a different file gets a `(2)` — and `keep` is the default because it is the only choice that cannot lose anything.
 
+`--exec` runs a command for each file collected, with the file's local path as its last argument and the details in `CERNBOX_INBOX_FILE`, `CERNBOX_INBOX_NAME`, `CERNBOX_INBOX_SIZE` and `CERNBOX_INBOX_REMOTE`:
+
+```yaml
+inbox:
+  - remote: /eos/project/c/cernbox/incoming
+    local: ~/from-cernbox
+    after: move
+    exec: /usr/local/bin/ingest
+```
+
+The command is split on spaces and never handed to a shell, so a file name cannot be interpreted — which matters here more than anywhere else, because the names come from whoever is putting things in the folder. Something needing shell features goes in a script.
+
+If the hook fails, or does not finish within `--exec-timeout`, the `after` policy does not run: the CERNBox copy stays in the inbox, which is what tells you something is unfinished. With `move` or `delete` that also makes the next pass retry it, because a file still in the inbox is a file whose hook did not complete. With `keep` there is no such evidence, so the hook only ever runs on a fresh download.
+
 Two differences from the outbox worth knowing. `inbox watch` **asks on a timer**, because nothing on this surface will tell a client that a remote folder changed, so `--interval` is a direct cost: one listing per folder per pass. And whether a file has finished arriving is judged against **the server's clock**, since the server wrote the timestamp being compared; `cernbox doctor` is what tells you if the two clocks disagree.
 
 ## Copying and mirroring

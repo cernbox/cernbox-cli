@@ -106,10 +106,15 @@ The same shape as the outbox, with the two sides swapped, and the same rule abou
 | `local` | required | where its contents go; a leading `~` is expanded |
 | `layout` | `flat` | `date` files each arrival under `YYYY/MM/DD`, taken from the file's own timestamp |
 | `after` | `keep` | `keep`, `move` to `.collected/` in CERNBox, or `delete` once the download is verified |
+| `exec` | none | command to run for each file collected, with its local path as the last argument |
 
 Two things behave differently from the outbox, and neither is cosmetic.
 
 `inbox watch` polls. The outbox is told when a local folder changes, by the filesystem; nothing here will tell a client that a remote folder did. So `--interval` (default one minute) is a direct cost of one listing per folder per pass, and for anything that has to survive sleep, a lost network and a reboot, `inbox pull` from a timer is the better shape.
+
+`exec` is split on spaces and started directly, never through a shell: the names come from whoever is putting things in the folder, which with an upload link is a stranger. The file's path arrives as the last argument, and `CERNBOX_INBOX_FILE`, `CERNBOX_INBOX_NAME`, `CERNBOX_INBOX_SIZE` and `CERNBOX_INBOX_REMOTE` are in the environment. Both of the hook's output streams go to standard error, so a hook that prints cannot land in the middle of `--output json`.
+
+A hook that fails, or that outlives `--exec-timeout` (five minutes by default), stops the `after` policy for that file. That ordering is the point: if the hook is why the inbox exists, moving the CERNBox copy out of the way after it failed throws away the only evidence that something did not finish. With `move` or `delete` it also gives you a retry, since a file still sitting in the inbox is one whose hook did not complete; with `keep` there is nothing to tell that from, so the hook runs only when a file is newly downloaded.
 
 Whether a file has finished arriving is judged against the **server's** clock. A file still being uploaded keeps its modification time current, so one listing is enough to tell it from a finished one — but that compares a timestamp the server wrote against a now, and taking now from this machine would make the test wrong by however far the two clocks are apart. If the clock cannot be read the local one is used and a warning says so; `cernbox doctor` reports the drift.
 
