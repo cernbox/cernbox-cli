@@ -262,9 +262,14 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 			`"form_parameters":{"access_token":"secret"}}`, method)
 
 	case r.URL.Path == "/app/list":
+		// default_application is a string. The server marshals the CS3
+		// MimeTypeInfo message directly and that field is a string there, so the
+		// object this fake used to answer with was a shape no server sends — and
+		// it hid a decoding error that made "cernbox apps" fail outright.
 		fmt.Fprint(w, `{"mime-types":[{"mime_type":"application/vnd.oasis.opendocument.text",`+
-			`"ext":"odt","default_application":{"name":"Collabora"},`+
-			`"app_providers":[{"name":"Collabora"}]}]}`)
+			`"ext":"odt","name":"OpenDocument text","default_application":"Collabora",`+
+			`"allow_creation":true,`+
+			`"app_providers":[{"name":"Collabora"},{"name":"OnlyOffice"}]}]}`)
 
 	case r.URL.Path == "/graph/v1.0/me":
 		fmt.Fprint(w, `{"id":"u1","displayName":"Albert Einstein","mail":"einstein@cern.ch","onPremisesSamAccountName":"einstein"}`)

@@ -118,9 +118,12 @@ type appListResponse struct {
 		Name          string `json:"name"`
 		Description   string `json:"description"`
 		AllowCreation bool   `json:"allow_creation"`
-		DefaultApp    *struct {
-			Name string `json:"name"`
-		} `json:"default_application"`
+		// DefaultApp is a plain application name, not an object with one in it.
+		// The server marshals the CS3 MimeTypeInfo message straight to JSON and
+		// its default_application field is a string, so expecting an object made
+		// "cernbox apps" fail outright against a real instance — and the fake
+		// here answered with the object, so nothing caught it.
+		DefaultApp   string `json:"default_application"`
 		AppProviders []struct {
 			Name string `json:"name"`
 		} `json:"app_providers"`
@@ -158,9 +161,7 @@ func (c *Client) ListApps(ctx context.Context) ([]AppMimeType, error) {
 			Description:   m.Description,
 			AllowCreation: m.AllowCreation,
 		}
-		if m.DefaultApp != nil {
-			item.Default = m.DefaultApp.Name
-		}
+		item.Default = m.DefaultApp
 		for _, p := range m.AppProviders {
 			if p.Name != "" {
 				item.Apps = append(item.Apps, p.Name)

@@ -527,9 +527,15 @@ func TestLinkPasswordNeedsATerminal(t *testing.T) {
 func requireApps(t *testing.T, e *env) {
 	t.Helper()
 
+	// A deployment with no application provider lists nothing and exits 0, so
+	// that is what a skip looks like. A non-zero exit is a failure and must be
+	// reported as one: this used to skip on any error, which meant the command
+	// failing outright against a real instance — "cannot unmarshal string into
+	// ... default_application" — read here as "no provider configured", and the
+	// one test that could have caught it never did.
 	stdout, stderr, code := e.run("--output", "json", "apps")
 	if code != 0 {
-		t.Skipf("no application provider on this deployment: %s", stderr)
+		t.Fatalf("apps exited %d: %s", code, stderr)
 	}
 
 	var types []struct {

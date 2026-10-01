@@ -110,7 +110,7 @@ func TestListApps(t *testing.T) {
 		fmt.Fprint(w, `{"mime-types":[
 		  {"mime_type":"application/vnd.oasis.opendocument.text","ext":"odt","name":"OpenDocument",
 		   "allow_creation":true,
-		   "default_application":{"name":"Collabora"},
+		   "default_application":"Collabora",
 		   "app_providers":[{"name":"Collabora"},{"name":"OnlyOffice"}]},
 		  {"mime_type":"text/plain","ext":"txt","app_providers":[]}
 		]}`)

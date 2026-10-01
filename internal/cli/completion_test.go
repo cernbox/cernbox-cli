@@ -240,8 +240,8 @@ func TestCompleteApplicationNames(t *testing.T) {
 	box.putFile("/eos/user/e/einstein/notes.odt", "x")
 
 	got, _ := complete(t, box, "open", "--app", "")
-	if len(got) != 1 || got[0] != "Collabora" {
-		t.Fatalf("applications = %v, want [Collabora]", got)
+	if len(got) != 2 || got[0] != "Collabora" || got[1] != "OnlyOffice" {
+		t.Fatalf("applications = %v, want both providers the server named", got)
 	}
 }
 
