@@ -107,6 +107,11 @@ type OutboxFolder struct {
 	After string `yaml:"after"`
 	// Link creates a public link for each upload and prints it.
 	Link bool `yaml:"link"`
+	// Exec is a command run over each file before it is uploaded, with the
+	// file's path as its last argument. It may rewrite the file where it is; a
+	// file it renames is not followed. Split on spaces and never handed to a
+	// shell.
+	Exec string `yaml:"exec"`
 }
 
 // InboxFolder is one CERNBox folder whose arrivals are downloaded locally. It

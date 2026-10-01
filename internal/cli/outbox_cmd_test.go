@@ -376,3 +376,185 @@ func TestOutboxWatchWaitsForAnArrivalToSettle(t *testing.T) {
 		t.Error("a file was uploaded before it had settled")
 	}
 }
+
+// ── the exec hook ────────────────────────────────────────────────────────────
+
+// shrinkHook writes a script that rewrites the file it is handed, in place,
+// with the given body — standing in for the thing people actually want here:
+// strip a screenshot's metadata, or shrink it, before it leaves the laptop.
+func shrinkHook(t *testing.T, body string) (script, log string) {
+	t.Helper()
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls.log")
+	script = filepath.Join(dir, "hook.sh")
+	content := "#!/bin/sh\n" +
+		"printf '%s|%s|%s\\n' \"$1\" \"$CERNBOX_OUTBOX_NAME\" \"$CERNBOX_OUTBOX_REMOTE\" >> " +
+		log + "\n" +
+		"printf '" + body + "' > \"$1\"\n"
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, log
+}
+
+func failingHook(t *testing.T, code string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "bad.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit "+code+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// TestOutboxHookUploadsWhatTheHookLeft is the whole point: the bytes that go up
+// are the ones the hook produced, not the ones the folder held.
+func TestOutboxHookUploadsWhatTheHookLeft(t *testing.T) {
+	box := newTestBox(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"),
+		[]byte(strings.Repeat("x", 500)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script, log := shrinkHook(t, "smaller")
+
+	if _, _, err := run(t, box, "outbox", "push", dir,
+		"--to", "/eos/user/e/einstein/Shots", "--settle", "0", "--exec", script); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := box.snapshotFiles()["/eos/user/e/einstein/Shots/shot.png"]; got != "smaller" {
+		t.Errorf("uploaded %q, want what the hook left behind", got)
+	}
+	if calls := hookCalls(t, log); len(calls) != 1 {
+		t.Errorf("the hook ran %d times, want once: %v", len(calls), calls)
+	}
+	// Rewritten where it was, which is the rule that makes the pass below stable.
+	local, _ := os.ReadFile(filepath.Join(dir, "shot.png"))
+	if string(local) != "smaller" {
+		t.Errorf("the local file is %q, want the hook's own output", local)
+	}
+}
+
+// TestOutboxHookDoesNotRunAgainOnASecondPass is why the hook runs after the
+// already-there test rather than before it. The skip compares the local size
+// against the remote one, so they only agree once the local copy is the one the
+// hook produced — and rewriting in place is what makes that true. Running the
+// hook first, every pass, would re-compress the same screenshot for ever.
+func TestOutboxHookDoesNotRunAgainOnASecondPass(t *testing.T) {
+	box := newTestBox(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"),
+		[]byte(strings.Repeat("x", 500)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script, log := shrinkHook(t, "smaller")
+
+	for range 3 {
+		if _, _, err := run(t, box, "outbox", "push", dir,
+			"--to", "/eos/user/e/einstein/Shots", "--settle", "0", "--exec", script); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if calls := hookCalls(t, log); len(calls) != 1 {
+		t.Errorf("the hook ran %d times over three passes, want once: %v", len(calls), calls)
+	}
+	// And nothing was uploaded a second time under another name.
+	var shots int
+	for p := range box.snapshotFiles() {
+		if strings.HasPrefix(p, "/eos/user/e/einstein/Shots/") {
+			shots++
+		}
+	}
+	if shots != 1 {
+		t.Errorf("the folder holds %d files, want one", shots)
+	}
+}
+
+// TestOutboxHookFailureUploadsNothing: the hook is a precondition, so a failure
+// means the file stays where it is — even under a policy that would have
+// deleted it.
+func TestOutboxHookFailureUploadsNothing(t *testing.T) {
+	box := newTestBox(t)
+	dir := t.TempDir()
+	local := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(local, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, err := run(t, box, "outbox", "push", dir,
+		"--to", "/eos/user/e/einstein/Shots", "--settle", "0",
+		"--after", "delete", "--exec", failingHook(t, "4"))
+	if err != nil {
+		t.Fatalf("a failing hook is a warning, not the end of the run: %v", err)
+	}
+	if !strings.Contains(stderr, "exited with status 4") {
+		t.Errorf("the message should say the hook ran and refused:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "not uploaded") {
+		t.Errorf("the message should say what the failure meant:\n%s", stderr)
+	}
+
+	for p := range box.snapshotFiles() {
+		if strings.HasPrefix(p, "/eos/user/e/einstein/Shots/") {
+			t.Errorf("%s was uploaded despite the hook failing", p)
+		}
+	}
+	if _, err := os.Stat(local); err != nil {
+		t.Errorf("the local file should still be there: %v", err)
+	}
+}
+
+// TestOutboxHookRenameIsNotFollowed is the decision, said out loud: a hook may
+// rewrite a file where it is, and a file it renames is not chased.
+func TestOutboxHookRenameIsNotFollowed(t *testing.T) {
+	box := newTestBox(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shot.heic"), []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "rename.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nmv \"$1\" \"$1.jpg\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, err := run(t, box, "outbox", "push", dir,
+		"--to", "/eos/user/e/einstein/Shots", "--settle", "0", "--exec", script)
+	if err != nil {
+		t.Fatalf("a rename is reported, not fatal: %v", err)
+	}
+	if !strings.Contains(stderr, "rename is not followed") {
+		t.Errorf("the message should explain the rule:\n%s", stderr)
+	}
+	for p := range box.snapshotFiles() {
+		if strings.HasPrefix(p, "/eos/user/e/einstein/Shots/") {
+			t.Errorf("%s was uploaded from a path the hook had emptied", p)
+		}
+	}
+}
+
+func TestOutboxHookIsKilledWhenItHangs(t *testing.T) {
+	box := newTestBox(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "hang.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, stderr, err := run(t, box, "outbox", "push", dir,
+		"--to", "/eos/user/e/einstein/Shots", "--settle", "0",
+		"--exec", script, "--exec-timeout", "300ms")
+	if err != nil {
+		t.Fatalf("a hook that hangs is a warning, not the end of the run: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Errorf("waited %s for a hook with a 300ms timeout", elapsed)
+	}
+	if !strings.Contains(stderr, "did not finish") {
+		t.Errorf("nothing said the hook was killed:\n%s", stderr)
+	}
+}

@@ -170,6 +170,19 @@ outbox:
 | `after` | `keep` | `keep` leaves the file alone, `move` puts it in `.uploaded/` beside it, `delete` removes it |
 | `link` | `false` | make a public link for each upload and print it |
 
+`exec` runs a command over each file **before** it is uploaded, with the file's path as its last argument — strip a screenshot's metadata, shrink it, convert it:
+
+```yaml
+outbox:
+  - local: ~/Pictures/Screenshots
+    remote: Screenshots
+    exec: ~/bin/strip-exif
+```
+
+The hook may rewrite the file where it is, and what goes up is what it left there. A file it **renames** is not followed, and that is reported rather than silently skipped. If the hook fails, or outlives `--exec-timeout`, nothing is uploaded and nothing is tidied away — not even under `after: delete`.
+
+Rewriting in place is what keeps this stable: the next pass scans the rewritten file, finds its size equal to the uploaded one and skips it, so a shrinking hook does not shrink the same file again on every run. The same `--exec` exists on `inbox` for the other direction.
+
 `layout`, `after` and `link` are flags too, and a flag overrides the configuration for that one run — useful as a safety net over a config that says `delete`. `--to` names the CERNBox folder for a local folder that is not in the configuration at all:
 
 ```bash

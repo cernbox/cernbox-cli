@@ -91,8 +91,13 @@ This is the one section with no equivalent flag or variable for the whole list: 
 | `layout` | `flat` | `date` files each upload under `YYYY/MM/DD`, taken from the file's own timestamp |
 | `after` | `keep` | `keep`, `move` to `.uploaded/`, or `delete` once the upload is verified |
 | `link` | `false` | create a public link for each upload and print it |
+| `exec` | none | command to run over each file before it is uploaded, with its path as the last argument |
 
 `after: keep` is the default because it is the only choice that cannot lose anything. `delete` is the one irreversible option, so it belongs in a file where you wrote it down deliberately rather than in a flag you might repeat from shell history.
+
+`exec` runs before the upload and may rewrite the file where it is; the bytes that go up are the ones it left. A file it renames is not followed — the upload is of the path the outbox saw, and an empty path is reported. A hook that fails, or that outlives `--exec-timeout` (five minutes by default), stops both the upload and the `after` policy, so the file stays in the folder.
+
+Why it runs after the already-uploaded check rather than before: a hook that shrinks a file must not be run again on every pass. What prevents that is the in-place rule — the next pass scans the rewritten file, finds its size equal to the uploaded one and skips it before the hook is reached. `CERNBOX_OUTBOX_FILE`, `CERNBOX_OUTBOX_NAME`, `CERNBOX_OUTBOX_SIZE` and `CERNBOX_OUTBOX_REMOTE` are in the environment, and the size is the one before the hook ran.
 
 A configured folder that does not exist is a warning, not a failure — an unmounted drive or a folder you have not created yet must not stop the others from uploading, least of all from a timer where nobody is watching. A folder named on the command line is treated as a typo and fails.
 

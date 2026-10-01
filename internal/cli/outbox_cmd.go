@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,8 @@ type outboxFlags struct {
 	after  string
 	link   bool
 	settle time.Duration
+	exec   string
+	execIn time.Duration
 }
 
 func (o *outboxFlags) register(cmd *cobra.Command) {
@@ -73,6 +76,10 @@ func (o *outboxFlags) register(cmd *cobra.Command) {
 	f.BoolVar(&o.link, "link", false, "create a public link for each upload and print it")
 	f.DurationVar(&o.settle, "settle", defaultSettle,
 		"how long a file must be unchanged before it counts as finished")
+	f.StringVar(&o.exec, "exec", "",
+		"command to run over each file before it is uploaded, with its path as the last argument")
+	f.DurationVar(&o.execIn, "exec-timeout", defaultExecTimeout,
+		"how long --exec may take before it is killed")
 }
 
 // jobs works out which folders to act on: the one named on the command line, or
@@ -88,10 +95,12 @@ func (a *App) outboxJobs(args []string, flags outboxFlags) ([]outboxJob, error) 
 			Layout: flags.layout,
 			After:  flags.after,
 			Link:   flags.link,
+			Exec:   flags.exec,
 		})
 		if err != nil {
 			return nil, err
 		}
+		job.execIn = flags.execIn
 		return []outboxJob{job}, nil
 	}
 
@@ -116,11 +125,15 @@ func (a *App) outboxJobs(args []string, flags outboxFlags) ([]outboxJob, error) 
 		if flags.link {
 			f.Link = true
 		}
+		if flags.exec != "" {
+			f.Exec = flags.exec
+		}
 		job, err := newOutboxJob(f)
 		if err != nil {
 			return nil, err
 		}
 		job.configured = true
+		job.execIn = flags.execIn
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -463,6 +476,10 @@ type outboxJob struct {
 	layout string
 	after  string
 	link   bool
+	// exec is run over each file before it is uploaded, split on spaces rather
+	// than handed to a shell.
+	exec   []string
+	execIn time.Duration
 	// configured marks a folder that came from the configuration file rather than
 	// from the command line, which changes what a missing folder means.
 	configured bool
@@ -478,6 +495,7 @@ func newOutboxJob(f OutboxFolder) (outboxJob, error) {
 	}
 
 	job := outboxJob{local: local, remote: f.Remote, layout: f.Layout, after: f.After, link: f.Link}
+	job.exec = strings.Fields(f.Exec)
 	if job.layout == "" {
 		job.layout = "flat"
 	}
@@ -714,6 +732,34 @@ func (a *App) sendOutboxItem(ctx context.Context, job outboxJob, it outboxItem) 
 		}
 	}
 
+	// The hook runs here: after the decision that this file needs uploading, and
+	// before it is read.
+	//
+	// After, because a hook that rewrites a file must not be run again on every
+	// pass — "after: keep" would re-compress the same screenshot for ever. What
+	// stops that is not anything done here: it is that the hook rewrote the file
+	// where it is, so the next pass scans the rewritten file, finds its size
+	// equal to the uploaded one, and skips it before reaching this point. That
+	// is the whole reason rewriting in place is the rule.
+	//
+	// A file the hook renames is not followed. The upload is of the path the
+	// outbox saw, and an empty path is reported rather than left to come back as
+	// a confusing failure from the transfer engine.
+	if len(job.exec) > 0 {
+		if err := a.runOutboxHook(ctx, job, it, remote); err != nil {
+			return false, 0, nil
+		}
+		if _, statErr := os.Stat(it.path); statErr != nil {
+			if os.IsNotExist(statErr) {
+				a.out.Warn("%s: %s left nothing at that path, so there was nothing to upload. "+
+					"A hook may rewrite a file where it is, but a rename is not followed.",
+					it.name, job.exec[0])
+				return false, 0, nil
+			}
+			return false, 0, cberr.Wrap(cberr.KindOther, "stat", it.path, statErr)
+		}
+	}
+
 	if err := a.client.Mkdir(ctx, path.Dir(remote), true); err != nil &&
 		cberr.KindOf(err) != cberr.KindConflict {
 		return false, 0, err
@@ -741,6 +787,21 @@ func (a *App) sendOutboxItem(ctx context.Context, job outboxJob, it outboxItem) 
 	}
 
 	return true, size, a.afterOutbox(job, it)
+}
+
+// runOutboxHook runs the command over one file about to be uploaded. See
+// hook.go for the rules every hook follows.
+func (a *App) runOutboxHook(ctx context.Context, job outboxJob, it outboxItem, remote string) error {
+	err := a.runHook(ctx, job.exec, job.execIn, it.path, []string{
+		"CERNBOX_OUTBOX_FILE=" + it.path,
+		"CERNBOX_OUTBOX_REMOTE=" + remote,
+		"CERNBOX_OUTBOX_NAME=" + it.name,
+		"CERNBOX_OUTBOX_SIZE=" + strconv.FormatInt(it.size, 10),
+	})
+	if err != nil {
+		a.out.Warn("%s: %v, so it was not uploaded", it.name, errLine(err))
+	}
+	return err
 }
 
 // linkFor makes a public link for something just uploaded.

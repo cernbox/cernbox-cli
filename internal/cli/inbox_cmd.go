@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -44,11 +43,6 @@ const (
 
 	// collectedDir is where "--after move" puts a file once it is safely down.
 	collectedDir = ".collected"
-
-	// defaultExecTimeout bounds a hook. One that hangs would otherwise stop an
-	// unattended watch for ever, and the folder would quietly stop being
-	// collected with nothing to show why.
-	defaultExecTimeout = 5 * time.Minute
 )
 
 func newInboxCmd(app *App) *cobra.Command {
@@ -614,47 +608,17 @@ func (a *App) collectInboxItem(ctx context.Context, job inboxJob, it inboxItem) 
 	return true, size, a.afterInbox(ctx, job, it)
 }
 
-// runInboxHook runs the command for one collected file.
-//
-// The file's local path is the last argument, which is where find -exec and
-// everything like it puts it, and the details go in the environment as well so
-// that a script can have them without parsing anything. Both streams go to
-// stderr: a hook that prints must not land in the middle of --output json.
+// runInboxHook runs the command for one collected file. See hook.go for the
+// rules every hook follows.
 func (a *App) runInboxHook(ctx context.Context, job inboxJob, it inboxItem, local string) error {
-	timeout := job.execIn
-	if timeout <= 0 {
-		timeout = defaultExecTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	args := append(append([]string{}, job.exec[1:]...), local)
-	cmd := exec.CommandContext(ctx, job.exec[0], args...)
-	cmd.Stdout, cmd.Stderr = a.stderr, a.stderr
-	// Killing the process on a timeout is not enough on its own. Wait also waits
-	// for the pipes behind those two writers to close, and a grandchild of the
-	// hook keeps them open after its parent is gone — a hook that ran "sleep 60"
-	// took the whole minute despite a timeout of 300ms. WaitDelay bounds that
-	// wait and closes the pipes itself.
-	cmd.WaitDelay = time.Second
-	cmd.Env = append(os.Environ(),
-		"CERNBOX_INBOX_FILE="+local,
-		"CERNBOX_INBOX_REMOTE="+it.path,
-		"CERNBOX_INBOX_NAME="+it.name,
-		"CERNBOX_INBOX_SIZE="+strconv.FormatInt(it.size, 10),
-	)
-
-	err := cmd.Run()
-	if err == nil {
-		return nil
-	}
-	switch {
-	case ctx.Err() != nil:
-		a.out.Warn("%s: %s did not finish within %s, so %s was left in the inbox",
-			it.name, job.exec[0], timeout, it.name)
-	default:
-		a.out.Warn("%s: %s failed (%v), so %s was left in the inbox",
-			it.name, job.exec[0], errLine(err), it.name)
+	err := a.runHook(ctx, job.exec, job.execIn, local, []string{
+		"CERNBOX_INBOX_FILE=" + local,
+		"CERNBOX_INBOX_REMOTE=" + it.path,
+		"CERNBOX_INBOX_NAME=" + it.name,
+		"CERNBOX_INBOX_SIZE=" + strconv.FormatInt(it.size, 10),
+	})
+	if err != nil {
+		a.out.Warn("%s: %v, so it was left in the inbox", it.name, errLine(err))
 	}
 	return err
 }

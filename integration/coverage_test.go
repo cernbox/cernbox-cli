@@ -84,7 +84,7 @@ var coveredCommands = map[string]string{
 	"versions download": "TestVersionsRoundTrip",
 
 	// The outbox.
-	"outbox push":   "TestOutboxPushAndDelete",
+	"outbox push":   "TestOutboxPushAndDelete, TestOutboxHookTransformsBeforeUpload, TestOutboxHookFailureKeepsTheFileHome",
 	"outbox watch":  "TestOutboxWatchUploadsOnArrival",
 	"outbox status": "TestOutboxPushAndDelete",
 
