@@ -690,7 +690,10 @@ func newDuCmd(app *App) *cobra.Command {
 			"\n" +
 			"--top ranks everything underneath by size and shows the biggest, which is the\n" +
 			"question to ask when a quota is full. It looks at the whole tree and counts\n" +
-			"files too, unless -d bounds it.",
+			"files too, unless -d bounds it.\n" +
+			"\n" +
+			"With --versions it ranks by the hidden bytes instead, and leaves out whatever\n" +
+			"has none: the biggest directory is often not the one with the history in it.",
 		Example: "  cernbox du -h /eos/user/g/gdelmont\n" +
 			"  cernbox du -h -d 1 /eos/user/g/gdelmont\n" +
 			"  cernbox du -h --top 20 /eos/user/g/gdelmont",
@@ -715,12 +718,15 @@ func newDuCmd(app *App) *cobra.Command {
 			ranking := opts.Top > 0
 			if ranking {
 				// The biggest thing is rarely at the top level, so ranking means
-				// looking everywhere — and counting files, since a single file is
-				// usually the answer. An explicit -d bounds it again.
+				// looking everywhere. An explicit -d bounds it again.
 				if !cmd.Flags().Changed("max-depth") && !cmd.Flags().Changed("depth") {
 					opts.MaxDepth = math.MaxInt
 				}
-				opts.All = true
+				// Counting files too, since a single file is usually the answer —
+				// except with --versions, where it is never the answer: hidden
+				// bytes are charged to the directory beside a file's history, not
+				// to the file, so every file row would be a zero.
+				opts.All = !opts.Versions
 			}
 
 			if opts.Versions && opts.Summarize {
@@ -742,7 +748,7 @@ func newDuCmd(app *App) *cobra.Command {
 				items = append(items, got...)
 			}
 			if ranking {
-				items = biggestFirst(items, opts.Top)
+				items = biggestFirst(items, opts.Top, opts.Versions)
 			}
 
 			if opts.Versions {
@@ -797,15 +803,29 @@ type duOptions struct {
 	Jobs      int
 }
 
-// biggestFirst ranks entries by size and keeps the n largest.
+// biggestFirst ranks entries and keeps the n largest, by whichever figure the
+// command was asked about: the total, or with hidden set the part of it that no
+// listing shows.
 //
-// Ties break on the path so that two directories of equal size do not swap
-// places between runs, which would make the output useless for comparing one
-// listing against another.
-func biggestFirst(items []duEntry, n int) []duEntry {
+// Which one matters. "--versions --top" asks where the bytes nobody can see
+// are, and ranking those rows by their totals answers a different question —
+// the largest directories, which is what plain --top already says. A directory
+// can be the biggest thing in the tree and have no history at all.
+//
+// Ties break on the path so that two entries of equal size do not swap places
+// between runs, which would make the output useless for comparing one listing
+// against another.
+func biggestFirst(items []duEntry, n int, hidden bool) []duEntry {
+	size := func(it duEntry) int64 { return it.Size }
+	if hidden {
+		size = func(it duEntry) int64 { return it.Unlisted }
+		// A row with nothing hidden is noise in a ranking of hidden bytes, and
+		// most rows are such a row.
+		items = slices.DeleteFunc(items, func(it duEntry) bool { return it.Unlisted == 0 })
+	}
 	slices.SortStableFunc(items, func(a, b duEntry) int {
-		if a.Size != b.Size {
-			return cmp.Compare(b.Size, a.Size)
+		if sa, sb := size(a), size(b); sa != sb {
+			return cmp.Compare(sb, sa)
 		}
 		return cmp.Compare(a.Path, b.Path)
 	})
@@ -876,8 +896,13 @@ func (a *App) renderHiddenUsage(items []duEntry, opts duOptions) error {
 		}
 	}
 	if hidden > 0 {
-		a.out.Msg("%s is charged to you but shown by no listing, almost always earlier "+
-			"versions of files. 'cernbox versions list FILE' shows them for one file.",
+		// Not stated as a fact, because it is an inference from a subtraction and
+		// the subtraction can be wrong: a storage that reports a directory total
+		// out of date produces hidden bytes that are not there. Measured in the
+		// development instance — an empty directory charged 163 MB.
+		a.out.Msg("%s is charged to you but shown by no listing. That is usually earlier "+
+			"versions of files, which 'cernbox versions list FILE' shows for one file; "+
+			"it can also be a directory total the storage has not brought up to date.",
 			output.HumanSize(hidden))
 	}
 	return nil

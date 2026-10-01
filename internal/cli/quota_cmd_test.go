@@ -79,10 +79,13 @@ func TestQuotaVersionsSplitsFilesFromVersions(t *testing.T) {
 	}
 }
 
-// TestQuotaReportsWhatTheTreeDoesNotExplain: whether a recycle bin shares the
-// space's quota node is a deployment's choice, so the report reconciles instead
-// of assuming. Measured on the dev instance the trash is charged elsewhere; a
-// deployment where it is not would show up here rather than silently not add up.
+// TestQuotaReportsWhatTheTreeDoesNotExplain: the report reconciles instead of
+// assuming, and names no cause for the remainder.
+//
+// It used to blame a recycle bin sharing the quota node, which is measurably
+// wrong on the one instance anybody can check: deleting a file there returns
+// the quota at once, so the bin has a node of its own. A cause that is
+// sometimes false sends the reader somewhere there is nothing to find.
 func TestQuotaReportsWhatTheTreeDoesNotExplain(t *testing.T) {
 	box := newTestBox(t)
 	// The fake reports 524288 used, far more than the tree holds.
@@ -95,8 +98,11 @@ func TestQuotaReportsWhatTheTreeDoesNotExplain(t *testing.T) {
 	if !strings.Contains(stdout, "Outside the tree") {
 		t.Errorf("the unexplained remainder is not reported:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "recycle bin") {
-		t.Errorf("the remainder should say what usually causes it:\n%s", stderr)
+	if !strings.Contains(stderr, "outside its own directory") {
+		t.Errorf("the remainder is not explained at all:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "recycle bin") {
+		t.Errorf("the remainder names a cause the measurements disagree with:\n%s", stderr)
 	}
 }
 

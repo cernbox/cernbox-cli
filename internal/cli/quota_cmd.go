@@ -206,23 +206,36 @@ func (a *App) renderQuota(ctx context.Context, s client.Space, versions bool) er
 	}
 
 	if versions && rep.Versions > 0 {
-		a.out.Msg("%s is earlier versions of files. They appear in no listing and cannot "+
-			"be deleted on their own; the space comes back when a file is deleted and then "+
-			"purged from the trash.", output.HumanSize(rep.Versions))
+		a.out.Msg("%s is charged to the space and appears in no listing, which is usually "+
+			"earlier versions of files. Those cannot be deleted on their own; the space "+
+			"comes back when a file is deleted and then purged from the trash.",
+			output.HumanSize(rep.Versions))
 	} else if !versions {
 		a.out.Msg("'cernbox quota --versions' splits that into files and their earlier versions.")
 	}
 	if rep.Unaccounted > 0 {
-		a.out.Msg("%s is charged to this space from outside its directory, which is usually "+
-			"a recycle bin sharing the quota.", output.HumanSize(rep.Unaccounted))
+		// No cause named. A recycle bin sharing the quota node would do it, but
+		// measured against the development instance it does not: deleting a file
+		// there returned the quota at once, so the bin has a node of its own.
+		// Naming a cause that the one environment anybody can check disagrees
+		// with is worse than naming none.
+		a.out.Msg("%s is charged to this space from outside its own directory.",
+			output.HumanSize(rep.Unaccounted))
 	}
 	if rep.InTree > rep.Used {
 		// Not an error and not over quota: the quota and the directory total are
 		// separate pieces of storage bookkeeping, updated at different moments, so
-		// one lags the other after anything is written or deleted in bulk.
+		// they disagree after anything is written or deleted in bulk.
+		//
+		// This used to promise they both settle within a minute. They do not
+		// always: the development instance reports 37 bytes of quota against a
+		// directory total of 753 MB, and has done for over a week. A reassurance
+		// that is sometimes false is worse than none, because the difference is
+		// then read as being about the files.
 		a.out.Msg("The directory is reported as larger than the quota says is used. " +
-			"The two figures are maintained separately, so one lags the other after " +
-			"a lot of writing or deleting; both settle within a minute or so.")
+			"The two figures are maintained separately, so they disagree after a lot " +
+			"of writing or deleting. Usually one catches up within a minute, but it " +
+			"can stay behind for much longer, so the quota is the figure to trust.")
 	}
 	return nil
 }

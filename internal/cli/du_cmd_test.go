@@ -274,21 +274,87 @@ func TestDuVersionsRejectsSummarize(t *testing.T) {
 	}
 }
 
-// TestDuVersionsWorksWithTop: the two flags answer one question together — which
-// of the big things is big because of its history.
+// rankingTree makes the two rankings disagree, which is the only way to tell
+// them apart: both directories have hidden bytes, so neither is filtered out,
+// and they come in opposite orders depending on which figure is ranked.
+//
+//	rank/big/      10000 visible,  100 hidden  → charged 10100, hidden  100
+//	rank/history/    100 visible, 5000 hidden  → charged  5100, hidden 5000
+//
+// A fixture where the big directory had nothing hidden would not do: it would
+// be dropped for having no history whatever the sort key was, and a test on it
+// passes with the ranking put back the way it was. Checked by doing exactly
+// that.
+func rankingTree(t *testing.T) *testBox {
+	box := newTestBox(t)
+	box.mkdir("/eos/user/e/einstein/rank/big")
+	box.mkdir("/eos/user/e/einstein/rank/history")
+	box.putFile("/eos/user/e/einstein/rank/big/a.bin", strings.Repeat("x", 10000))
+	box.putFile("/eos/user/e/einstein/rank/history/b.bin", strings.Repeat("x", 100))
+	box.hidden["/eos/user/e/einstein/rank/big"] = 100
+	box.hidden["/eos/user/e/einstein/rank/history"] = 5000
+	return box
+}
+
+// emptyHistoryTree is rankingTree without the token history in the big
+// directory, for the filtering half of the behaviour.
+func emptyHistoryTree(t *testing.T) *testBox {
+	box := rankingTree(t)
+	delete(box.hidden, "/eos/user/e/einstein/rank/big")
+	return box
+}
+
+// TestDuVersionsTopRanksByWhatIsHidden is the question the two flags together
+// are asked: not which directory is biggest, which plain --top already answers,
+// but which is big because of its history. Ranking these rows by their totals
+// answers the first question while printing the columns of the second, and the
+// largest directory in a tree frequently has the least history in it.
+func TestDuVersionsTopRanksByWhatIsHidden(t *testing.T) {
+	stdout, _, err := run(t, rankingTree(t), "du", "--versions", "--top", "1",
+		"/eos/user/e/einstein/rank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "/rank/history") {
+		t.Errorf("the directory holding the history is not the top row:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "/rank/big") {
+		t.Errorf("the bigger directory holds less history, so it does not rank "+
+			"first here — that is what plain --top is for:\n%s", stdout)
+	}
+}
+
+// TestDuVersionsTopLeavesOutRowsWithNothingHidden: most rows have nothing
+// hidden, and files never have any of their own — a file's history is charged
+// to the directory beside it — so neither belongs in this ranking.
+func TestDuVersionsTopLeavesOutRowsWithNothingHidden(t *testing.T) {
+	stdout, _, err := run(t, emptyHistoryTree(t), "du", "--versions", "--top", "20",
+		"/eos/user/e/einstein/rank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want only the one with history:\n%s", len(rows), stdout)
+	}
+}
+
+// TestDuVersionsWorksWithTop: --top still widens the walk and rolls up, so the
+// row it keeps carries the bytes from below it.
 func TestDuVersionsWorksWithTop(t *testing.T) {
 	stdout, _, err := run(t, hiddenTree(t), "du", "--versions", "--top", "2",
 		"/eos/user/e/einstein/proj")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want 2:\n%s", len(rows), stdout)
+	charged, listed, unlisted := columns(t, stdout, "/eos/user/e/einstein/proj/sub")
+	if charged != "2000" || listed != "500" || unlisted != "1500" {
+		t.Errorf("sub = charged %s, listed %s, unlisted %s; want 2000/500/1500\n%s",
+			charged, listed, unlisted, stdout)
 	}
-	// sub is charged 2000, a.bin 1000, so sub ranks first.
-	if !strings.HasSuffix(rows[0], "/proj/sub") {
-		t.Errorf("first row = %q, want proj/sub\n%s", rows[0], stdout)
+	// a.bin is a file with no history, and --versions asks about history.
+	if strings.Contains(stdout, "a.bin") {
+		t.Errorf("a file with no history of its own is in the ranking:\n%s", stdout)
 	}
 }
 
