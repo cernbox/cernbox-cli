@@ -53,6 +53,7 @@ bearer = "{{ grpc.services.authprovider[0].address }}"
 machine = "{{ grpc.services.authprovider[1].address }}"
 ocmshares = "{{ grpc.services.authprovider[2].address }}"
 kerberos = "{{ grpc.services.authprovider[3].address }}"
+publicshares = "{{ grpc.services.authprovider[4].address }}"
 
 [[grpc.services.authprovider]]
 auth_manager = "json"
@@ -88,6 +89,15 @@ keytab = "/krb5-share/service.keytab"
 realm = "TEST.CERN.CH"
 user_claim = "username"
 
+# Opening a public link authenticates as the link itself, through this
+# provider. Without it every anonymous request answered 500 with "auth type not
+# found: publicshares": no public link worked here at all, of any type, and the
+# integration suite only ever covered creating them.
+[[grpc.services.authprovider]]
+auth_manager = "publicshares"
+
+[grpc.services.authprovider.auth_managers.publicshares]
+
 
 ### STORAGE ###
 
@@ -104,6 +114,16 @@ home_provider = "/"
 # share can be listed and read like any other path.
 "/ocm" = {"address" = "{{ grpc.services.storageprovider[1].address }}"}
 "ocm" = {"address" = "{{ grpc.services.storageprovider[1].address }}"}
+# Opening a public link resolves to /public/<token>, which ocdav jails every
+# such request to, so it needs a provider of its own: without this rule the
+# path fell through the catch-all to EOS, which answered "no such file".
+"/public" = {"address" = "{{ grpc.services.publicstorageprovider.address }}"}
+"public" = {"address" = "{{ grpc.services.publicstorageprovider.address }}"}
+
+# Translates /public/<token> into whatever the link points at.
+[grpc.services.publicstorageprovider]
+mount_path = "/public/"
+mount_id = "publiclink"
 
 [[grpc.services.storageprovider]]
 driver = "eos"
@@ -130,6 +150,22 @@ quota_node = "/eos/user"
 # covered by the unit tests.
 max_recycle_entries = 200000
 user_layout = "{{substr 0 1 .Username}}/{{.Username}}"
+# Accesses on behalf of an external identity — a public link, a lightweight or
+# federated account — are performed in EOS as a service account rather than as
+# the caller, defaulting to cboxexternal/193339, which exists in production and
+# not here. Without an identity EOS knows, uploading through a public link
+# fails at the storage with "Operation not permitted", long after reva has
+# authorised it.
+#
+# Pointed at einstein for the tests. That is a simplification and not what a
+# deployment does — here a link writes as einstein whosever folder it is on,
+# which is only harmless because this instance has two users and nothing
+# private in it. It has to be set on the dataprovider as well as the storage
+# provider, because the upload itself goes through the former.
+external_accounts_user_name = "einstein"
+external_accounts_user_uid = "10000"
+external_accounts_user_gid = "10000"
+
 use_grpc = true
 gatewaysvc = "localhost:19000"
 grpc_auth_key = "eos_auth_key"
@@ -337,6 +373,12 @@ mount_id = "localhome"
 namespace = "/"
 quota_node = "/eos/user"
 user_layout = "{{substr 0 1 .Username}}/{{.Username}}"
+# See the storage provider's eos block: the upload through a public link is
+# done by this service, so the external-account identity has to be set here too.
+external_accounts_user_name = "einstein"
+external_accounts_user_uid = "10000"
+external_accounts_user_gid = "10000"
+
 use_grpc = true
 gatewaysvc = "localhost:19000"
 grpc_auth_key = "eos_auth_key"

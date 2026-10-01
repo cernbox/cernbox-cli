@@ -314,6 +314,16 @@ A few decisions in it are worth stating, because the obvious alternative is wors
 
 **Nothing it prints is a secret.** The output exists to be pasted into a support thread, so it names the provider, the expiry and the paths, and never a token, a password or the contents of a credential cache. A test asserts it.
 
+## Upload-only links
+
+`link create --role upload` sends the link type `createOnly`, and what that grants was measured against a real instance rather than read off the permission set, because the two do not agree.
+
+A stranger holding the link **can upload**: an unauthenticated `PUT` is accepted with `201`. They **cannot download**: a `GET` of a file that was already in the folder is refused with `403`. And in this reva build they **cannot list** it either — a `PROPFIND` fails, because the gateway rejects `ListContainer` for the link's token scope and surfaces it as a `500`. A viewer link on the same folder lists fine, and the uploader permission set contains `ListContainer` ([pkg/permissions/role.go](https://github.com/cs3org/reva/blob/master/pkg/permissions/role.go)), so that rejection looks like a bug rather than a decision. Do not design around it in either direction: the help text warns that an upload link can list the folder, because the permissions say it may and a fix would make it so.
+
+Two more things the measurements settled. An upload is **renamed** — `caricato.txt` arrived as `caricato_dcfwq.txt`, with no collision to avoid — so nothing already in the folder can be overwritten and the sender does not pick the final name. And the type is **folder only**: reva refuses `createOnly` on a file, so the CLI refuses it first, since the server's message is about matching permission sets and never mentions the reason.
+
+The server accepts both `createOnly` and `upload` for this. The CLI offers one name and sends `createOnly`, because reva's reverse mapping tests the same condition for both and its `upload` branch is therefore unreachable: a drop link always reads back as `createOnly`.
+
 ## Unix conventions
 
 The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.

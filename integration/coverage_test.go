@@ -57,7 +57,7 @@ var coveredCommands = map[string]string{
 	"share audit":    "TestShareAuditFindsInheritedAccess",
 
 	// Public links.
-	"link create":   "TestPublicLinkLifecycle, TestLinkWithExpiryAndName",
+	"link create":   "TestPublicLinkLifecycle, TestLinkWithExpiryAndName, TestUploadLinkTakesFilesFromAStranger, TestUploadLinkNeedsAFolder",
 	"link list":     "TestPublicLinkLifecycle",
 	"link update":   "TestLinkUpdateKeepsTheSameAddress, TestLinkUpdateNeedsSomethingToChange",
 	"link remove":   "TestPublicLinkLifecycle",

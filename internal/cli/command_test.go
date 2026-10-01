@@ -394,7 +394,19 @@ func (b *testBox) serveGraphItem(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"value":[{"id":"share-1","roles":["fb6c3e19-e378-47e5-b277-9732f9de6e21"],
 		  "grantedToV2":{"user":{"id":"marie","displayName":"Marie Curie"}}}]}`)
 	case strings.HasSuffix(r.URL.Path, "/createLink"):
-		fmt.Fprint(w, `{"id":"link-1","link":{"type":"view","webUrl":"https://cernbox.test/s/abc"}}`)
+		// The type is echoed back, as the server does, and the body recorded.
+		// A fake that always answered "view" could not tell one link type from
+		// another, so nothing could check which one was asked for.
+		body := readBody(r)
+		b.postBodies = append(b.postBodies, body)
+		linkType := "view"
+		var req struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(body), &req); err == nil && req.Type != "" {
+			linkType = req.Type
+		}
+		fmt.Fprintf(w, `{"id":"link-1","link":{"type":%q,"webUrl":"https://cernbox.test/s/abc"}}`, linkType)
 	case strings.HasSuffix(r.URL.Path, "/permissions"):
 		if body, ok := b.sharesOn[pathFromItemURL(r.URL.Path)]; ok {
 			fmt.Fprintf(w, `{"value":[%s]}`, body)

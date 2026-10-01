@@ -251,6 +251,14 @@ cernbox link update report.pdf LINK_ID --role viewer
 cernbox link password report.pdf LINK_ID
 ```
 
+`--role upload` makes the opposite of a link you hand out: a folder people can put files into without an account, and without being able to read what is already there. It is how you collect something from somebody who has no CERN account at all.
+
+```bash
+cernbox link create incoming --role upload --expiry 2026-12-31
+```
+
+Give it a folder of its own. An upload link carries permission to list the folder, so do not point it at a directory whose file names you would rather not show. Uploads get a suffix added to their name, so nothing already there can be written over, and the sender does not choose the final name.
+
 To share with someone at another institution, exchange an invitation once and then share as usual:
 
 ```bash

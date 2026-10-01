@@ -272,10 +272,21 @@ func newLinkCreateCmd(app *App) *cobra.Command {
 	var withPassword bool
 
 	cmd := &cobra.Command{
-		Use:     "create PATH",
-		Short:   "Create a public link",
-		Example: "  cernbox link create /eos/user/g/gdelmont/report.pdf --role viewer --expiry 2026-12-31",
-		Args:    cobra.ExactArgs(1),
+		Use:   "create PATH",
+		Short: "Create a public link",
+		Long: "Create a link anybody can open, with no account.\n" +
+			"\n" +
+			"--role upload makes a drop box instead: a folder people can put files into\n" +
+			"without being able to read what is already there. Use it to collect things\n" +
+			"rather than to hand them out. It needs a folder, and give it one of its own:\n" +
+			"an upload link carries permission to list the folder, so do not point it at a\n" +
+			"directory whose file names you would not show the holder.\n" +
+			"\n" +
+			"An upload keeps the name the sender chose only if the server lets it; it adds\n" +
+			"a suffix, so nothing already there can be written over.",
+		Example: "  cernbox link create /eos/user/g/gdelmont/report.pdf --role viewer --expiry 2026-12-31\n" +
+			"  cernbox link create /eos/user/g/gdelmont/incoming --role upload",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
 			defer cancel()
@@ -304,6 +315,10 @@ func newLinkCreateCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !info.IsDir && !linkTypeAllowsFile(linkType) {
+				return cberr.Usagef(
+					"an upload link needs a folder to put things in, and %s is a file", info.Path)
+			}
 			perm, err := app.client.CreateLink(ctx, info.ID, client.LinkOptions{
 				Type: linkType, DisplayName: name, Password: password, Expiry: exp,
 			})
@@ -319,26 +334,42 @@ func newLinkCreateCmd(app *App) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&role, "role", "viewer", "viewer or editor")
+	cmd.Flags().StringVar(&role, "role", "viewer", "viewer, editor, or upload")
 	cmd.Flags().StringVar(&name, "name", "", "label shown next to the link")
 	cmd.Flags().StringVar(&expiry, "expiry", "", "expiry date, YYYY-MM-DD")
 	cmd.Flags().BoolVar(&withPassword, "password", false, "protect the link with a password, prompted for")
 	return cmd
 }
 
-// linkTypeOf maps what a user types for --role onto the two link types the
-// server knows. The spellings are accepted rather than corrected because
-// "--role read" and "--role view" are the same intention.
+// linkTypeOf maps what a user types for --role onto the link types the server
+// knows. The spellings are accepted rather than corrected because "--role read"
+// and "--role view" are the same intention.
+//
+// Upload has two names on the server, createOnly and upload, and both mean the
+// same permission set. Only one is offered here, and it sends createOnly,
+// because that is also the one a link reads back as: reva's reverse mapping
+// tests the same condition for both, so its upload branch is unreachable and a
+// drop link always lists as createOnly. Two names for one thing, one of which
+// never comes back, is not a choice worth giving anybody.
 func linkTypeOf(role string) (string, error) {
 	switch role {
 	case "viewer", "view", "read":
 		return "view", nil
 	case "editor", "edit", "write":
 		return "edit", nil
+	case "upload", "drop":
+		return "createOnly", nil
 	default:
-		return "", cberr.Usagef("unknown link role %q: want viewer or editor", role)
+		return "", cberr.Usagef("unknown link role %q: want viewer, editor, or upload", role)
 	}
 }
+
+// linkTypeAllowsFile reports whether a link type can be put on a file.
+//
+// An upload link cannot: there is nowhere to upload to in a file, and the
+// server refuses it with a message about matching permissions that says nothing
+// about the reason.
+func linkTypeAllowsFile(linkType string) bool { return linkType != "createOnly" }
 
 func newLinkUpdateCmd(app *App) *cobra.Command {
 	var role, name, expiry string
@@ -376,6 +407,10 @@ func newLinkUpdateCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !info.IsDir && !linkTypeAllowsFile(update.Type) {
+				return cberr.Usagef(
+					"an upload link needs a folder to put things in, and %s is a file", info.Path)
+			}
 			perm, err := app.client.UpdateLink(ctx, info.ID, args[1], update)
 			if err != nil {
 				return err
@@ -384,7 +419,7 @@ func newLinkUpdateCmd(app *App) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&role, "role", "", "new role: viewer or editor")
+	cmd.Flags().StringVar(&role, "role", "", "new role: viewer, editor, or upload")
 	cmd.Flags().StringVar(&name, "name", "", "new label shown next to the link")
 	cmd.Flags().StringVar(&expiry, "expiry", "", "new expiry date, YYYY-MM-DD")
 	cmd.Flags().BoolVar(&noExpiry, "no-expiry", false, "let the link stay usable indefinitely")
