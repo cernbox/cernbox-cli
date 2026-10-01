@@ -28,6 +28,7 @@ var coveredCommands = map[string]string{
 	"find": "TestFindFallsBackToWalking, TestFindPredicates",
 	"du":   "TestDu",
 	"cat":  "TestMoveAndCat",
+	"tail": "TestTailShowsTheEndOfAFile, TestTailFollowPrintsWhatWasAppended, TestTailRefusesADirectory",
 
 	// Namespace.
 	"mkdir": "TestMkdirListAndRemove, TestMkdirParents",

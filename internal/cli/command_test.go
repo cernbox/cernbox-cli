@@ -486,6 +486,27 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		// Byte ranges, which the real server honours: without them nothing that
+		// reads the end of a file — a resumed download, tail — could be tested
+		// here, because the client refuses a response that ignored the Range it
+		// asked for rather than corrupting what it already has.
+		if hdr := r.Header.Get("Range"); strings.HasPrefix(hdr, "bytes=") {
+			var offset int
+			if _, err := fmt.Sscanf(hdr, "bytes=%d-", &offset); err == nil {
+				if offset > len(body) {
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(body)))
+					http.Error(w, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
+					return
+				}
+				part := body[offset:]
+				w.Header().Set("Content-Range",
+					fmt.Sprintf("bytes %d-%d/%d", offset, len(body)-1, len(body)))
+				w.Header().Set("Content-Length", fmt.Sprint(len(part)))
+				w.WriteHeader(http.StatusPartialContent)
+				fmt.Fprint(w, part)
+				return
+			}
+		}
 		// Stand in for a file that is visible before it has been written. The
 		// storage creates the entry and the bytes follow, so a reader can catch
 		// one part way through — and a short read is not an error, which is how

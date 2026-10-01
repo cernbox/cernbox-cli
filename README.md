@@ -92,6 +92,18 @@ If a quota looks bigger than the files you can see, it usually is: earlier versi
 
 `mkdir`, `touch`, `rm` and `mv` work as you would expect. They follow the flags you already type — `-p`, `-r`, `-f` — and are a little more careful than the local versions: `mv` and `cp` will not overwrite without `-f`, and `touch` will not empty a file that already exists.
 
+## Following a file that is still being written
+
+```bash
+cernbox tail job.log              # the last ten lines
+cernbox tail -f -n 50 job.log     # and keep printing what gets appended
+cernbox tail -f --timeout 1h job.log
+```
+
+This is for the log a batch job is writing into CERNBox: only the bytes that were appended are transferred, so following a large log costs almost nothing. Following polls, because the server has nothing to announce a change with, and `--interval` sets how often.
+
+**It needs the storage to serve byte ranges, and the EOS behind this instance currently does not** — it answers a ranged request with chunked framing inside a body it has already given a length, so the bytes are not the file's. The client refuses that rather than print the wrong thing, and says so. The same gap silently corrupted a resumed `cernbox get` until it was caught; see [docs/behaviour.md](docs/behaviour.md).
+
 ## How much space you have
 
 ```bash

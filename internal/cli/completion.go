@@ -409,6 +409,7 @@ func (a *App) argCompletions() map[string]completeFunc {
 		"doctor": none,
 
 		"ls":   remote,
+		"tail": remote,
 		"stat": byPosition(remote),
 		"find": byPosition(remote),
 		"du":   remote,

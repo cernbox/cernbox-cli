@@ -170,6 +170,7 @@ func newRootCmd(app *App) *cobra.Command {
 		newFindCmd(app),
 		newDuCmd(app),
 		newCatCmd(app),
+		newTailCmd(app),
 		newMkdirCmd(app),
 		newTouchCmd(app),
 		newRmCmd(app),

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -369,8 +370,70 @@ func (c *Client) Download(ctx context.Context, p string, offset int64) (io.ReadC
 		return nil, 0, cberr.New(cberr.KindOther, "resume download", p,
 			"the server ignored the requested byte range")
 	}
+	if offset > 0 {
+		body, err := guardChunkedRange(resp, p)
+		if err != nil {
+			drain(resp)
+			return nil, 0, err
+		}
+		return body, resp.ContentLength, nil
+	}
 	return resp.Body, resp.ContentLength, nil
 }
+
+// guardChunkedRange refuses a ranged response whose body carries chunked
+// framing inside it.
+//
+// EOS does this, measured against XRootD through reva: a request for
+// bytes=136- of a 191-byte file came back 206, Content-Length 55,
+// Content-Range bytes 136-190/191, no Transfer-Encoding — and a body beginning
+// "37\r\n", 0x37 being 55. The framing is counted in the length, so four bytes
+// of the file are lost off the end and four bytes of hex appear at the front.
+// reva forwards it faithfully and so would this client.
+//
+// Nothing about the length gives it away, since the framing is inside a body
+// whose length is what it claims. What does give it away is that the framing
+// spells out the body's own length: a response of n bytes starting with the
+// hexadecimal of n followed by CRLF is this bug and essentially nothing else,
+// because real content would have to begin by stating its own size in hex.
+//
+// Turning it into an error matters beyond any one command. A resumed download
+// restarts a .part file with a range, so without this a transfer interrupted
+// and resumed produces a file of exactly the right length with the wrong bytes
+// in it, and nothing says a word.
+func guardChunkedRange(resp *http.Response, p string) (io.ReadCloser, error) {
+	if resp.ContentLength <= 0 {
+		return resp.Body, nil
+	}
+	marker := fmt.Sprintf("%x\r\n", resp.ContentLength)
+
+	// Only as much as the marker, kept and put back in front of the body so
+	// that a sound response is passed through unread.
+	head := make([]byte, len(marker))
+	n, err := io.ReadFull(resp.Body, head)
+	head = head[:n]
+	if string(head) == marker {
+		return nil, cberr.New(cberr.KindOther, "read a byte range of", p,
+			"the storage answered with chunked framing inside a body it gave a "+
+				"length, so the bytes are not the file's. Resuming a download and "+
+				"following a file both need working byte ranges; this needs fixing "+
+				"in the storage, not here")
+	}
+	body := io.NopCloser(io.MultiReader(bytes.NewReader(head), resp.Body))
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return nil, cberr.Wrap(cberr.KindOther, "download", p, err)
+	}
+	return &joinedBody{Reader: body, closer: resp.Body}, nil
+}
+
+// joinedBody reads the peeked head and then the rest, and closes the original
+// body rather than the wrapper.
+type joinedBody struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (b *joinedBody) Close() error { return b.closer.Close() }
 
 // Upload writes a file in a single PUT. Large files should go through
 // UploadResumable instead.

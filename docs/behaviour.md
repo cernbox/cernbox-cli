@@ -324,6 +324,27 @@ Two more things the measurements settled. An upload is **renamed** — `caricato
 
 The server accepts both `createOnly` and `upload` for this. The CLI offers one name and sends `createOnly`, because reva's reverse mapping tests the same condition for both and its `upload` branch is therefore unreachable: a drop link always reads back as `createOnly`.
 
+## Byte ranges, and a storage that gets them wrong
+
+`tail` and a resumed download both ask for part of a file, with `Range: bytes=N-`. Against the EOS behind the development instance that does not work, and the way it fails is worth writing down because it is invisible.
+
+Asked for `bytes=136-` of a 191-byte file, EOS answers:
+
+```
+206 PARTIAL_CONTENT   Content-Length: 55   Content-Range: bytes 136-190/191
+Server: XRootD        Transfer-Encoding: (none)
+```
+
+and a body beginning `37\r\n` — `0x37` being 55. XRootD has written chunked framing into a body it has already given a `Content-Length`, and the framing is counted in that length. So four bytes of hexadecimal arrive at the front and four bytes of the file fall off the end. reva forwards the 55 bytes faithfully; nothing in the headers says anything is wrong.
+
+Nothing about the *length* gives it away either, which is why this went unnoticed. What does give it away is that the framing spells out the body's own length: a ranged response of n bytes that begins with the hexadecimal of n followed by CRLF is this bug and essentially nothing else, since real content would have to start by stating its own size in hex. `Download` checks exactly that when an offset was asked for, and refuses.
+
+**That check matters well beyond `tail`.** The transfer engine resumes an interrupted download by restarting its `.part` file with a range, so before the check a `cernbox get` that was interrupted and resumed produced a file of exactly the right length with the wrong bytes in it, and said nothing. It is now an error that names the storage as the thing to fix.
+
+Two things this is not. It is not an HTTP/1.1 problem: the corruption is identical over HTTP/2, which was measured after guessing wrong about it. And it is not reva's doing — its download helper sets `Content-Range` and copies exactly `ranges[0].Length` bytes, and the response it receives from EOS is already framed.
+
+The integration tests for `tail` probe for this and skip with the reason, the way the version tests skip where the storage keeps no history. They will start covering the command the day the storage is fixed.
+
 ## Unix conventions
 
 The filesystem commands follow their coreutils namesakes, including the flags people type without thinking: `-p` on `mkdir`, `-r`/`-R` and `-f` on `rm` and `cp`, `-c` on `touch`, `-h` on `ls` and `du`.
