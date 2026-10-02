@@ -4,23 +4,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
 )
 
-// fakeEditor writes a shell script standing in for an editor, and returns its
-// path for --editor. A script rather than a seam in the code: the point of this
-// command is that it runs somebody else's program against a file on disk, and a
-// test that stubbed that out would be testing the wrong thing.
+// fakeEditor returns an --editor that acts out script, in the language
+// fakeProgram describes. A real program rather than a seam in the code: the
+// point of this command is that it runs somebody else's program against a file
+// on disk, and a test that stubbed that out would be testing the wrong thing.
 func fakeEditor(t *testing.T, script string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "editor.sh")
-	if err := os.WriteFile(p, []byte("#!/bin/sh\nset -e\n"+script+"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return p
+	return fakeProgram(t, script)
 }
 
 // putCount is how many times a path was written.
@@ -38,7 +35,7 @@ func putCount(box *testBox, name string) int {
 // "cernbox edit notes.txt" from anywhere, landing somewhere predictable.
 func TestEditPutsABareNameInTheEditFolder(t *testing.T) {
 	box := newTestBox(t)
-	editor := fakeEditor(t, `printf 'hello from the editor' > "$1"`)
+	editor := fakeEditor(t, `write $1 "hello from the editor"`)
 
 	stdout, stderr, err := run(t, box, "edit", "notes.txt", "--editor", editor)
 	if err != nil {
@@ -63,7 +60,7 @@ func TestEditPutsABareNameInTheEditFolder(t *testing.T) {
 func TestEditTakesAPathLiterally(t *testing.T) {
 	box := newTestBox(t)
 	box.mkdir("/eos/user/e/einstein/Documents")
-	editor := fakeEditor(t, `printf 'x' > "$1"`)
+	editor := fakeEditor(t, `write $1 x`)
 
 	if _, _, err := run(t, box, "edit", "Documents/report.md", "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -75,7 +72,7 @@ func TestEditTakesAPathLiterally(t *testing.T) {
 
 func TestEditFolderIsConfigurable(t *testing.T) {
 	box := newTestBox(t)
-	editor := fakeEditor(t, `printf 'x' > "$1"`)
+	editor := fakeEditor(t, `write $1 x`)
 
 	if _, _, err := run(t, box, "edit", "todo.md", "--in", "Scratch", "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -88,7 +85,7 @@ func TestEditFolderIsConfigurable(t *testing.T) {
 func TestEditFolderFromEnvironment(t *testing.T) {
 	box := newTestBox(t)
 	t.Setenv("CERNBOX_EDIT_FOLDER", "Inbox")
-	editor := fakeEditor(t, `printf 'x' > "$1"`)
+	editor := fakeEditor(t, `write $1 x`)
 
 	if _, _, err := run(t, box, "edit", "note.txt", "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -104,7 +101,7 @@ func TestEditOpensTheExistingContent(t *testing.T) {
 	box := newTestBox(t)
 	box.mkdir("/eos/user/e/einstein/myfiles")
 	box.putFile("/eos/user/e/einstein/myfiles/notes.txt", "first line\n")
-	editor := fakeEditor(t, `printf 'second line\n' >> "$1"`)
+	editor := fakeEditor(t, `append $1 "second line\n"`)
 
 	if _, _, err := run(t, box, "edit", "notes.txt", "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -120,9 +117,9 @@ func TestEditOpensTheExistingContent(t *testing.T) {
 func TestEditSavesWhileTheEditorIsStillOpen(t *testing.T) {
 	box := newTestBox(t)
 	editor := fakeEditor(t, `
-printf 'draft one' > "$1"
-sleep 0.4
-printf 'draft two' > "$1"
+write $1 "draft one"
+sleep 400ms
+write $1 "draft two"
 `)
 
 	if _, _, err := run(t, box, "edit", "notes.txt",
@@ -145,11 +142,11 @@ printf 'draft two' > "$1"
 func TestEditDetectsASaveByRename(t *testing.T) {
 	box := newTestBox(t)
 	editor := fakeEditor(t, `
-printf 'in place' > "$1"
-sleep 0.4
-printf 'by rename' > "$1.new"
-mv "$1.new" "$1"
-sleep 0.4
+write $1 "in place"
+sleep 400ms
+write $1.new "by rename"
+rename $1.new $1
+sleep 400ms
 `)
 
 	if _, _, err := run(t, box, "edit", "notes.txt",
@@ -166,9 +163,9 @@ sleep 0.4
 func TestEditWithNoWatchOnlySavesAtTheEnd(t *testing.T) {
 	box := newTestBox(t)
 	editor := fakeEditor(t, `
-printf 'one' > "$1"
-sleep 0.3
-printf 'two' > "$1"
+write $1 one
+sleep 300ms
+write $1 two
 `)
 
 	if _, _, err := run(t, box, "edit", "notes.txt",
@@ -211,10 +208,10 @@ func TestEditSavingTheSameContentUploadsNothing(t *testing.T) {
 	box.mkdir("/eos/user/e/einstein/myfiles")
 	box.putFile("/eos/user/e/einstein/myfiles/notes.txt", "unchanged")
 	editor := fakeEditor(t, `
-sleep 0.2
-touch "$1"
-printf 'unchanged' > "$1"
-sleep 0.2
+sleep 200ms
+touch $1
+write $1 unchanged
+sleep 200ms
 `)
 
 	if _, _, err := run(t, box, "edit", "notes.txt",
@@ -240,7 +237,7 @@ func TestEditRefusesToClobberAConcurrentChange(t *testing.T) {
 		box.beforePut = nil
 	}
 
-	editor := fakeEditor(t, `printf 'my edit' > "$1"`)
+	editor := fakeEditor(t, `write $1 "my edit"`)
 	_, stderr, err := run(t, box, "edit", "notes.txt", "--editor", editor)
 
 	if cberr.KindOf(err) != cberr.KindConflict {
@@ -278,7 +275,7 @@ func TestEditForceOverwritesAConcurrentChange(t *testing.T) {
 		box.beforePut = nil
 	}
 
-	editor := fakeEditor(t, `printf 'my edit' > "$1"`)
+	editor := fakeEditor(t, `write $1 "my edit"`)
 	if _, _, err := run(t, box, "edit", "notes.txt", "--editor", editor, "--force"); err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +289,7 @@ func TestEditForceOverwritesAConcurrentChange(t *testing.T) {
 func TestEditKeepsTheWorkingCopyWhenTheUploadFails(t *testing.T) {
 	box := newTestBox(t)
 	box.failPath = "/eos/user/e/einstein/myfiles/notes.txt"
-	editor := fakeEditor(t, `printf 'precious' > "$1"`)
+	editor := fakeEditor(t, `write $1 precious`)
 
 	_, stderr, err := run(t, box, "edit", "notes.txt", "--editor", editor)
 	if err == nil {
@@ -362,7 +359,10 @@ func TestEditReportsAnEditorThatCannotRun(t *testing.T) {
 // about whether the file was written.
 func TestEditStillSavesWhenTheEditorFails(t *testing.T) {
 	box := newTestBox(t)
-	editor := fakeEditor(t, `printf 'saved anyway' > "$1"; exit 3`)
+	editor := fakeEditor(t, `
+write $1 "saved anyway"
+exit 3
+`)
 
 	_, stderr, err := run(t, box, "edit", "notes.txt", "--editor", editor)
 	if err != nil {
@@ -382,7 +382,7 @@ func TestEditCleansUpOnSuccess(t *testing.T) {
 	// The editor records the path it was given, so the test can check that the
 	// working copy is gone afterwards.
 	where := filepath.Join(t.TempDir(), "where")
-	editor := fakeEditor(t, `printf 'x' > "$1"; printf '%s' "$1" > `+where)
+	editor := fakeEditor(t, "write $1 x\nwrite "+quote(where)+" $1")
 
 	if _, _, err := run(t, box, "edit", "notes.txt", "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -442,10 +442,10 @@ func TestEditorCommandPrecedence(t *testing.T) {
 	if got, _ := app.editorCommand(editOptions{editorGiven: true}); got[0] != "env-editor" {
 		t.Errorf("got %v, want EDITOR", got)
 	}
-	// And vi in the end, as git and crontab do.
+	// And vi in the end, as git and crontab do, or Notepad on Windows.
 	t.Setenv("EDITOR", "")
-	if got, _ := app.editorCommand(editOptions{editorGiven: true}); got[0] != "vi" {
-		t.Errorf("got %v, want vi as the last resort", got)
+	if got, _ := app.editorCommand(editOptions{editorGiven: true}); got[0] != fallbackEditor {
+		t.Errorf("got %v, want %s as the last resort", got, fallbackEditor)
 	}
 }
 
@@ -454,6 +454,9 @@ func TestEditorCommandPrecedence(t *testing.T) {
 // assumption about how a real editor writes a file. Skipped where vim is absent;
 // -es is its silent batch mode, which needs no terminal.
 func TestEditWithRealVim(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the wrapper below is a shell script")
+	}
 	vim, err := exec.LookPath("vim")
 	if err != nil {
 		t.Skip("vim is not installed")
@@ -465,7 +468,11 @@ func TestEditWithRealVim(t *testing.T) {
 
 	// A wrapper, because --editor splits on spaces and vim's arguments contain
 	// none that would survive it.
-	editor := fakeEditor(t, vim+` -u NONE -es -c ':normal Goline two' -c ':wq' "$1" </dev/null`)
+	editor := filepath.Join(t.TempDir(), "vim.sh")
+	script := "#!/bin/sh\nset -e\n" + vim + ` -u NONE -es -c ':normal Goline two' -c ':wq' "$1" </dev/null` + "\n"
+	if err := os.WriteFile(editor, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, _, err := run(t, box, "edit", "notes.txt", "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -487,7 +494,7 @@ func TestEditLocalFileUploadsOnSave(t *testing.T) {
 	if err := os.WriteFile(local, []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	editor := fakeEditor(t, `printf 'edited locally\n' >> "$1"`)
+	editor := fakeEditor(t, `append $1 "edited locally\n"`)
 
 	stdout, stderr, err := run(t, box, "edit", local, "--editor", editor)
 	if err != nil {
@@ -529,7 +536,7 @@ func TestEditLocalFileIsNotOverwrittenByTheServer(t *testing.T) {
 
 	// An editor that only reports what it was given to open.
 	seen := filepath.Join(dir, "seen")
-	editor := fakeEditor(t, `cat "$1" > `+seen)
+	editor := fakeEditor(t, "copy $1 "+quote(seen))
 
 	// A different file already has that name in CERNBox, so this is refused:
 	// 'put' wants --force before replacing a destination, and so does this.
@@ -570,9 +577,9 @@ func TestEditLocalFileSavesEveryChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	editor := fakeEditor(t, `
-printf 'one\n' >> "$1"
-sleep 0.4
-printf 'two\n' >> "$1"
+append $1 "one\n"
+sleep 400ms
+append $1 "two\n"
 `)
 
 	if _, _, err := run(t, box, "edit", local, "--editor", editor, "--interval", "50ms"); err != nil {
@@ -608,7 +615,7 @@ func TestEditLocalFileUploadsEvenIfTheEditorChangesNothing(t *testing.T) {
 func TestEditLocalFileCreatesItWhenMissing(t *testing.T) {
 	box := newTestBox(t)
 	local := filepath.Join(t.TempDir(), "new.txt")
-	editor := fakeEditor(t, `printf 'brand new\n' > "$1"`)
+	editor := fakeEditor(t, `write $1 "brand new\n"`)
 
 	if _, _, err := run(t, box, "edit", "file:"+local, "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -630,7 +637,7 @@ func TestEditLocalFileSurvivesAFailedUpload(t *testing.T) {
 	if err := os.WriteFile(local, []byte("keep me"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	editor := fakeEditor(t, `printf 'still here' > "$1"`)
+	editor := fakeEditor(t, `write $1 "still here"`)
 
 	_, _, err := run(t, box, "edit", local, "--editor", editor)
 	if err == nil {
@@ -660,7 +667,7 @@ func TestEditPrefersCERNBoxForAnUnmarkedPath(t *testing.T) {
 	box.putFile("/eos/user/e/einstein/Documents/both.txt", "the cernbox one")
 
 	seen := filepath.Join(t.TempDir(), "seen")
-	editor := fakeEditor(t, `cat "$1" > `+seen)
+	editor := fakeEditor(t, "copy $1 "+quote(seen))
 
 	if _, _, err := run(t, box, "edit", "/eos/user/e/einstein/Documents/both.txt",
 		"--editor", editor); err != nil {
@@ -684,7 +691,7 @@ func TestEditFallsBackToALocalPath(t *testing.T) {
 	if err := os.WriteFile(local, []byte("only here"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	editor := fakeEditor(t, `printf 'touched' >> "$1"`)
+	editor := fakeEditor(t, `append $1 touched`)
 
 	if _, _, err := run(t, box, "edit", local, "--editor", editor); err != nil {
 		t.Fatal(err)
@@ -723,12 +730,12 @@ func TestEditLocalFileTwiceNeedsNoForce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first := fakeEditor(t, `printf 'day two\n' >> "$1"`)
+	first := fakeEditor(t, `append $1 "day two\n"`)
 	if _, _, err := run(t, box, "edit", local, "--editor", first); err != nil {
 		t.Fatal(err)
 	}
 
-	second := fakeEditor(t, `printf 'day three\n' >> "$1"`)
+	second := fakeEditor(t, `append $1 "day three\n"`)
 	if _, _, err := run(t, box, "edit", local, "--editor", second); err != nil {
 		t.Fatalf("the second run should not need --force: %v", err)
 	}

@@ -1,0 +1,4 @@
+# LF everywhere, Windows checkouts included. Tests read files from the tree —
+# the documented configuration example, for one — and git's default there would
+# hand them CRLF.
+* text=auto eol=lf

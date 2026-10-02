@@ -101,7 +101,9 @@ func (a *App) writeArchive(ctx context.Context, paths []string, format, dest str
 	m.Stop()
 	if err != nil {
 		// Half an archive cannot be opened, so leaving it would only look like a
-		// download that worked. The error says what happened.
+		// download that worked. The error says what happened. Closed first,
+		// because Windows will not remove a file that is still open.
+		f.Close()
 		os.Remove(dest)
 		return cberr.Wrap(cberr.KindOther, "write archive", dest, err)
 	}

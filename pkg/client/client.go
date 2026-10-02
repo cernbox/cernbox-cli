@@ -273,6 +273,15 @@ func (c *Client) attempt(ctx context.Context, r request) (*http.Response, error)
 		}
 		body = b
 	}
+	// The body is ours to close until the transport takes it, which it does only
+	// in Do. Left open, a file being uploaded cannot be deleted on Windows, so
+	// an outbox that removes what it sent would fail on an empty file.
+	handedOver := false
+	defer func() {
+		if body != nil && !handedOver {
+			body.Close()
+		}
+	}()
 
 	req, err := http.NewRequestWithContext(ctx, r.method, r.url, body)
 	if err != nil {
@@ -307,6 +316,9 @@ func (c *Client) attempt(ctx context.Context, r request) (*http.Response, error)
 		}
 	}
 
+	// Do closes the request body whatever happens, but an empty one was swapped
+	// for http.NoBody and never reaches it.
+	handedOver = req.Body != http.NoBody
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, transportError(r, err)

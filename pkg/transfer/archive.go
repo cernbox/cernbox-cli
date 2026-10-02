@@ -142,9 +142,14 @@ func writeArchiveFile(target string, r io.Reader) (int64, error) {
 }
 
 // safeJoin resolves name against root and refuses anything that escapes it.
+//
+// IsLocal rather than a check for ".." and an absolute path, because on Windows
+// that is not all there is: "C:x" is relative to another drive's working
+// directory, "a:b" writes an alternate data stream, and "NUL" or "con.txt" open
+// a device.
 func safeJoin(root, name string) (string, error) {
 	cleaned := filepath.Clean(filepath.FromSlash(name))
-	if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) || cleaned == ".." {
+	if !filepath.IsLocal(cleaned) {
 		return "", cberr.New(cberr.KindOther, "extract archive", name,
 			"the archive contains an entry that would be written outside the destination")
 	}

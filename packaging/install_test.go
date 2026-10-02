@@ -27,6 +27,18 @@ import (
 
 const testVersion = "9.9.9"
 
+// TestMain skips the package on Windows. install.sh is for Linux and macOS: on
+// Windows it only says where the zip is, and the rest of what these tests check
+// — a shell script standing in for the binary, executable bits — has no
+// counterpart there.
+func TestMain(m *testing.M) {
+	if runtime.GOOS == "windows" {
+		fmt.Println("skipping: install.sh does not install on Windows")
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 // fakeRelease serves one release: the archive for this machine, and the checksum
 // list goreleaser publishes beside it.
 func fakeRelease(t *testing.T, corruptChecksum bool) (baseURL, archiveName string) {

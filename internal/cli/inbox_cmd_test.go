@@ -269,20 +269,14 @@ func keysOf(m map[string]string) []string {
 
 // ── the exec hook ────────────────────────────────────────────────────────────
 
-// hookScript writes a shell script that records every file it was handed, and
-// returns the script's path and the path of its log.
+// hookScript returns a hook that records every file it was handed and exits
+// with exitCode, and the path of its log.
 func hookScript(t *testing.T, exitCode int) (script, log string) {
 	t.Helper()
-	dir := t.TempDir()
-	log = filepath.Join(dir, "calls.log")
-	script = filepath.Join(dir, "hook.sh")
-	body := "#!/bin/sh\n" +
-		"printf '%s|%s|%s|%s\\n' \"$1\" \"$CERNBOX_INBOX_NAME\" " +
-		"\"$CERNBOX_INBOX_SIZE\" \"$CERNBOX_INBOX_REMOTE\" >> " + log + "\n" +
-		"exit " + itoa(exitCode) + "\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	log = filepath.Join(t.TempDir(), "calls.log")
+	script = fakeProgram(t, "append "+quote(log)+
+		` "$1|$CERNBOX_INBOX_NAME|$CERNBOX_INBOX_SIZE|$CERNBOX_INBOX_REMOTE\n"`+"\n"+
+		"exit "+itoa(exitCode))
 	return script, log
 }
 
@@ -429,11 +423,7 @@ func TestInboxHookGetsNoShell(t *testing.T) {
 func TestInboxHookIsKilledWhenItHangs(t *testing.T) {
 	box, remote, local := inboxSetup(t, "measurement.csv", "1,2,3")
 
-	dir := t.TempDir()
-	script := filepath.Join(dir, "hang.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	script := fakeProgram(t, "sleep 60s")
 
 	start := time.Now()
 	_, stderr, err := run(t, box, "inbox", "pull", remote, "--to", local,

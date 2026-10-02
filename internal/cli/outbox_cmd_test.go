@@ -379,31 +379,21 @@ func TestOutboxWatchWaitsForAnArrivalToSettle(t *testing.T) {
 
 // ── the exec hook ────────────────────────────────────────────────────────────
 
-// shrinkHook writes a script that rewrites the file it is handed, in place,
-// with the given body — standing in for the thing people actually want here:
-// strip a screenshot's metadata, or shrink it, before it leaves the laptop.
+// shrinkHook returns a hook that rewrites the file it is handed, in place, with
+// the given body — standing in for the thing people actually want here: strip a
+// screenshot's metadata, or shrink it, before it leaves the laptop.
 func shrinkHook(t *testing.T, body string) (script, log string) {
 	t.Helper()
-	dir := t.TempDir()
-	log = filepath.Join(dir, "calls.log")
-	script = filepath.Join(dir, "hook.sh")
-	content := "#!/bin/sh\n" +
-		"printf '%s|%s|%s\\n' \"$1\" \"$CERNBOX_OUTBOX_NAME\" \"$CERNBOX_OUTBOX_REMOTE\" >> " +
-		log + "\n" +
-		"printf '" + body + "' > \"$1\"\n"
-	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	log = filepath.Join(t.TempDir(), "calls.log")
+	script = fakeProgram(t, "append "+quote(log)+
+		` "$1|$CERNBOX_OUTBOX_NAME|$CERNBOX_OUTBOX_REMOTE\n"`+"\n"+
+		"write $1 "+quote(body))
 	return script, log
 }
 
 func failingHook(t *testing.T, code string) string {
 	t.Helper()
-	script := filepath.Join(t.TempDir(), "bad.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit "+code+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return script
+	return fakeProgram(t, "exit "+code)
 }
 
 // TestOutboxHookUploadsWhatTheHookLeft is the whole point: the bytes that go up
@@ -513,10 +503,7 @@ func TestOutboxHookRenameIsNotFollowed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "shot.heic"), []byte("original"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(t.TempDir(), "rename.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nmv \"$1\" \"$1.jpg\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	script := fakeProgram(t, "rename $1 $1.jpg")
 
 	_, stderr, err := run(t, box, "outbox", "push", dir,
 		"--to", "/eos/user/e/einstein/Shots", "--settle", "0", "--exec", script)
@@ -539,10 +526,7 @@ func TestOutboxHookIsKilledWhenItHangs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "shot.png"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(t.TempDir(), "hang.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	script := fakeProgram(t, "sleep 60s")
 
 	start := time.Now()
 	_, stderr, err := run(t, box, "outbox", "push", dir,

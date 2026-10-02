@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -276,8 +278,8 @@ func TestDefaultCCachePathHonoursKRB5CCNAME(t *testing.T) {
 	}
 
 	t.Setenv("KRB5CCNAME", "")
-	if got := DefaultCCachePath(); !strings.Contains(got, "krb5cc_") {
-		t.Errorf("DefaultCCachePath() = %q", got)
+	if got, want := DefaultCCachePath(), filepath.Join(os.TempDir(), "krb5cc"+userSuffix()); got != want {
+		t.Errorf("DefaultCCachePath() = %q, want %q", got, want)
 	}
 }
 

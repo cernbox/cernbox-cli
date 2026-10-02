@@ -185,7 +185,8 @@ func TestDocumentedConfigMatchesTheCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	example := firstYAMLBlock(string(doc))
+	// A checkout on Windows may have turned every line ending into CRLF.
+	example := firstYAMLBlock(strings.ReplaceAll(string(doc), "\r\n", "\n"))
 	if example == "" {
 		t.Fatal("docs/configuration.md has no yaml example to check")
 	}

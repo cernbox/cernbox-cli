@@ -729,6 +729,36 @@ func TestUploadOfEmptyFileIsNotChunked(t *testing.T) {
 	}
 }
 
+// TestEmptyUploadClosesTheBody: an empty body is sent as http.NoBody, so the
+// one that was opened never reaches the transport that would close it. Left
+// open, the file cannot be deleted on Windows until the garbage collector gets
+// to it — and an outbox deletes what it sent.
+func TestEmptyUploadClosesTheBody(t *testing.T) {
+	f := newFakeServer(t)
+	f.on(http.MethodPut, davFilesPrefix, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	body := &closeRecorder{Reader: strings.NewReader("")}
+	open := func() (io.ReadCloser, error) { return body, nil }
+	if err := f.client().Upload(context.Background(), "/eos/user/e/einstein/empty.txt", open, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !body.closed {
+		t.Error("the body of an empty upload was never closed")
+	}
+}
+
+type closeRecorder struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeRecorder) Close() error {
+	c.closed = true
+	return nil
+}
+
 func TestTouchSendsContentLengthZero(t *testing.T) {
 	f := newFakeServer(t)
 	var chunked bool

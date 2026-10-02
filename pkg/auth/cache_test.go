@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,6 +44,9 @@ func TestCacheMissingFile(t *testing.T) {
 // TestCacheIsCreatedPrivate is a security requirement, not a detail: the file
 // holds bearer tokens.
 func TestCacheIsCreatedPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows keeps no permission bits; the temporary directory's ACL is what keeps the cache private")
+	}
 	path := filepath.Join(t.TempDir(), "cache")
 	c := NewCache(path)
 	if err := c.Put("key", &Token{Value: "Bearer abc"}); err != nil {
@@ -62,6 +66,9 @@ func TestCacheIsCreatedPrivate(t *testing.T) {
 // also have been written by others, and using a token from it would mean
 // authenticating as whoever put it there.
 func TestCacheRefusesWorldReadableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows keeps no permission bits to refuse a file by")
+	}
 	path := filepath.Join(t.TempDir(), "cache")
 	c := NewCache(path)
 	if err := c.Put("key", &Token{Value: "Bearer abc"}); err != nil {
@@ -232,6 +239,14 @@ func TestDefaultCachePathIsNotInHome(t *testing.T) {
 	os.Unsetenv("CERNBOX_TOKEN_CACHE")
 
 	path := DefaultCachePath()
+	if want := filepath.Join(os.TempDir(), "cernbox_cc"+userSuffix()); path != want {
+		t.Errorf("default cache path = %q, want %q", path, want)
+	}
+	// On Windows the temporary directory is inside the user's profile by
+	// design, and there is no uid to name the file after.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" && strings.HasPrefix(path, home) {
 		t.Errorf("default cache path %q is inside the home directory", path)

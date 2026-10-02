@@ -3,6 +3,8 @@ package pathspec
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -83,6 +85,14 @@ func TestParseRemoteErrors(t *testing.T) {
 // TestParseTransferDisambiguation is the core of this package: on lxplus an
 // absolute /eos path is a local FUSE mount unless it is explicitly marked.
 func TestParseTransferDisambiguation(t *testing.T) {
+	// A local path is cleaned by the platform's rules, so on Windows it comes
+	// back with backslashes; and Clean keeps a leading ".\" on a name with a
+	// colon in it, which would otherwise read as a drive.
+	local := filepath.FromSlash
+	weird := "weird:name.txt"
+	if runtime.GOOS == "windows" {
+		weird = `.\weird:name.txt`
+	}
 	tests := []struct {
 		name      string
 		arg       string
@@ -90,16 +100,16 @@ func TestParseTransferDisambiguation(t *testing.T) {
 		wantPath  string
 		wantSpace string
 	}{
-		{"bare eos path is LOCAL", "/eos/user/g/gdelmont/a.txt", Local, "/eos/user/g/gdelmont/a.txt", ""},
+		{"bare eos path is LOCAL", "/eos/user/g/gdelmont/a.txt", Local, local("/eos/user/g/gdelmont/a.txt"), ""},
 		{"cb-marked eos path is remote", "cb:/eos/user/g/gdelmont/a.txt", Remote, "/eos/user/g/gdelmont/a.txt", ""},
 		{"relative local path", "./report.pdf", Local, "report.pdf", ""},
 		{"plain local path", "report.pdf", Local, "report.pdf", ""},
-		{"local absolute path", "/tmp/report.pdf", Local, "/tmp/report.pdf", ""},
+		{"local absolute path", "/tmp/report.pdf", Local, local("/tmp/report.pdf"), ""},
 		{"space alias is remote without cb", "home:Documents", Remote, "Documents", "home"},
 		{"project alias is remote", "project/cernbox:data", Remote, "data", "project/cernbox"},
 		{"file prefix forces local", "file:home:weird", Local, "home:weird", ""},
 		{"windows drive letter stays local", `C:\Users\gdelmont\a.txt`, Local, `C:\Users\gdelmont\a.txt`, ""},
-		{"colon inside a relative file name stays local", "./weird:name.txt", Local, "weird:name.txt", ""},
+		{"colon inside a relative file name stays local", "./weird:name.txt", Local, weird, ""},
 	}
 
 	for _, tt := range tests {
@@ -138,7 +148,7 @@ func TestParseTransferAliasAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !escaped.IsLocal() || escaped.Path != "data/archive:2024" {
+	if !escaped.IsLocal() || escaped.Path != filepath.FromSlash("data/archive:2024") {
 		t.Errorf("file: prefix did not force a local path, got %+v", escaped)
 	}
 }
