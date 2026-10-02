@@ -236,4 +236,13 @@ jobs:
           prerelease: true
           make_latest: false
           body: "Built from commit ${{ github.sha }}"
-          files: dist/**/*
+          # What a user downloads, and nothing of goreleaser's working files.
+          # dist/**/* also took the loose binary out of every build directory:
+          # all named cernbox, so the release ended up with whichever was
+          # uploaded last, for an architecture nothing said.
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.rpm
+            dist/*.deb
+            dist/checksums.txt
