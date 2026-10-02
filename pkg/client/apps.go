@@ -16,10 +16,14 @@ const (
 	appListPath = "/app/list"
 )
 
-// ViewMode selects how an application should open a file.
+// ViewMode selects how an application should open a file. These are the words
+// reva's /app/open handler parses, not the CS3 enum names: it maps anything it
+// does not recognise to VIEW_MODE_INVALID and answers that with a 401
+// "permission denied when accessing the file", so a wrong spelling here reads
+// as an authentication failure rather than a bad request.
 const (
-	ViewModeRead  = "VIEW_MODE_READ_ONLY"
-	ViewModeWrite = "VIEW_MODE_READ_WRITE"
+	ViewModeRead  = "read"
+	ViewModeWrite = "write"
 )
 
 // AppSession is what the server returns for an open request: everything a

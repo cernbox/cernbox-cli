@@ -97,7 +97,7 @@ var coveredCommands = map[string]string{
 	"space info": "TestSpaceInfo",
 
 	// Applications.
-	"open": "TestOpenWebLink, TestOpenReturnsAnApplicationLink, TestOpenWithExplicitApp",
+	"open": "TestOpenWebLink, TestOpenReturnsAnApplicationLink, TestOpenWithExplicitApp, TestOpenWriteMode",
 	"apps": "TestAppsListsMimeTypes",
 
 	// App tokens.

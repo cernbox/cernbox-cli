@@ -1,0 +1,13 @@
+# A stand-in office suite and WOPI server, so that revad's wopi app driver has
+# something to discover and open files in. See fakeoffice/main.go.
+FROM golang:1.26 AS builder
+
+WORKDIR /src
+COPY fakeoffice/main.go .
+RUN CGO_ENABLED=0 go build -o /fakeoffice main.go
+
+FROM scratch
+
+COPY --from=builder /fakeoffice /fakeoffice
+EXPOSE 8880
+ENTRYPOINT ["/fakeoffice"]

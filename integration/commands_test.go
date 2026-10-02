@@ -504,26 +504,17 @@ func TestLinkPasswordNeedsATerminal(t *testing.T) {
 
 // ── applications ─────────────────────────────────────────────────────────────
 
-// requireApps skips when no application can actually open anything.
-//
-// The dev environment runs reva's demo app provider, which advertises an empty
-// mime type list; the provider then intersects that with the configured one and
-// ends up handling nothing, and the catalogue is filtered down to nothing
-// because reva drops any mime type with no apps. So these skip against the dev
-// environment and run against a deployment with a real provider such as
-// Collabora. The provider is configured all the same: the moment one is added,
-// these start exercising it.
-// requireApps skips when nothing on this deployment can open a file.
+// requireApps fails when nothing on this deployment can open a file.
 //
 // It reads the JSON rather than the table: the table always prints its header,
 // so testing the text for content only ever detected that the command ran.
 //
-// The skip is expected against the dev environment and is not a gap in the CLI.
-// reva ships two app drivers: wopi, which needs a real WOPI server such as
-// Collabora, and demo, which reports an empty mime type list. The app provider
-// advertises the intersection of what its driver reports with what it was
-// configured for, and an intersection with nothing is nothing — so no
-// configuration can make the demo provider open anything.
+// This used to skip, because the dev environment ran reva's demo app driver,
+// which advertises no mime types and so can open nothing. Every open test
+// skipped, and "open" sending a view mode reva rejects — which made it fail on
+// every real instance — went unnoticed. The dev environment now runs the wopi
+// driver against fakeoffice, so an empty catalogue is a broken environment and
+// must say so.
 func requireApps(t *testing.T, e *env) {
 	t.Helper()
 
@@ -550,8 +541,8 @@ func requireApps(t *testing.T, e *env) {
 			return
 		}
 	}
-	t.Skipf("no application can open anything here: %d mime types, none with an app "+
-		"(reva's demo provider reports no mime types, and wopi needs a real WOPI server)", len(types))
+	t.Fatalf("no application can open anything here: %d mime types, none with an app "+
+		"(is fakeoffice running? check its logs and revad's for the wopi discovery)", len(types))
 }
 
 func TestAppsListsMimeTypes(t *testing.T) {
@@ -579,6 +570,14 @@ func TestAppsListsMimeTypes(t *testing.T) {
 	t.Errorf("text/plain is not in the catalogue: %+v", types)
 }
 
+// openResult is what "open --output json" prints.
+type openResult struct {
+	URL            string            `json:"url"`
+	Kind           string            `json:"kind"`
+	Method         string            `json:"method"`
+	FormParameters map[string]string `json:"form_parameters"`
+}
+
 func TestOpenReturnsAnApplicationLink(t *testing.T) {
 	e := setup(t)
 	requireApps(t, e)
@@ -586,16 +585,42 @@ func TestOpenReturnsAnApplicationLink(t *testing.T) {
 	target := e.remotePath("openable.txt")
 	e.mustRun("cp", e.writeLocal("openable.txt", []byte("hello")), "cb:"+target)
 
-	var result struct {
-		URL  string `json:"url"`
-		Kind string `json:"kind"`
-	}
+	var result openResult
 	e.runJSON(&result, "open", target)
-	if result.URL == "" {
-		t.Errorf("open returned no URL: %+v", result)
-	}
 	if result.Kind != "app" {
 		t.Errorf("kind = %q, want app", result.Kind)
+	}
+	// fakeoffice opens the view URL for anything but a read-write session, so
+	// this is the default mode arriving as read-only.
+	if !strings.Contains(result.URL, "/view") {
+		t.Errorf("url = %q, want fakeoffice's view URL", result.URL)
+	}
+	// A WOPI session is a POST carrying the access token, as Collabora's and
+	// MS365's are in production.
+	if result.Method != "POST" {
+		t.Errorf("method = %q, want POST", result.Method)
+	}
+	if result.FormParameters["access_token"] == "" {
+		t.Errorf("form parameters carry no access token: %v", result.FormParameters)
+	}
+}
+
+func TestOpenPostSessionWarnsInsteadOfLaunching(t *testing.T) {
+	e := setup(t)
+	requireApps(t, e)
+
+	target := e.remotePath("openable.txt")
+	e.mustRun("cp", e.writeLocal("openable.txt", []byte("hello")), "cb:"+target)
+
+	stdout, stderr, code := e.run("open", target)
+	if code != 0 {
+		t.Fatalf("open failed (%d)\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(stdout), "http") {
+		t.Errorf("stdout = %q, want the URL alone", stdout)
+	}
+	if !strings.Contains(stderr, "POST") {
+		t.Errorf("stderr = %q, want a warning that the link needs a POST", stderr)
 	}
 }
 
@@ -606,11 +631,22 @@ func TestOpenWithExplicitApp(t *testing.T) {
 	target := e.remotePath("openable.txt")
 	e.mustRun("cp", e.writeLocal("openable.txt", []byte("hello")), "cb:"+target)
 
-	// The dev environment runs the demo provider, which advertises itself under
-	// this name.
-	stdout, stderr, code := e.run("open", "--app", "demo-app", target)
+	// The name fakeoffice's discovery document and revad's wopi driver give it.
+	stdout, stderr, code := e.run("open", "--app", "FakeOffice", target)
 	if code != 0 {
 		t.Fatalf("open --app failed (%d)\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+}
+
+func TestOpenWithUnknownAppFails(t *testing.T) {
+	e := setup(t)
+	requireApps(t, e)
+
+	target := e.remotePath("openable.txt")
+	e.mustRun("cp", e.writeLocal("openable.txt", []byte("hello")), "cb:"+target)
+
+	if _, _, code := e.run("open", "--app", "NoSuchOffice", target); code == 0 {
+		t.Error("open --app with an application that does not exist succeeded")
 	}
 }
 
@@ -621,7 +657,13 @@ func TestOpenWriteMode(t *testing.T) {
 	target := e.remotePath("editable.txt")
 	e.mustRun("cp", e.writeLocal("editable.txt", []byte("hello")), "cb:"+target)
 
-	e.mustRun("open", "--view-mode", "write", target)
+	var result openResult
+	e.runJSON(&result, "open", "--view-mode", "write", target)
+	// The edit URL is only handed out for a read-write session, so this is the
+	// mode surviving the trip through reva rather than being downgraded.
+	if !strings.Contains(result.URL, "/edit") {
+		t.Errorf("url = %q, want fakeoffice's edit URL", result.URL)
+	}
 }
 
 func TestOpenUnknownPathIsNotFound(t *testing.T) {

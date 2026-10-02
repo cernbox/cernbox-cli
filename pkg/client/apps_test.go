@@ -37,7 +37,9 @@ func TestOpenInApp(t *testing.T) {
 	if gotForm.Get("app_name") != "Collabora" {
 		t.Errorf("app_name = %q", gotForm.Get("app_name"))
 	}
-	if gotForm.Get("view_mode") != ViewModeWrite {
+	// A literal, not the constant: comparing the constant with itself is how
+	// sending the CS3 enum name, which reva rejects, went unnoticed.
+	if gotForm.Get("view_mode") != "write" {
 		t.Errorf("view_mode = %q", gotForm.Get("view_mode"))
 	}
 }

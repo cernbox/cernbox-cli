@@ -223,32 +223,8 @@ admins = "philosophy-haters"
 mime_type = "text/plain"
 extension = "txt"
 name = "Text file"
-description = "Plain text"
-default_app = "Demo"
-allow_creation = true
-
-[[grpc.services.appregistry.mime_types]]
-mime_type = "text/markdown"
-extension = "md"
-name = "Markdown file"
-description = "Markdown document"
-default_app = "Demo"
-allow_creation = true
-
-[[grpc.services.appregistry.mime_types]]
-mime_type = "application/vnd.oasis.opendocument.text"
-extension = "odt"
-name = "OpenDocument text"
-description = "OpenDocument text document"
-default_app = "Demo"
-allow_creation = true
-
-[[grpc.services.appregistry.mime_types]]
-mime_type = "text/plain"
-extension = "txt"
-name = "Text file"
 description = "Plain text document"
-default_app = "demo-app"
+default_app = "FakeOffice"
 allow_creation = true
 
 [[grpc.services.appregistry.mime_types]]
@@ -256,7 +232,7 @@ mime_type = "text/markdown"
 extension = "md"
 name = "Markdown file"
 description = "Markdown document"
-default_app = "demo-app"
+default_app = "FakeOffice"
 allow_creation = true
 
 [[grpc.services.appregistry.mime_types]]
@@ -264,16 +240,23 @@ mime_type = "application/vnd.oasis.opendocument.text"
 extension = "odt"
 name = "OpenDocument"
 description = "OpenDocument text document"
-default_app = "demo-app"
+default_app = "FakeOffice"
 allow_creation = true
 
+# The wopi driver, as in production, against the fakeoffice container: the demo
+# driver advertises no mime types, so it can open nothing however it is
+# configured. app_name must match the app in fakeoffice's discovery document.
 [grpc.services.appprovider]
-driver = "demo"
+driver = "wopi"
 mime_types = ["text/plain", "text/markdown", "application/vnd.oasis.opendocument.text"]
 language = "en"
 
-[grpc.services.appprovider.drivers.demo]
-iframe_ui_provider = "https://localhost/demo-app"
+[grpc.services.appprovider.drivers.wopi]
+app_name = "FakeOffice"
+app_url = "http://fakeoffice:8880"
+wopi_url = "http://fakeoffice:8880"
+iop_secret = "fakeoffice-iop-secret"
+folder_base_url = "https://localhost"
 
 ### OPEN CLOUD MESH ###
 
