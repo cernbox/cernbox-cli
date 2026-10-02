@@ -7,10 +7,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends musl-tools \
  && rm -rf /var/lib/apt/lists/*
 
-# The reva branch carrying the Kerberos auth manager and the SPNEGO credential
-# strategy. gaia resolves a branch name through the GitHub API, so this follows
-# the branch head; point it at a released version once the branch is merged.
-ARG REVA_VERSION=kerberos-auth
+# The reva branch carrying the Kerberos auth manager, the SPNEGO credential
+# strategy, and the admin HTTP service --as needs (it is built on
+# kerberos-auth). gaia resolves a branch name through the GitHub API, so this
+# follows the branch head; point it at a released version once it is merged.
+ARG REVA_VERSION=admin-http
 
 # cgo, rather than CGO_ENABLED=0: the sql share driver runs on sqlite, which
 # needs cgo, and it is the only share driver whose "not found" error the

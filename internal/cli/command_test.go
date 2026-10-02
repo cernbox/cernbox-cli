@@ -143,6 +143,16 @@ type testBox struct {
 	// assumed: deleting a twice-written probe from EOS left two entries, so
 	// anything that clears up after itself has to clear all of them.
 	trashOnDelete bool
+
+	// admin makes the signed-in user an admin, who may impersonate others. An
+	// impersonated user's token is "as-<user>", and the box answers /me for it
+	// as that user.
+	admin bool
+	// impersonations records each user an impersonation was asked for.
+	impersonations []string
+	// auths records the credential each request carried, keyed by method and
+	// path, so a test can check whose identity a request was made with.
+	auths map[string]string
 }
 
 // trashFakeLayout is the layout ocdav parses the trash range with. A value it
@@ -227,6 +237,10 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b.requests = append(b.requests, r.Method+" "+r.URL.Path)
+	if b.auths == nil {
+		b.auths = map[string]string{}
+	}
+	b.auths[r.Method+" "+r.URL.Path] = r.Header.Get("Authorization")
 
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/ocs/v1.php/cloud/capabilities"):
@@ -270,6 +284,26 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 			`"ext":"odt","name":"OpenDocument text","default_application":"Collabora",`+
 			`"allow_creation":true,`+
 			`"app_providers":[{"name":"Collabora"},{"name":"OnlyOffice"}]}]}`)
+
+	case r.URL.Path == "/admin/status":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"admin":%t}`, b.admin && r.Header.Get("Authorization") == "Bearer test-token")
+
+	case r.URL.Path == "/admin/impersonate":
+		w.Header().Set("Content-Type", "application/json")
+		if !b.admin {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"You are not an administrator of this server."}`)
+			return
+		}
+		var req struct{ User string }
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		b.impersonations = append(b.impersonations, req.User)
+		fmt.Fprintf(w, `{"token":%q}`, "as-"+req.User)
+
+	case r.URL.Path == "/graph/v1.0/me" && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer as-"):
+		user := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer as-")
+		fmt.Fprintf(w, `{"id":%q,"displayName":%q,"onPremisesSamAccountName":%q}`, user, user, user)
 
 	case r.URL.Path == "/graph/v1.0/me":
 		fmt.Fprint(w, `{"id":"u1","displayName":"Albert Einstein","mail":"einstein@cern.ch","onPremisesSamAccountName":"einstein"}`)

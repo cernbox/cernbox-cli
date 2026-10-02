@@ -2,10 +2,12 @@ package cli
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/auth"
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/output"
 	"github.com/spf13/cobra"
 )
@@ -27,7 +29,7 @@ func newLoginCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			me, err := app.client.Me(ctx)
+			me, err := app.signedIn.Me(ctx)
 			if err != nil {
 				return err
 			}
@@ -106,10 +108,11 @@ func newStatusCmd(app *App) *cobra.Command {
 			if tokErr == nil {
 				st.Provider = tok.Provider
 				st.Expires = expiryString(tok)
-				if me, err := app.client.Me(ctx); err == nil {
+				if me, err := app.signedIn.Me(ctx); err == nil {
 					st.User = me.Username
 					st.DisplayName = me.DisplayName
 				}
+				st.ActingAs = app.flags.as
 			} else {
 				st.Error = tokErr.Error()
 			}
@@ -131,6 +134,9 @@ func newStatusCmd(app *App) *cobra.Command {
 				{Name: "Server", Value: orDash(st.ServerVersion)},
 				{Name: "Client", Value: Version},
 			}
+			if st.ActingAs != "" {
+				fields = slices.Insert(fields, 2, output.Field{Name: "Acting as", Value: st.ActingAs})
+			}
 			if st.Error != "" {
 				fields = append(fields, output.Field{Name: "Problem", Value: st.Error})
 			}
@@ -143,6 +149,7 @@ type statusResult struct {
 	Endpoint      string   `json:"endpoint"`
 	User          string   `json:"user,omitempty"`
 	DisplayName   string   `json:"display_name,omitempty"`
+	ActingAs      string   `json:"acting_as,omitempty"`
 	Provider      string   `json:"provider,omitempty"`
 	Expires       string   `json:"expires,omitempty"`
 	Available     []string `json:"available_methods,omitempty"`
@@ -168,14 +175,39 @@ func newWhoamiCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return app.out.Object(me,
-				output.Field{Name: "Username", Value: me.Username},
-				output.Field{Name: "Display name", Value: me.DisplayName},
-				output.Field{Name: "Mail", Value: me.Mail},
-				output.Field{Name: "ID", Value: me.ID},
-			)
+			res := whoamiResult{User: *me}
+			fields := []output.Field{
+				{Name: "Username", Value: me.Username},
+				{Name: "Display name", Value: me.DisplayName},
+				{Name: "Mail", Value: me.Mail},
+				{Name: "ID", Value: me.ID},
+			}
+
+			// A server without admin features is not an error here: whoami
+			// answers who you are, and whether you are an admin is only known
+			// when the server can say.
+			if admin, err := app.client.IsAdmin(ctx); err == nil {
+				res.Admin = &admin
+				fields = append(fields, output.Field{Name: "Admin", Value: yesNo(admin)})
+			}
+
+			if app.flags.as != "" {
+				signedIn, err := app.signedIn.Me(ctx)
+				if err != nil {
+					return err
+				}
+				res.ImpersonatedBy = signedIn.Username
+				fields = append(fields, output.Field{Name: "Impersonated by", Value: signedIn.Username})
+			}
+			return app.out.Object(res, fields...)
 		},
 	}
+}
+
+type whoamiResult struct {
+	client.User
+	Admin          *bool  `json:"admin,omitempty"`
+	ImpersonatedBy string `json:"impersonated_by,omitempty"`
 }
 
 func expiryString(tok *auth.Token) string {

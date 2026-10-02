@@ -43,6 +43,8 @@ type globalFlags struct {
 	appTokenFile string
 	kerberosSPN  string
 
+	as string
+
 	insecure   bool
 	skipVerify bool
 	timeout    time.Duration
@@ -64,6 +66,9 @@ type App struct {
 
 	client *client.Client
 	chain  *auth.Chain
+	// signedIn is the client for the signed-in user. It is client itself
+	// unless --as is acting as someone else.
+	signedIn *client.Client
 
 	// completing records that this process was started by a shell to complete a
 	// command line rather than to run one. It changes what the CLI is allowed to
@@ -153,6 +158,8 @@ func newRootCmd(app *App) *cobra.Command {
 	pf.StringVar(&f.appTokenFile, "app-token-file", "", "file holding a CERNBox app token")
 	pf.StringVar(&f.kerberosSPN, "kerberos-spn", "",
 		"Kerberos service name to ask for, if it differs from the server host")
+
+	pf.StringVar(&f.as, "as", "", "act as this user (admins only)")
 
 	pf.BoolVar(&f.insecure, "insecure", false, "allow plain HTTP (development instances only)")
 	pf.BoolVar(&f.skipVerify, "skip-verify", false, "do not verify the server certificate (development instances only)")
@@ -312,8 +319,27 @@ func (a *App) connect() error {
 	if err != nil {
 		return err
 	}
-	a.client = c
-	return nil
+	a.client, a.signedIn = c, c
+	// A completion does not act as anyone: every impersonation is recorded in
+	// the server's audit log, and a TAB press is not worth a line there.
+	if f.as == "" || a.completing {
+		return nil
+	}
+
+	// --as swaps the credential for one acting as that user, obtained from the
+	// server with the signed-in user's own. Everything the CLI then does — the
+	// paths it builds, the shares it lists — follows from whom the server says
+	// the token belongs to, so no command needs to know.
+	tok, err := c.Impersonate(context.Background(), f.as)
+	if err != nil {
+		return err
+	}
+	a.out.Msg("Acting as %s.", f.as)
+	acting := client.CredentialFunc(func(context.Context) (client.Credential, error) {
+		return client.Credential{Header: "Authorization", Value: "Bearer " + tok}, nil
+	})
+	a.client, err = client.New(cfg.Endpoint, append(opts, client.WithCredentials(acting))...)
+	return err
 }
 
 // warnInsecure refuses to disable certificate checks against a CERN host. A
