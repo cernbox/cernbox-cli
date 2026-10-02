@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"slices"
 	"time"
 
 	"github.com/cernbox/cernbox-cli/pkg/auth"
@@ -112,7 +111,6 @@ func newStatusCmd(app *App) *cobra.Command {
 					st.User = me.Username
 					st.DisplayName = me.DisplayName
 				}
-				st.ActingAs = app.flags.as
 			} else {
 				st.Error = tokErr.Error()
 			}
@@ -134,9 +132,6 @@ func newStatusCmd(app *App) *cobra.Command {
 				{Name: "Server", Value: orDash(st.ServerVersion)},
 				{Name: "Client", Value: Version},
 			}
-			if st.ActingAs != "" {
-				fields = slices.Insert(fields, 2, output.Field{Name: "Acting as", Value: st.ActingAs})
-			}
 			if st.Error != "" {
 				fields = append(fields, output.Field{Name: "Problem", Value: st.Error})
 			}
@@ -149,7 +144,6 @@ type statusResult struct {
 	Endpoint      string   `json:"endpoint"`
 	User          string   `json:"user,omitempty"`
 	DisplayName   string   `json:"display_name,omitempty"`
-	ActingAs      string   `json:"acting_as,omitempty"`
 	Provider      string   `json:"provider,omitempty"`
 	Expires       string   `json:"expires,omitempty"`
 	Available     []string `json:"available_methods,omitempty"`
@@ -190,15 +184,6 @@ func newWhoamiCmd(app *App) *cobra.Command {
 				res.Admin = &admin
 				fields = append(fields, output.Field{Name: "Admin", Value: yesNo(admin)})
 			}
-
-			if app.flags.as != "" {
-				signedIn, err := app.signedIn.Me(ctx)
-				if err != nil {
-					return err
-				}
-				res.ImpersonatedBy = signedIn.Username
-				fields = append(fields, output.Field{Name: "Impersonated by", Value: signedIn.Username})
-			}
 			return app.out.Object(res, fields...)
 		},
 	}
@@ -206,8 +191,7 @@ func newWhoamiCmd(app *App) *cobra.Command {
 
 type whoamiResult struct {
 	client.User
-	Admin          *bool  `json:"admin,omitempty"`
-	ImpersonatedBy string `json:"impersonated_by,omitempty"`
+	Admin *bool `json:"admin,omitempty"`
 }
 
 func expiryString(tok *auth.Token) string {

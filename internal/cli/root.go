@@ -67,8 +67,13 @@ type App struct {
 	client *client.Client
 	chain  *auth.Chain
 	// signedIn is the client for the signed-in user. It is client itself
-	// unless --as is acting as someone else.
+	// unless the command acts as someone else.
 	signedIn *client.Client
+	// acting holds a client for each user the command has acted as, so that a
+	// user named twice is impersonated once. clientOpts and endpoint are what
+	// they are built from.
+	acting     map[string]*client.Client
+	clientOpts []client.Option
 
 	// completing records that this process was started by a shell to complete a
 	// command line rather than to run one. It changes what the CLI is allowed to
@@ -133,14 +138,16 @@ func newRootCmd(app *App) *cobra.Command {
 		Use:   "cernbox",
 		Short: "Command-line client for CERNBox",
 		Long: "Work with your CERNBox files from the command line.\n\n" +
-			"Paths look like /eos/user/g/gdelmont, or home:Documents to use a space\n" +
-			"alias. Commands that copy between your computer and CERNBox mark the\n" +
-			"CERNBox side with cb:, because a path like /eos/... can exist on your\n" +
-			"computer too.\n\n" +
+			"Paths look like /eos/user/g/gdelmont, Documents for a path in your home,\n" +
+			"or project/cernbox:data to use a space alias. cp and sync mark the CERNBox\n" +
+			"side with cb:, as in cb:~/Documents, because a path like /eos/... can exist\n" +
+			"on your computer too.\n\n" +
+			"An admin can act as another user with --as USER, or for one path by writing\n" +
+			"USER@cb: in front of it.\n\n" +
 			"Run 'cernbox status' to see how you are signed in.",
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return app.setup(cmd)
+			return app.setup(cmd, args)
 		},
 	}
 
@@ -217,7 +224,7 @@ func newRootCmd(app *App) *cobra.Command {
 
 // setup builds the configuration, the output writer, the credential chain and
 // the client. It runs before every command.
-func (a *App) setup(cmd *cobra.Command) error {
+func (a *App) setup(cmd *cobra.Command, args []string) error {
 	f := a.flags
 
 	if a.stdout == nil {
@@ -252,7 +259,47 @@ func (a *App) setup(cmd *cobra.Command) error {
 	if noServerNeeded(cmd) {
 		return nil
 	}
-	return a.connect()
+	// The paths are checked first, so that a command refused for naming two
+	// users has impersonated neither.
+	user, err := identityFromArgs(cmd, args, f.as)
+	if err != nil {
+		return err
+	}
+	if err := a.connect(); err != nil {
+		return err
+	}
+	return a.actAs(user)
+}
+
+// identityFromArgs works out whom a command acts as from the paths it was given:
+// a "USER@cb:" path makes the whole command act as USER, the way --as does.
+//
+// cp and sync are the exception. They move data from one place to another, and
+// the two places may belong to different users, so each path keeps its own
+// identity and nothing here applies. copy and paste refuse one outright: the
+// clipboard is the signed-in user's, and a path in someone else's view would
+// silently make it theirs.
+func identityFromArgs(cmd *cobra.Command, args []string, as string) (string, error) {
+	switch cmd.Name() {
+	case "cp", "sync":
+		return as, nil
+	}
+	for _, arg := range args {
+		user, ok := pathspec.Identity(arg)
+		if !ok {
+			continue
+		}
+		switch {
+		case cmd.Name() == "copy" || cmd.Name() == "paste":
+			return "", cberr.Usagef("%s works with your own clipboard, so %q cannot name another user: "+
+				"run it with --as %s to use theirs", cmd.Name(), arg, user)
+		case as != "" && user != as:
+			return "", cberr.Usagef("%q is written for %s, but this command acts as %s: "+
+				"one command acts as one user (only cp and sync mix them)", arg, user, as)
+		}
+		as = user
+	}
+	return as, nil
 }
 
 // connect builds the credential chain and the client from configuration and the
@@ -320,26 +367,67 @@ func (a *App) connect() error {
 		return err
 	}
 	a.client, a.signedIn = c, c
-	// A completion does not act as anyone: every impersonation is recorded in
-	// the server's audit log, and a TAB press is not worth a line there.
-	if f.as == "" || a.completing {
+	a.acting, a.clientOpts = map[string]*client.Client{}, opts
+	return a.actAs(f.as)
+}
+
+// actAs makes user the identity the command runs as. Everything the CLI then
+// does — the paths it builds, the shares it lists — follows from whom the server
+// says the token belongs to, so no command needs to know.
+//
+// A completion does not act as anyone: every impersonation is recorded in the
+// server's audit log, and a TAB press is not worth a line there.
+func (a *App) actAs(user string) error {
+	if user == "" || a.completing {
 		return nil
 	}
-
-	// --as swaps the credential for one acting as that user, obtained from the
-	// server with the signed-in user's own. Everything the CLI then does — the
-	// paths it builds, the shares it lists — follows from whom the server says
-	// the token belongs to, so no command needs to know.
-	tok, err := c.Impersonate(context.Background(), f.as)
+	c, err := a.clientAs(context.Background(), user)
 	if err != nil {
 		return err
 	}
-	a.out.Msg("Acting as %s.", f.as)
-	acting := client.CredentialFunc(func(context.Context) (client.Credential, error) {
+	a.client = c
+	return nil
+}
+
+// clientAs returns a client acting as user. Naming the signed-in user is not an
+// impersonation: it returns their own client, and leaves nothing in the audit
+// log. Anyone else's token comes from the server, asked for with the signed-in
+// user's own credential, once per user per command.
+func (a *App) clientAs(ctx context.Context, user string) (*client.Client, error) {
+	if c, ok := a.acting[user]; ok {
+		return c, nil
+	}
+	me, err := a.signedIn.Me(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if me.Username == user {
+		a.acting[user] = a.signedIn
+		return a.signedIn, nil
+	}
+
+	tok, err := a.signedIn.Impersonate(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	creds := client.CredentialFunc(func(context.Context) (client.Credential, error) {
 		return client.Credential{Header: "Authorization", Value: "Bearer " + tok}, nil
 	})
-	a.client, err = client.New(cfg.Endpoint, append(opts, client.WithCredentials(acting))...)
-	return err
+	c, err := client.New(a.cfg.Endpoint, append(a.clientOpts, client.WithCredentials(creds))...)
+	if err != nil {
+		return nil, err
+	}
+	a.acting[user] = c
+	return c, nil
+}
+
+// clientFor returns the client a remote spec is acted on with: the user it was
+// written for, or the identity the command runs as.
+func (a *App) clientFor(ctx context.Context, spec pathspec.Spec) (*client.Client, error) {
+	if spec.As == "" {
+		return a.client, nil
+	}
+	return a.clientAs(ctx, spec.As)
 }
 
 // warnInsecure refuses to disable certificate checks against a CERN host. A
@@ -452,12 +540,27 @@ func (a *App) resolve(ctx context.Context, arg string) (string, error) {
 	if err != nil {
 		return "", cberr.Usagef("%v", err)
 	}
-	return spec.Resolve(ctx, a.client)
+	return a.resolveSpec(ctx, spec)
 }
 
-// resolveSpec turns a parsed spec into an absolute CERNBox path.
+// resolveSpec turns a parsed spec into an absolute CERNBox path, resolving any
+// space alias in the view of the user the spec is acted on as.
 func (a *App) resolveSpec(ctx context.Context, spec pathspec.Spec) (string, error) {
-	return spec.Resolve(ctx, a.client)
+	c, err := a.clientFor(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	return spec.Resolve(ctx, c)
+}
+
+// transferEngineFor builds the transfer engine acting with c rather than the
+// command's own client.
+func (a *App) transferEngineFor(c *client.Client, o transferFlags) (*transfer.Engine, error) {
+	e, err := a.transferEngine(o)
+	if err != nil {
+		return nil, err
+	}
+	return transfer.New(c, e.Options()), nil
 }
 
 // transferEngineWith builds the transfer engine, reporting progress through pf

@@ -58,15 +58,31 @@ Paths look like the ones you already use:
 ```bash
 cernbox ls /eos/user/g/gdelmont/Documents
 cernbox ls /eos/project/c/cernbox/data
-cernbox ls home:Documents            # your own space, by name
+cernbox ls Documents                 # relative to your home
+cernbox ls project/cernbox:data      # a space, by its alias
 ```
 
-Commands that copy between your computer and CERNBox are the exception: there you mark the CERNBox side with `cb:`, because the same path can exist on both.
+`cp` and `sync` are the exception: there you mark the CERNBox side with `cb:`, because the same path can exist on both. After the marker, `~` is your home.
 
 ```bash
-cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/
-cernbox cp cb:/eos/user/g/gdelmont/Documents/report.pdf .
+cernbox cp ./report.pdf cb:~/Documents/
+cernbox cp cb:~/Documents/report.pdf .
+cernbox cp -r cb:/eos/project/c/cernbox/data ./data
 ```
+
+### Acting as another user
+
+An admin of the CERNBox deployment can do anything another user can, as them — look at their shares, put a file where they will find it. `--as` acts as them for the whole command; `USER@cb:` in front of a path reaches that one path as them, the way `scp` names a user and a host:
+
+```bash
+cernbox --as marie share list                    # marie's shares, as she sees them
+cernbox ls marie@cb:~/Documents                  # same as --as marie ls Documents
+cernbox cp ./fix.txt marie@cb:~/                 # into marie's home, written as marie
+cernbox cp cb:~/report.pdf marie@cb:~/Documents/ # from your space to hers
+cernbox ls marie@cb:project/cernbox:data         # a project, as marie sees it
+```
+
+A command acts as one user, except `cp` and `sync`, whose two sides may differ. A copy between two users goes through your computer, because the server cannot copy across them: the bytes are read as one and written as the other. `cernbox whoami` says whether you are an admin. Every command run as someone else is recorded in the server's audit log under your name.
 
 ## Browsing
 

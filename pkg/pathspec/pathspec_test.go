@@ -63,7 +63,6 @@ func TestParseRemoteErrors(t *testing.T) {
 		wantSub string
 	}{
 		{"empty", "", "empty path"},
-		{"cb prefix with nothing after it", "cb:", "no path after"},
 		{"file prefix rejected", "file:./local.txt", "only works on CERNBox paths"},
 		{"escaping absolute path", "/eos/../../etc/passwd", "escapes the namespace root"},
 		{"escaping alias path", "home:../../etc/passwd", "escapes the space root"},
@@ -105,9 +104,15 @@ func TestParseTransferDisambiguation(t *testing.T) {
 		{"relative local path", "./report.pdf", Local, "report.pdf", ""},
 		{"plain local path", "report.pdf", Local, "report.pdf", ""},
 		{"local absolute path", "/tmp/report.pdf", Local, local("/tmp/report.pdf"), ""},
-		{"space alias is remote without cb", "home:Documents", Remote, "Documents", "home"},
-		{"project alias is remote", "project/cernbox:data", Remote, "data", "project/cernbox"},
+		// Only the marker makes a transfer path remote. An alias on its own is a
+		// local name with a colon in it.
+		{"bare space alias is local", "home:Documents", Local, local("home:Documents"), ""},
+		{"marked space alias is remote", "cb:home:Documents", Remote, "Documents", "home"},
+		{"marked project alias is remote", "cb:project/cernbox:data", Remote, "data", "project/cernbox"},
+		{"home shorthand after the marker", "cb:~/Documents", Remote, "Documents", "home"},
+		{"marker alone is the home space", "cb:", Remote, "", "home"},
 		{"file prefix forces local", "file:home:weird", Local, "home:weird", ""},
+		{"scp-style host stays local", "gdelmont@lxplus:notes.txt", Local, local("gdelmont@lxplus:notes.txt"), ""},
 		{"windows drive letter stays local", `C:\Users\gdelmont\a.txt`, Local, `C:\Users\gdelmont\a.txt`, ""},
 		{"colon inside a relative file name stays local", "./weird:name.txt", Local, weird, ""},
 	}
@@ -131,25 +136,75 @@ func TestParseTransferDisambiguation(t *testing.T) {
 	}
 }
 
-// TestParseTransferAliasAmbiguity pins a known, deliberate false positive:
-// "data/archive:2024" is shaped exactly like a project space alias, so it is
-// read as one. There is no way to tell the two apart from the string alone,
-// which is why the file: prefix exists.
-func TestParseTransferAliasAmbiguity(t *testing.T) {
-	got, err := ParseTransfer("data/archive:2024")
-	if err != nil {
-		t.Fatal(err)
+// TestIdentityMarker covers "USER@cb:", which reads a path as another user
+// sees CERNBox. The user is carried on the spec and nowhere else.
+func TestIdentityMarker(t *testing.T) {
+	tests := []struct {
+		arg       string
+		wantAs    string
+		wantSpace string
+		wantPath  string
+	}{
+		{"marie@cb:~/Documents", "marie", "home", "Documents"},
+		{"marie@cb:", "marie", "home", ""},
+		{"marie@cb:project/cernbox:data", "marie", "project/cernbox", "data"},
+		{"marie@cb:/eos/user/m/marie/x", "marie", "", "/eos/user/m/marie/x"},
+		{"marie@cb:notes", "marie", "home", "notes"},
+		{"cb:~/notes", "", "home", "notes"},
 	}
-	if !got.IsRemote() || got.Space != "data/archive" {
-		t.Errorf("got %+v, want it read as the space alias data/archive", got)
+	for _, tt := range tests {
+		for name, parse := range map[string]func(string) (Spec, error){"remote": ParseRemote, "transfer": ParseTransfer} {
+			got, err := parse(tt.arg)
+			if err != nil {
+				t.Fatalf("%s(%q): %v", name, tt.arg, err)
+			}
+			if !got.IsRemote() || got.As != tt.wantAs || got.Space != tt.wantSpace || got.Path != tt.wantPath {
+				t.Errorf("%s(%q) = %+v, want remote as %q in space %q at %q",
+					name, tt.arg, got, tt.wantAs, tt.wantSpace, tt.wantPath)
+			}
+			if user, ok := Identity(tt.arg); user != tt.wantAs || ok != (tt.wantAs != "") {
+				t.Errorf("Identity(%q) = %q, %v", tt.arg, user, ok)
+			}
+		}
 	}
+}
 
-	escaped, err := ParseTransfer("file:data/archive:2024")
-	if err != nil {
-		t.Fatal(err)
+// TestIdentityMarkerNeedsAUsername keeps text that only looks like the marker
+// from naming an identity.
+func TestIdentityMarkerNeedsAUsername(t *testing.T) {
+	for _, arg := range []string{"@cb:x", "dir/marie@cb:x", "a b@cb:x", "marie@cbx"} {
+		if user, ok := Identity(arg); ok {
+			t.Errorf("Identity(%q) = %q, want none", arg, user)
+		}
+		got, err := ParseTransfer(arg)
+		if err != nil {
+			t.Fatalf("ParseTransfer(%q): %v", arg, err)
+		}
+		if !got.IsLocal() {
+			t.Errorf("ParseTransfer(%q) is remote, want local: it carries no marker", arg)
+		}
 	}
-	if !escaped.IsLocal() || escaped.Path != filepath.FromSlash("data/archive:2024") {
-		t.Errorf("file: prefix did not force a local path, got %+v", escaped)
+}
+
+// TestStringRoundTrips checks that a remote spec renders to something every
+// parser reads back the same way, marker and identity included.
+func TestStringRoundTrips(t *testing.T) {
+	for _, arg := range []string{
+		"cb:~/Documents", "cb:~", "marie@cb:~/a/b", "cb:/eos/user/g/x",
+		"marie@cb:project/cernbox:data", "cb:project/cernbox:",
+	} {
+		spec, err := ParseTransfer(arg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := ParseTransfer(spec.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		again.Raw, spec.Raw = "", ""
+		if again != spec {
+			t.Errorf("%q rendered as %q, which parses to %+v, not %+v", arg, spec.String(), again, spec)
+		}
 	}
 }
 
@@ -207,7 +262,7 @@ func TestParseTransferPair(t *testing.T) {
 	})
 
 	t.Run("two remote paths are allowed", func(t *testing.T) {
-		src, dst, err := ParseTransferPair("cb:/eos/a", "home:b")
+		src, dst, err := ParseTransferPair("cb:/eos/a", "marie@cb:~/b")
 		if err != nil {
 			t.Fatal(err)
 		}

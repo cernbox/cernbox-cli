@@ -35,13 +35,12 @@ func TestAsShowsWhoActs(t *testing.T) {
 	e := setup(t)
 
 	var me struct {
-		Username       string `json:"username"`
-		Admin          *bool  `json:"admin"`
-		ImpersonatedBy string `json:"impersonated_by"`
+		Username string `json:"username"`
+		Admin    *bool  `json:"admin"`
 	}
 	e.runJSON(&me, "--as", otherUser, "whoami")
-	if me.Username != otherUser || me.ImpersonatedBy != username {
-		t.Errorf("whoami --as = %+v, want %s impersonated by %s", me, otherUser, username)
+	if me.Username != otherUser {
+		t.Errorf("whoami --as = %+v, want %s", me, otherUser)
 	}
 	if me.Admin == nil || *me.Admin {
 		t.Errorf("admin = %v: whoami --as reports the impersonated user, who is not one", me.Admin)
@@ -74,11 +73,11 @@ func TestAsWritesIntoAnotherUsersHome(t *testing.T) {
 	dir := e.recipientDir()
 	local := e.writeLocal("fix.txt", []byte("from the admin"))
 
-	if _, _, code := e.run("put", local, "cb:"+dir+"/"); code != 4 {
+	if _, _, code := e.run("cp", local, "cb:"+dir+"/"); code != 4 {
 		t.Fatalf("put into %s without --as exited %d, want 4: the test proves nothing", dir, code)
 	}
 
-	e.mustRun("--as", otherUser, "put", local, "cb:"+dir+"/")
+	e.mustRun("--as", otherUser, "cp", local, "cb:"+dir+"/")
 	if got := e.mustRunAs(e.other(), "cat", dir+"/fix.txt"); got != "from the admin" {
 		t.Errorf("%s reads %q", otherUser, got)
 	}
@@ -93,5 +92,48 @@ func TestAsRefusedForNonAdmin(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "not an administrator") {
 		t.Errorf("stderr does not say why: %s", stderr)
+	}
+}
+
+// TestIdentityMarkerReachesAnotherUsersHome reads marie's home through
+// "marie@cb:~", which the admin's own identity could not list.
+func TestIdentityMarkerReachesAnotherUsersHome(t *testing.T) {
+	e := setup(t)
+	dir := e.recipientDir()
+	e.mustRunAs(e.other(), "cp", e.writeLocal("hers.txt", []byte("marie's")), "cb:"+dir+"/")
+	rel := strings.TrimPrefix(dir, otherHomeRoot+"/")
+
+	if _, _, code := e.run("ls", dir); code != 4 {
+		t.Fatalf("listing %s as %s exited %d, want 4: the test proves nothing", dir, username, code)
+	}
+	out := e.mustRun("ls", otherUser+"@cb:~/"+rel)
+	if !strings.Contains(out, "hers.txt") {
+		t.Errorf("ls %s@cb:~/%s = %q, want hers.txt", otherUser, rel, out)
+	}
+}
+
+// TestCpBetweenUsers copies from the admin's own space into marie's: read as
+// one user, written as the other, which no server-side copy can do.
+func TestCpBetweenUsers(t *testing.T) {
+	e := setup(t)
+	e.mustRun("cp", e.writeLocal("report.txt", []byte("for marie")), "cb:"+e.remotePath("report.txt"))
+	dir := e.recipientDir()
+
+	e.mustRun("cp", "--verify", "cb:"+e.remotePath("report.txt"), otherUser+"@cb:"+dir+"/")
+	if got := e.mustRunAs(e.other(), "cat", dir+"/report.txt"); got != "for marie" {
+		t.Errorf("%s reads %q", otherUser, got)
+	}
+}
+
+func TestCpBetweenUsersCopiesATree(t *testing.T) {
+	e := setup(t)
+	e.mustRun("mkdir", "-p", e.remotePath("tree/sub"))
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("alpha")), "cb:"+e.remotePath("tree/a.txt"))
+	e.mustRun("cp", e.writeLocal("b.txt", []byte("beta")), "cb:"+e.remotePath("tree/sub/b.txt"))
+	dir := e.recipientDir()
+
+	e.mustRun("cp", "-r", "cb:"+e.remotePath("tree"), otherUser+"@cb:"+dir+"/")
+	if got := e.mustRunAs(e.other(), "cat", dir+"/tree/sub/b.txt"); got != "beta" {
+		t.Errorf("%s reads %q for the nested file", otherUser, got)
 	}
 }

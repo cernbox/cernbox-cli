@@ -162,7 +162,7 @@ func (a *App) resolveEditTarget(ctx context.Context, arg, in string) (editTarget
 	}
 
 	switch {
-	case strings.HasPrefix(arg, pathspec.RemotePrefix):
+	case pathspec.IsMarkedRemote(arg):
 		remote, err := a.resolve(ctx, arg)
 		return editTarget{remote: remote}, err
 	case isBareEditName(arg):

@@ -77,19 +77,20 @@ func (a *App) completeTransfer(_ *cobra.Command, _ []string, toComplete string) 
 }
 
 // looksRemote reports whether a partially typed word has already been marked as
-// a CERNBox path, by the cb: prefix or by a space alias.
+// a CERNBox path.
 func looksRemote(arg string) bool {
-	if strings.HasPrefix(arg, pathspec.RemotePrefix) {
-		return true
-	}
-	spec, err := pathspec.ParseTransfer(arg)
-	return err == nil && spec.IsRemote()
+	return pathspec.IsMarkedRemote(arg)
 }
 
 // remoteCandidates lists the children of the directory the user is part way
 // through typing.
 func (a *App) remoteCandidates(toComplete string) ([]string, cobra.ShellCompDirective) {
 	if !a.ready() {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	// Another user's view would take an impersonation, which a completion never
+	// does: each one is a line in the server's audit log.
+	if _, ok := pathspec.Identity(toComplete); ok {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	ctx, cancel := completionContext()

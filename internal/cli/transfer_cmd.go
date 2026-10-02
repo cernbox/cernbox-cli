@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/output"
 	"github.com/cernbox/cernbox-cli/pkg/pathspec"
 	"github.com/cernbox/cernbox-cli/pkg/transfer"
@@ -43,17 +44,22 @@ func newCpCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cp SOURCE DEST",
 		Short: "Copy between your computer and CERNBox",
-		Long: "Copy files between your computer and CERNBox.\n" +
+		Long: "Copy files between your computer and CERNBox, or within CERNBox.\n" +
 			"\n" +
 			"Mark the CERNBox side with cb:, because a path like /eos/... can exist on your\n" +
 			"computer too.\n" +
 			"\n" +
 			"Large uploads go up in chunks and an interrupted transfer carries on where it\n" +
 			"stopped. A whole directory comes down as one archive when the server can\n" +
-			"build one, which is much faster for many small files.",
-		Example: "  cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/\n" +
+			"build one, which is much faster for many small files.\n" +
+			"\n" +
+			"An admin can write USER@cb: to reach a path as another user sees it. A copy\n" +
+			"between two users streams through this computer, since the server cannot\n" +
+			"copy across them itself.",
+		Example: "  cernbox cp ./report.pdf cb:~/Documents/\n" +
 			"  cernbox cp -r cb:/eos/project/c/cernbox/data ./data\n" +
-			"  cernbox cp cb:/eos/user/g/gdelmont/a.txt cb:/eos/user/g/gdelmont/b.txt",
+			"  cernbox cp cb:~/a.txt cb:~/b.txt\n" +
+			"  cernbox cp cb:~/report.pdf marie@cb:~/Documents/",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -66,7 +72,7 @@ func newCpCmd(app *App) *cobra.Command {
 
 			switch {
 			case src.IsRemote() && dst.IsRemote():
-				return app.serverSideCopy(ctx, src, dst, flags)
+				return app.remoteCopy(ctx, src, dst, flags)
 			case src.IsLocal():
 				return app.runUpload(ctx, cmd, src.Path, dst, flags)
 			default:
@@ -81,7 +87,11 @@ func newCpCmd(app *App) *cobra.Command {
 
 // runUpload copies a local path to a remote spec.
 func (a *App) runUpload(ctx context.Context, cmd *cobra.Command, local string, dst pathspec.Spec, flags *transferFlags) error {
-	engine, err := a.transferEngine(*flags)
+	c, err := a.clientFor(ctx, dst)
+	if err != nil {
+		return err
+	}
+	engine, err := a.transferEngineFor(c, *flags)
 	if err != nil {
 		return err
 	}
@@ -101,7 +111,7 @@ func (a *App) runUpload(ctx context.Context, cmd *cobra.Command, local string, d
 
 	// A destination that is an existing directory, or was written with a
 	// trailing slash, means "into it" — the same rule cp(1) uses.
-	if a.destIsDirectory(ctx, remote, dst) {
+	if destIsDirectory(ctx, c, remote, dst) {
 		remote = path.Join(remote, filepath.Base(strings.TrimRight(local, string(os.PathSeparator))))
 	}
 
@@ -114,7 +124,11 @@ func (a *App) runUpload(ctx context.Context, cmd *cobra.Command, local string, d
 
 // runDownload copies a remote spec to a local path.
 func (a *App) runDownload(ctx context.Context, cmd *cobra.Command, src pathspec.Spec, local string, flags *transferFlags) error {
-	engine, err := a.transferEngine(*flags)
+	c, err := a.clientFor(ctx, src)
+	if err != nil {
+		return err
+	}
+	engine, err := a.transferEngineFor(c, *flags)
 	if err != nil {
 		return err
 	}
@@ -124,7 +138,7 @@ func (a *App) runDownload(ctx context.Context, cmd *cobra.Command, src pathspec.
 		return err
 	}
 
-	info, err := a.client.Stat(ctx, remote)
+	info, err := c.Stat(ctx, remote)
 	if err != nil {
 		return err
 	}
@@ -144,9 +158,11 @@ func (a *App) runDownload(ctx context.Context, cmd *cobra.Command, src pathspec.
 	return a.reportTransfer(stats, "Downloaded")
 }
 
-// serverSideCopy duplicates within CERNBox without moving the bytes through
-// the client.
-func (a *App) serverSideCopy(ctx context.Context, src, dst pathspec.Spec, flags *transferFlags) error {
+// remoteCopy duplicates within CERNBox. When both sides are acted on as the same
+// user the server copies it without the bytes moving through the client. When
+// they are not, it cannot — a COPY carries one credential — so the bytes are
+// relayed: read as one user, written as the other.
+func (a *App) remoteCopy(ctx context.Context, src, dst pathspec.Spec, flags *transferFlags) error {
 	from, err := a.resolveSpec(ctx, src)
 	if err != nil {
 		return err
@@ -155,15 +171,36 @@ func (a *App) serverSideCopy(ctx context.Context, src, dst pathspec.Spec, flags 
 	if err != nil {
 		return err
 	}
+	srcClient, err := a.clientFor(ctx, src)
+	if err != nil {
+		return err
+	}
+	dstClient, err := a.clientFor(ctx, dst)
+	if err != nil {
+		return err
+	}
 
-	if info, err := a.client.Stat(ctx, to); err == nil && info.IsDir {
+	if destIsDirectory(ctx, dstClient, to, dst) {
 		to = path.Join(to, path.Base(from))
 	}
+
+	if srcClient != dstClient {
+		engine, err := a.transferEngineFor(srcClient, *flags)
+		if err != nil {
+			return err
+		}
+		stats, err := engine.Relay(ctx, from, dstClient, to)
+		if err != nil {
+			return err
+		}
+		return a.reportTransfer(stats, "Copied")
+	}
+
 	if flags.dryRun {
 		a.out.Msg("Would copy %s to %s", from, to)
 		return nil
 	}
-	if err := a.client.Copy(ctx, from, to, flags.force); err != nil {
+	if err := srcClient.Copy(ctx, from, to, flags.force); err != nil {
 		return err
 	}
 	a.out.Msg("Copied %s to %s", from, to)
@@ -172,11 +209,11 @@ func (a *App) serverSideCopy(ctx context.Context, src, dst pathspec.Spec, flags 
 
 // destIsDirectory reports whether a remote destination should be treated as a
 // container rather than the target name.
-func (a *App) destIsDirectory(ctx context.Context, remote string, spec pathspec.Spec) bool {
+func destIsDirectory(ctx context.Context, c *client.Client, remote string, spec pathspec.Spec) bool {
 	if spec.TrailingSlash {
 		return true
 	}
-	info, err := a.client.Stat(ctx, remote)
+	info, err := c.Stat(ctx, remote)
 	return err == nil && info.IsDir
 }
 

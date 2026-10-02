@@ -241,6 +241,13 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		b.auths = map[string]string{}
 	}
 	b.auths[r.Method+" "+r.URL.Path] = r.Header.Get("Authorization")
+	// The box keeps one tree. A user acted as through an impersonation token sees
+	// it under their own DAV prefix, which is where the client addresses them.
+	if user, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer as-"); ok {
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/remote.php/dav/files/"+user); ok {
+			r.URL.Path = testDavPrefix + rest
+		}
+	}
 
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/ocs/v1.php/cloud/capabilities"):
@@ -672,12 +679,15 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 
 // destPath extracts the path a MOVE or COPY targets from its Destination header.
 func destPath(r *http.Request) (string, bool) {
+	// Any user's prefix: an impersonated user addresses the same tree under
+	// their own name.
 	dst := r.Header.Get("Destination")
-	_, after, ok := strings.Cut(dst, testDavPrefix)
+	_, after, ok := strings.Cut(dst, "/remote.php/dav/files/")
 	if !ok {
 		return "", false
 	}
-	return path.Clean(after), true
+	_, rest, _ := strings.Cut(after, "/")
+	return path.Clean("/" + rest), true
 }
 
 // copyTree duplicates a file or a whole collection, reporting whether the source

@@ -59,7 +59,11 @@ func newSyncCmd(app *App) *cobra.Command {
 				return err
 			}
 
-			engine, err := app.transferEngine(*flags)
+			c, err := app.clientFor(ctx, remoteSpec)
+			if err != nil {
+				return err
+			}
+			engine, err := app.transferEngineFor(c, *flags)
 			if err != nil {
 				return err
 			}

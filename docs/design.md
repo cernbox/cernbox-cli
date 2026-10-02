@@ -176,7 +176,7 @@ An admin of the deployment — a member of the Admin API's `admin_group` — can
 
 The token comes from `POST /admin/impersonate` with the admin's own credential. The server steps the caller up and impersonates in one request, so the admin token never reaches the client. Both steps are in reva's audit log. The impersonation token is never cached: every command asks again, so each has its own audit entry, and no token for someone else's account is left in `/tmp`. It lives as long as a token from signing in (the Admin API's `impersonation_ttl`, or the token manager's own lifetime, a day by default), so a long transfer made as the user finishes; the short `admin_ttl` applies only to the admin token, which stays on the server.
 
-`whoami` shows whether the user is an admin, from `GET /admin/status`, which only checks and is not audited. With `--as` it shows the impersonated user and who is impersonating them. A completion never impersonates.
+`whoami` shows whether the user is an admin, from `GET /admin/status`, which only checks and is not audited. Acting as someone is transparent: with `--as`, `whoami` answers as that user and nothing in the output says who is behind it; the record of that is reva's audit log. A completion never impersonates.
 
 ## 4. Path and namespace model
 
@@ -194,6 +194,7 @@ Space-qualified aliases are accepted and resolve through the locally cached `me/
 home:Documents
 project/cernbox:data
 <space-id>:relative/path           # for scripts holding an ID
+Documents                          # a bare relative path is in the home space
 ```
 
 Resolution strategy: path-addressed operations go to `/remote.php/dav/files/{user}/{path}`, which accepts absolute CS3 paths at CERN directly. Id-addressed operations — anything where the CLI already holds a drive ID from ocgraph, which is all of sharing — go to `/remote.php/dav/spaces/{space-id}/{rel}`. The spaces listing is cached locally with a short TTL and refreshed on a resolution miss.
@@ -203,14 +204,28 @@ Resolution strategy: path-addressed operations go to `/remote.php/dav/files/{use
 On lxplus, `/eos/user/g/gdelmont` is *both* a valid CERNBox remote path and a real local FUSE mount point. `cernbox cp /eos/user/g/gdelmont/a.txt /eos/user/g/gdelmont/b.txt` is genuinely ambiguous, and guessing would be worse than either answer. So:
 
 - **Namespace commands** — `ls`, `stat`, `find`, `du`, `mkdir`, `rm`, `mv`, `touch`, `cat`, `share`, `link`, `trash`, `versions` — take bare remote paths. There is no local side, so there is no ambiguity.
-- **Transfer commands** — `cp`, `sync` — require the remote side to carry a `cb:` prefix:
+- **Transfer commands** — `cp`, `sync` — take a path as remote only when it carries the `cb:` marker. Anything else is local, a bare alias such as `home:x` included: an alias is not a marker, and a local name with a colon in it must not turn into a remote path. After the marker, `~` is the home space, which spares `cb:home:`:
 
   ```bash
-  cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/
+  cernbox cp ./report.pdf cb:~/Documents/
   cernbox cp -r cb:/eos/project/c/cernbox/data ./data
   ```
 
+  `~` only works after the marker. Written first, the shell expands it to the local home before the CLI sees it.
+
 `cb:` is accepted everywhere a remote path is, so a script can be explicit throughout if it prefers.
+
+### Whose view a path is in
+
+The marker can name a user: `marie@cb:~/Documents`, `marie@cb:project/cernbox:data`, `marie@cb:/eos/user/m/marie/x`. The path is then marie's view of CERNBox — her home, the spaces she sees — and reaching it means acting as her (§3.6), which only an admin can. It is the shape of scp's `user@host:path`, so it reads as what it is, and it is the only place an identity is written into a path; `pkg/pathspec` carries it on the parsed spec and nothing else interprets it.
+
+A command acts as one user. A `USER@cb:` path makes the whole command act as USER, as `--as` would, and two paths naming different users are refused. `cp` and `sync` are the exception, because their two sides are two places that may belong to two people: each side is acted on as its own user. When the two differ, the server cannot copy — a `COPY` carries one credential — so the bytes are relayed through the client, read as one user and written as the other, file by file, never touching local disk. `copy` and `paste` refuse a user's path, because the clipboard belongs to the signed-in user and a path in someone else's view would quietly make it theirs.
+
+Naming yourself is not an impersonation: `gdelmont@cb:` from gdelmont is just `cb:`, and leaves nothing in the audit log.
+
+### A local mount as a faster way to the same place
+
+Not built, but kept possible. On lxplus a `cb:` path is often also mounted locally. `cb:` says *what* an argument is — a CERNBox resource — and the same command means the same thing on every machine. *How* it is reached is the transfer engine's business: having resolved the spec, it could notice that the path is mounted and use the mount instead of HTTPS. That only holds when acting as yourself, the local Unix user is the CERNBox user, and the mount is the same storage; any `USER@cb:` path goes through the server. Nothing in the path grammar needs to change for it.
 
 ## 5. Command surface
 
