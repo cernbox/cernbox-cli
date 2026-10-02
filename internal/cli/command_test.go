@@ -12,8 +12,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1503,6 +1505,48 @@ func TestCompletionNeedsNoServer(t *testing.T) {
 
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestBashCompletionWithoutBashCompletionPackage: cobra's bash script calls
+// functions from the bash-completion package, and without it every TAB printed
+// "_get_comp_words_by_ref: command not found". The script must bring its own.
+func TestBashCompletionWithoutBashCompletionPackage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash completion is not a Windows concern")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	var stdout bytes.Buffer
+	app := &App{flags: &globalFlags{}, stdout: &stdout, stderr: io.Discard}
+	root := newRootCmd(app)
+	root.SetOut(&stdout)
+	root.SetArgs([]string{"completion", "bash"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Press TAB after "cernbox cp cb:Docu", which bash splits at the colon,
+	// and check the pieces come back together as one word.
+	script := stdout.String() + `
+COMP_LINE="cernbox cp cb:Docu"; COMP_POINT=${#COMP_LINE}
+COMP_WORDS=(cernbox cp cb : Docu); COMP_CWORD=4
+_get_comp_words_by_ref -n =: cur prev words cword
+echo "cur=$cur prev=$prev cword=$cword"
+cur=""; _filedir -d
+`
+	cmd := exec.Command(bash, "--norc", "--noprofile", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Dir = t.TempDir()
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	out, err := cmd.CombinedOutput()
+	if err != nil || strings.Contains(string(out), "not found") {
+		t.Fatalf("bash: %v\n%s", err, out)
+	}
+	if got, want := strings.TrimSpace(string(out)), "cur=cb:Docu prev=cp cword=2"; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

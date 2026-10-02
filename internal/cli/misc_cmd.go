@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 
@@ -257,6 +258,9 @@ func newCompletionCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			switch args[0] {
 			case "bash":
+				if _, err := io.WriteString(out, bashCompletionShims); err != nil {
+					return err
+				}
 				return cmd.Root().GenBashCompletionV2(out, true)
 			case "zsh":
 				return cmd.Root().GenZshCompletion(out)
@@ -269,6 +273,84 @@ func newCompletionCmd() *cobra.Command {
 	}
 	return cmd
 }
+
+// bashCompletionShims stands in for the two bash-completion functions cobra's
+// bash script calls. Without that package installed — common on a laptop,
+// rarer on lxplus — every TAB printed "_get_comp_words_by_ref: command not
+// found". Each is defined only when missing, so a real bash-completion, loaded
+// before or after this script, always wins.
+//
+// The stand-ins are minimal: _get_comp_words_by_ref honours -n (so cb:path and
+// --flag=value stay one word) and fills cur, prev, words and cword; _filedir
+// completes files, directories (-d), or files by extension.
+const bashCompletionShims = `# Stand-ins for the bash-completion package, used only where it is not installed.
+if ! declare -F _get_comp_words_by_ref >/dev/null 2>&1; then
+_get_comp_words_by_ref()
+{
+    local exclude="" flag OPTIND=1
+    while getopts "n:" flag "$@"; do
+        [[ $flag == n ]] && exclude=$OPTARG
+    done
+    shift $((OPTIND-1))
+
+    # Rejoin the pieces COMP_WORDBREAKS split off at an excluded character,
+    # walking COMP_LINE to tell adjacent pieces from separate words.
+    local line=${COMP_LINE:0:COMP_POINT} trimmed tok sep excl prevExcl=0 i cw=-1
+    local -a out=()
+    for ((i = 0; i < ${#COMP_WORDS[@]}; i++)); do
+        tok=${COMP_WORDS[i]}
+        trimmed=${line#"${line%%[![:space:]]*}"}
+        sep=$(( ${#trimmed} != ${#line} ))
+        line=$trimmed
+        ((${#line} < ${#tok})) && tok=$line
+        line=${line:${#tok}}
+        excl=0
+        [[ -n $tok && -n $exclude && -z ${tok//["$exclude"]/} ]] && excl=1
+        if ((i > 0 && !sep && (excl || prevExcl))); then
+            out[${#out[@]}-1]+=$tok
+        else
+            out+=("$tok")
+        fi
+        prevExcl=$excl
+        if ((i == COMP_CWORD)); then
+            cw=$((${#out[@]} - 1))
+            break
+        fi
+    done
+    ((cw < 0)) && cw=$((${#out[@]} - 1))
+
+    local var
+    for var in "$@"; do
+        case $var in
+        cur) cur=${out[cw]} ;;
+        prev) prev=""; ((cw > 0)) && prev=${out[cw-1]} ;;
+        words) words=("${out[@]}") ;;
+        cword) cword=$cw ;;
+        esac
+    done
+}
+fi
+
+if ! declare -F _filedir >/dev/null 2>&1; then
+_filedir()
+{
+    local reply f
+    if [[ ${1-} == -d ]]; then
+        reply=$(compgen -d -- "$cur")
+    elif [[ -n ${1-} ]]; then
+        reply=$(shopt -s extglob; compgen -d -- "$cur"; compgen -f -X "!*.@(${1%|})" -- "$cur")
+    else
+        reply=$(compgen -f -- "$cur")
+    fi
+    while IFS= read -r f; do
+        [[ -n $f ]] && COMPREPLY+=("$f")
+    done <<<"$reply"
+    compopt -o filenames 2>/dev/null
+    return 0
+}
+fi
+
+`
 
 // newCommandsCmd prints every command path in the tree, one per line.
 //
