@@ -97,6 +97,9 @@ jobs:
     needs: [lint]
     runs-on: ${{ matrix.os }}
     strategy:
+      # Each platform's result stands on its own: a failure on one should not
+      # cancel the others and hide whether they pass.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     defaults:

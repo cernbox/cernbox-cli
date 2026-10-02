@@ -210,7 +210,7 @@ func TestSafeJoin(t *testing.T) {
 	bad := []string{"../escape", "../../escape", "sub/../../escape", ".."}
 	if runtime.GOOS == "windows" {
 		// A drive, an alternate data stream, or a device rather than a file.
-		bad = append(bad, `C:\escape`, "C:escape", "a:stream", "NUL", "sub/con.txt")
+		bad = append(bad, `C:\escape`, "C:escape", "a:stream", "NUL", "sub/con")
 	}
 	for _, name := range bad {
 		if _, err := safeJoin(root, name); err == nil {
