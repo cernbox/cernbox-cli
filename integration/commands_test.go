@@ -590,10 +590,11 @@ func TestOpenReturnsAnApplicationLink(t *testing.T) {
 	if result.Kind != "app" {
 		t.Errorf("kind = %q, want app", result.Kind)
 	}
-	// fakeoffice opens the view URL for anything but a read-write session, so
-	// this is the default mode arriving as read-only.
-	if !strings.Contains(result.URL, "/view") {
-		t.Errorf("url = %q, want fakeoffice's view URL", result.URL)
+	// With no mode asked for, the server opens the editor for a file the user
+	// can write, as the web interface does; fakeoffice hands out its edit URL
+	// only for a read-write session.
+	if !strings.Contains(result.URL, "/edit") {
+		t.Errorf("url = %q, want fakeoffice's edit URL", result.URL)
 	}
 	// A WOPI session is a POST carrying the access token, as Collabora's and
 	// MS365's are in production.
@@ -602,6 +603,55 @@ func TestOpenReturnsAnApplicationLink(t *testing.T) {
 	}
 	if result.FormParameters["access_token"] == "" {
 		t.Errorf("form parameters carry no access token: %v", result.FormParameters)
+	}
+}
+
+// TestOpenTypeWithADefault: odt has a default application in the dev catalogue,
+// so the server chooses it. text/plain, which the other tests open, has none,
+// as on CERNBox, so there the CLI must name the only application itself: the
+// server answers a request without one with a 500.
+func TestOpenTypeWithADefault(t *testing.T) {
+	e := setup(t)
+	requireApps(t, e)
+
+	target := e.remotePath("report.odt")
+	e.mustRun("cp", e.writeLocal("report.odt", []byte("not really odt")), "cb:"+target)
+
+	var result openResult
+	e.runJSON(&result, "open", target)
+	if !strings.Contains(result.URL, "/edit") {
+		t.Errorf("url = %q, want fakeoffice's edit URL", result.URL)
+	}
+}
+
+// TestOpenReadOnlyShareFallsBackToView: with no mode asked for, a file the user
+// can only read opens read-only rather than failing, as in the web interface.
+func TestOpenReadOnlyShareFallsBackToView(t *testing.T) {
+	e := setup(t)
+	requireApps(t, e)
+
+	target := e.remotePath("view-only.txt")
+	e.mustRun("cp", e.writeLocal("view-only.txt", []byte("hello")), "cb:"+target)
+	e.mustRun("share", "create", target, "--with", otherUser, "--role", "viewer")
+
+	var result openResult
+	e.runJSONAs(e.other(), &result, "open", target)
+	if !strings.Contains(result.URL, "/view") {
+		t.Errorf("url = %q, want fakeoffice's view URL for a read-only share", result.URL)
+	}
+}
+
+func TestOpenReadMode(t *testing.T) {
+	e := setup(t)
+	requireApps(t, e)
+
+	target := e.remotePath("readable.txt")
+	e.mustRun("cp", e.writeLocal("readable.txt", []byte("hello")), "cb:"+target)
+
+	var result openResult
+	e.runJSON(&result, "open", "--view-mode", "read", target)
+	if !strings.Contains(result.URL, "/view") {
+		t.Errorf("url = %q, want fakeoffice's view URL", result.URL)
 	}
 }
 

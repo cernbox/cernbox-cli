@@ -219,12 +219,13 @@ admins = "philosophy-haters"
 # advertised as openable, however many providers are running.
 [grpc.services.appregistry]
 
+# No default_app, as text/plain has none on CERNBox: reva then refuses to open
+# the file unless an app is named, and the CLI has to name the only one.
 [[grpc.services.appregistry.mime_types]]
 mime_type = "text/plain"
 extension = "txt"
 name = "Text file"
 description = "Plain text document"
-default_app = "FakeOffice"
 allow_creation = true
 
 [[grpc.services.appregistry.mime_types]]

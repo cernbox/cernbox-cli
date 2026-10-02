@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"os/exec"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
 	"github.com/cernbox/cernbox-cli/pkg/client"
@@ -21,10 +23,13 @@ func newOpenCmd(app *App) *cobra.Command {
 		Long: "Print the URL that opens a file in CERNBox: the online editor for its type,\n" +
 			"or with --web its page in the CERNBox interface.\n" +
 			"\n" +
+			"Like the web interface, it opens the editor when you can write to the file\n" +
+			"and a read-only view otherwise; --view-mode read asks for the read-only one.\n" +
+			"\n" +
 			"The link is only printed unless you pass --launch.",
 		Example: "  cernbox open /eos/user/g/gdelmont/report.docx\n" +
 			"  cernbox open --web /eos/user/g/gdelmont/Documents\n" +
-			"  cernbox open --app Collabora --view-mode write /eos/user/g/gdelmont/notes.odt",
+			"  cernbox open --app Collabora --view-mode read /eos/user/g/gdelmont/notes.odt",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := app.ctx(cmd)
@@ -43,14 +48,25 @@ func newOpenCmd(app *App) *cobra.Command {
 				return app.emitLink(info.WebURL, launch, openResult{Path: info.Path, URL: info.WebURL, Kind: "web"})
 			}
 
+			// No mode leaves it to the server, which is what the web interface
+			// does: reva starts from read-write and downgrades to read-only when
+			// the user cannot write. Asking for read by default sent CodiMD users
+			// to a published, read-only copy of a note they could edit.
 			mode := ""
 			switch viewMode {
-			case "", "read":
+			case "":
+			case "read":
 				mode = client.ViewModeRead
 			case "write", "edit":
 				mode = client.ViewModeWrite
 			default:
 				return cberr.Usagef("unknown view mode %q: want read or write", viewMode)
+			}
+
+			if appName == "" {
+				if appName, err = app.defaultApp(ctx, info); err != nil {
+					return err
+				}
 			}
 
 			session, err := app.client.OpenInApp(ctx, info.ID, appName, mode)
@@ -77,10 +93,45 @@ func newOpenCmd(app *App) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&appName, "app", "", "application to open with (default: the server's choice for the file type)")
-	cmd.Flags().StringVar(&viewMode, "view-mode", "read", "read or write")
+	cmd.Flags().StringVar(&viewMode, "view-mode", "", "read or write (default: write when you can, read otherwise)")
 	cmd.Flags().BoolVar(&web, "web", false, "print the CERNBox web interface link instead of an application link")
 	cmd.Flags().BoolVar(&launch, "launch", false, "also open the link in a browser")
 	return cmd
+}
+
+// defaultApp picks the application to open a file with when none was asked
+// for. The server only falls back to a default an administrator configured for
+// the type, and fails with a 500 when there is none — which is how text/plain
+// is on CERNBox, with CodiMD as its only application. The web interface then
+// offers the one application there is, so this does the same. With several and
+// no default, choosing would be a guess: reva itself refuses to, because its
+// order of applications changes across restarts.
+//
+// It returns "" to leave the choice to the server, which is also the answer
+// whenever the catalogue cannot settle it: the server's error says more.
+func (a *App) defaultApp(ctx context.Context, info *client.ResourceInfo) (string, error) {
+	if info.MimeType == "" {
+		return "", nil
+	}
+	types, err := a.client.ListApps(ctx)
+	if err != nil {
+		return "", nil
+	}
+	for _, t := range types {
+		if t.MimeType != info.MimeType {
+			continue
+		}
+		switch {
+		case t.Default != "":
+			return "", nil
+		case len(t.Apps) == 1:
+			return t.Apps[0], nil
+		case len(t.Apps) > 1:
+			return "", cberr.Usagef("%s has no default application; choose one with --app: %s",
+				info.MimeType, strings.Join(t.Apps, ", "))
+		}
+	}
+	return "", nil
 }
 
 type openResult struct {

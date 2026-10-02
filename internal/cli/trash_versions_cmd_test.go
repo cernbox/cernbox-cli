@@ -474,6 +474,71 @@ func TestOpenWarnsAboutPostSessions(t *testing.T) {
 	}
 }
 
+// TestOpenUsesTheOnlyApplication: text/plain has no default application on
+// CERNBox, and the server answers a request without one with a 500. With a
+// single application for the type there is nothing to choose.
+func TestOpenUsesTheOnlyApplication(t *testing.T) {
+	box := newTestBox(t)
+	box.appCatalogue = `{"mime-types":[{"mime_type":"text/plain","app_providers":[{"name":"CodiMD"}]}]}`
+	box.putFile("/eos/user/e/einstein/notes.txt", "hello")
+
+	if _, _, err := run(t, box, "open", "/eos/user/e/einstein/notes.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if box.openedApp != "CodiMD" {
+		t.Errorf("app_name = %q, want CodiMD", box.openedApp)
+	}
+}
+
+func TestOpenLeavesTheDefaultToTheServer(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.odt", "doc")
+
+	if _, _, err := run(t, box, "open", "/eos/user/e/einstein/report.odt"); err != nil {
+		t.Fatal(err)
+	}
+	if box.openedApp != "" {
+		t.Errorf("app_name = %q, want none: the type has a default", box.openedApp)
+	}
+}
+
+func TestOpenAsksWhenThereIsNoDefaultToChooseFrom(t *testing.T) {
+	box := newTestBox(t)
+	box.appCatalogue = `{"mime-types":[{"mime_type":"text/plain",` +
+		`"app_providers":[{"name":"CodiMD"},{"name":"Collabora"}]}]}`
+	box.putFile("/eos/user/e/einstein/notes.txt", "hello")
+
+	_, _, err := run(t, box, "open", "/eos/user/e/einstein/notes.txt")
+	if cberr.ExitCode(err) != cberr.ExitUsage {
+		t.Fatalf("got %v, want a usage error", err)
+	}
+	if !strings.Contains(err.Error(), "--app") || !strings.Contains(err.Error(), "Collabora") {
+		t.Errorf("error should name the applications and --app: %v", err)
+	}
+}
+
+// TestOpenLeavesTheModeToTheServer: like the web interface, open asks for no
+// mode, and the server opens the editor when the user can write. Asking for
+// read by default sent CodiMD users to a published copy of their own note.
+func TestOpenLeavesTheModeToTheServer(t *testing.T) {
+	box := newTestBox(t)
+	box.putFile("/eos/user/e/einstein/report.odt", "doc")
+
+	if _, _, err := run(t, box, "open", "/eos/user/e/einstein/report.odt"); err != nil {
+		t.Fatal(err)
+	}
+	if box.openedModeSet {
+		t.Errorf("view_mode = %q, want none", box.openedMode)
+	}
+
+	if _, _, err := run(t, box, "open", "--view-mode", "read", "/eos/user/e/einstein/report.odt"); err != nil {
+		t.Fatal(err)
+	}
+	if box.openedMode != "read" {
+		t.Errorf("view_mode = %q, want read", box.openedMode)
+	}
+}
+
 func TestOpenRejectsUnknownViewMode(t *testing.T) {
 	box := newTestBox(t)
 	box.putFile("/eos/user/e/einstein/report.odt", "doc")

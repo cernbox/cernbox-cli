@@ -85,6 +85,14 @@ type testBox struct {
 
 	// appMethod is the HTTP method the fake application session advertises.
 	appMethod string
+	// appCatalogue replaces the /app/list answer, so a test can describe a type
+	// with no default application, as text/plain is on CERNBox.
+	appCatalogue string
+	// openedApp is the app_name the last /app/open asked for.
+	openedApp string
+	// openedMode is the view_mode it sent, and whether it sent one at all.
+	openedMode    string
+	openedModeSet bool
 
 	// handoverFrom is a user who has staged a clipboard handover for the test
 	// user, reported through the received-shares listing the way a real one is.
@@ -256,12 +264,19 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 		b.serveOCM(w, r)
 
 	case r.URL.Path == "/app/open":
+		_ = r.ParseForm()
+		b.openedApp = r.Form.Get("app_name")
+		_, b.openedModeSet = r.Form["view_mode"]
+		b.openedMode = r.Form.Get("view_mode")
 		method := b.appMethod
 		if method == "" {
 			method = "GET"
 		}
 		fmt.Fprintf(w, `{"app_url":"https://office.test/edit?wopi=abc","method":%q,`+
 			`"form_parameters":{"access_token":"secret"}}`, method)
+
+	case r.URL.Path == "/app/list" && b.appCatalogue != "":
+		fmt.Fprint(w, b.appCatalogue)
 
 	case r.URL.Path == "/app/list":
 		// default_application is a string. The server marshals the CS3
@@ -778,12 +793,27 @@ func davXMLWithModified(p string, isDir bool, size int, etag, modified string) s
 		`<d:status>HTTP/1.1 200 OK</d:status><d:prop>`+
 		`<d:displayname>%s</d:displayname>%s`+
 		`<d:getcontentlength>%d</d:getcontentlength><oc:size>%d</oc:size>`+
-		`<d:getetag>&quot;%s&quot;</d:getetag>`+
+		`<d:getetag>&quot;%s&quot;</d:getetag>%s`+
 		`<oc:fileid>%s</oc:fileid>`+
 		`<oc:privatelink>https://cernbox.test/files/spaces/s1%s</oc:privatelink>`+
 		`<d:getlastmodified>%s</d:getlastmodified>`+
 		`</d:prop></d:propstat></d:response>`,
-		href, path.Base(p), rt, size, size, etag, fakeResourceID(p), p, modified)
+		href, path.Base(p), rt, size, size, etag, contentType(p, isDir), fakeResourceID(p), p, modified)
+}
+
+// contentType is the getcontenttype property for the few types the tests open
+// in an application, written out rather than taken from the mime package,
+// whose answers come from the system's tables and differ between platforms.
+func contentType(p string, isDir bool) string {
+	types := map[string]string{
+		".odt": "application/vnd.oasis.opendocument.text",
+		".txt": "text/plain",
+		".md":  "text/markdown",
+	}
+	if t, ok := types[path.Ext(p)]; ok && !isDir {
+		return "<d:getcontenttype>" + t + "</d:getcontenttype>"
+	}
+	return ""
 }
 
 // serveTrash implements the trash-bin endpoints: a PROPFIND listing, MOVE to
