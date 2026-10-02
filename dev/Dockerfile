@@ -7,10 +7,13 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends musl-tools \
  && rm -rf /var/lib/apt/lists/*
 
-# The reva branch carrying the Kerberos auth manager and the SPNEGO credential
-# strategy. gaia resolves a branch name through the GitHub API, so this follows
-# the branch head; point it at a released version once the branch is merged.
-ARG REVA_VERSION=kerberos-auth
+# A reva integration branch, cernbox-cli-dev, that joins the two pieces this
+# environment needs and that are not in master yet: Kerberos authentication
+# (cs3org/reva#5827: the auth manager and the SPNEGO credential strategy) and
+# the admin HTTP service --as uses (cs3org/reva#5863). It has no pull request of
+# its own. gaia resolves a branch name through the GitHub API, so this follows
+# its head; point it back at master, or a release, once both are merged.
+ARG REVA_VERSION=cernbox-cli-dev
 
 # cgo, rather than CGO_ENABLED=0: the sql share driver runs on sqlite, which
 # needs cgo, and it is the only share driver whose "not found" error the

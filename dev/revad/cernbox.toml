@@ -348,6 +348,15 @@ driver = "json"
 [grpc.services.groupprovider.drivers.json]
 groups = "/etc/revad/groups.demo.json"
 
+# The Admin API, for --as. einstein is in sailing-lovers and so is an admin;
+# marie and richard are not, which is what the refusal tests need. The socket is
+# off because the image is scratch and has no /run to bind it in.
+[grpc.services.admin]
+address = ":19600"
+admin_group = "sailing-lovers"
+machine_auth_apikey = "{{ vars.machine_api_key }}"
+socket = "off"
+
 
 ### HTTP ENDPOINTS ###
 
@@ -503,6 +512,10 @@ prefix = "app"
 insecure = true
 
 [http.services.ocm]
+address = ":443"
+
+# The HTTP face of the Admin API: /admin/status and /admin/impersonate.
+[http.services.admin]
 address = ":443"
 
 [http.services.sciencemesh]

@@ -6,6 +6,7 @@ import (
 
 	"github.com/cernbox/cernbox-cli/pkg/auth"
 	"github.com/cernbox/cernbox-cli/pkg/cberr"
+	"github.com/cernbox/cernbox-cli/pkg/client"
 	"github.com/cernbox/cernbox-cli/pkg/output"
 	"github.com/spf13/cobra"
 )
@@ -27,7 +28,7 @@ func newLoginCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			me, err := app.client.Me(ctx)
+			me, err := app.signedIn.Me(ctx)
 			if err != nil {
 				return err
 			}
@@ -106,7 +107,7 @@ func newStatusCmd(app *App) *cobra.Command {
 			if tokErr == nil {
 				st.Provider = tok.Provider
 				st.Expires = expiryString(tok)
-				if me, err := app.client.Me(ctx); err == nil {
+				if me, err := app.signedIn.Me(ctx); err == nil {
 					st.User = me.Username
 					st.DisplayName = me.DisplayName
 				}
@@ -168,14 +169,29 @@ func newWhoamiCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return app.out.Object(me,
-				output.Field{Name: "Username", Value: me.Username},
-				output.Field{Name: "Display name", Value: me.DisplayName},
-				output.Field{Name: "Mail", Value: me.Mail},
-				output.Field{Name: "ID", Value: me.ID},
-			)
+			res := whoamiResult{User: *me}
+			fields := []output.Field{
+				{Name: "Username", Value: me.Username},
+				{Name: "Display name", Value: me.DisplayName},
+				{Name: "Mail", Value: me.Mail},
+				{Name: "ID", Value: me.ID},
+			}
+
+			// A server without admin features is not an error here: whoami
+			// answers who you are, and whether you are an admin is only known
+			// when the server can say.
+			if admin, err := app.client.IsAdmin(ctx); err == nil {
+				res.Admin = &admin
+				fields = append(fields, output.Field{Name: "Admin", Value: yesNo(admin)})
+			}
+			return app.out.Object(res, fields...)
 		},
 	}
+}
+
+type whoamiResult struct {
+	client.User
+	Admin *bool `json:"admin,omitempty"`
 }
 
 func expiryString(tok *auth.Token) string {

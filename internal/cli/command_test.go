@@ -143,6 +143,16 @@ type testBox struct {
 	// assumed: deleting a twice-written probe from EOS left two entries, so
 	// anything that clears up after itself has to clear all of them.
 	trashOnDelete bool
+
+	// admin makes the signed-in user an admin, who may impersonate others. An
+	// impersonated user's token is "as-<user>", and the box answers /me for it
+	// as that user.
+	admin bool
+	// impersonations records each user an impersonation was asked for.
+	impersonations []string
+	// auths records the credential each request carried, keyed by method and
+	// path, so a test can check whose identity a request was made with.
+	auths map[string]string
 }
 
 // trashFakeLayout is the layout ocdav parses the trash range with. A value it
@@ -227,6 +237,17 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b.requests = append(b.requests, r.Method+" "+r.URL.Path)
+	if b.auths == nil {
+		b.auths = map[string]string{}
+	}
+	b.auths[r.Method+" "+r.URL.Path] = r.Header.Get("Authorization")
+	// The box keeps one tree. A user acted as through an impersonation token sees
+	// it under their own DAV prefix, which is where the client addresses them.
+	if user, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer as-"); ok {
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/remote.php/dav/files/"+user); ok {
+			r.URL.Path = testDavPrefix + rest
+		}
+	}
 
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/ocs/v1.php/cloud/capabilities"):
@@ -270,6 +291,26 @@ func (b *testBox) route(w http.ResponseWriter, r *http.Request) {
 			`"ext":"odt","name":"OpenDocument text","default_application":"Collabora",`+
 			`"allow_creation":true,`+
 			`"app_providers":[{"name":"Collabora"},{"name":"OnlyOffice"}]}]}`)
+
+	case r.URL.Path == "/admin/status":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"admin":%t}`, b.admin && r.Header.Get("Authorization") == "Bearer test-token")
+
+	case r.URL.Path == "/admin/impersonate":
+		w.Header().Set("Content-Type", "application/json")
+		if !b.admin {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"You are not an administrator of this server."}`)
+			return
+		}
+		var req struct{ User string }
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		b.impersonations = append(b.impersonations, req.User)
+		fmt.Fprintf(w, `{"token":%q}`, "as-"+req.User)
+
+	case r.URL.Path == "/graph/v1.0/me" && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer as-"):
+		user := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer as-")
+		fmt.Fprintf(w, `{"id":%q,"displayName":%q,"onPremisesSamAccountName":%q}`, user, user, user)
 
 	case r.URL.Path == "/graph/v1.0/me":
 		fmt.Fprint(w, `{"id":"u1","displayName":"Albert Einstein","mail":"einstein@cern.ch","onPremisesSamAccountName":"einstein"}`)
@@ -638,12 +679,15 @@ func (b *testBox) serveDav(w http.ResponseWriter, r *http.Request) {
 
 // destPath extracts the path a MOVE or COPY targets from its Destination header.
 func destPath(r *http.Request) (string, bool) {
+	// Any user's prefix: an impersonated user addresses the same tree under
+	// their own name.
 	dst := r.Header.Get("Destination")
-	_, after, ok := strings.Cut(dst, testDavPrefix)
+	_, after, ok := strings.Cut(dst, "/remote.php/dav/files/")
 	if !ok {
 		return "", false
 	}
-	return path.Clean(after), true
+	_, rest, _ := strings.Cut(after, "/")
+	return path.Clean("/" + rest), true
 }
 
 // copyTree duplicates a file or a whole collection, reporting whether the source
