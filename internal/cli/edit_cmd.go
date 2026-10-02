@@ -34,7 +34,7 @@ const (
 
 	// maxEditSize refuses to open something that is not an edit. Reading the
 	// whole file to hash and upload it is fine for the text files people edit
-	// and wrong for a dataset, which 'get' and 'put' already handle properly.
+	// and wrong for a dataset, which 'cp' already handles properly.
 	maxEditSize = 64 << 20
 )
 
@@ -326,7 +326,7 @@ func (a *App) editorCommand(opts editOptions) ([]string, error) {
 	// taken as knowing better, which is also how this is tested.
 	if !opts.editorGiven && !a.hasTerminal() {
 		return nil, cberr.Usagef(
-			"editing needs a terminal to run %s in; use 'cernbox get' and 'cernbox put' in a script", fields[0])
+			"editing needs a terminal to run %s in; use 'cernbox cp' in a script", fields[0])
 	}
 	return fields, nil
 }
@@ -385,7 +385,7 @@ func (s *editSession) fetch(ctx context.Context) error {
 	case info.IsDir:
 		return cberr.Usagef("%s is a directory", s.target.remote)
 	case info.Size > maxEditSize && !s.target.inPlace:
-		return cberr.Usagef("%s is %s, too big to edit; use 'cernbox get' and 'cernbox put'",
+		return cberr.Usagef("%s is %s, too big to edit; use 'cernbox cp'",
 			s.target.remote, output.HumanSize(info.Size))
 	default:
 		// Even for a local file: adopting the version that is there now means a
@@ -418,7 +418,7 @@ func (s *editSession) fetch(ctx context.Context) error {
 			return err
 		}
 		if len(data) > maxEditSize {
-			return cberr.Usagef("%s is too big to edit; use 'cernbox get' and 'cernbox put'", s.target.remote)
+			return cberr.Usagef("%s is too big to edit; use 'cernbox cp'", s.target.remote)
 		}
 	}
 
@@ -449,7 +449,7 @@ func (s *editSession) openInPlace(ctx context.Context) error {
 	case err != nil:
 		return err
 	case len(local) > maxEditSize:
-		return cberr.Usagef("%s is %s, too big to keep uploading; use 'cernbox put'",
+		return cberr.Usagef("%s is %s, too big to keep uploading; use 'cernbox cp'",
 			s.target.local, output.HumanSize(int64(len(local))))
 	}
 
@@ -661,7 +661,7 @@ func (s *editSession) uploadFailed(err error) error {
 	if cberr.KindOf(err) == cberr.KindConflict {
 		return cberr.New(cberr.KindConflict, "save to CERNBox", s.target.remote,
 			fmt.Sprintf("it changed on the server while you were editing, so it was left alone. "+
-				"Your version is %s — compare it, then 'cernbox put --force' it, "+
+				"Your version is %s — compare it, then 'cernbox cp --force' it, "+
 				"or run edit again with --force", s.target.local))
 	}
 	return fmt.Errorf("%w (your version is still %s)", err, s.target.local)

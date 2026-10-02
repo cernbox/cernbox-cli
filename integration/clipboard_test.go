@@ -97,7 +97,7 @@ func TestClipboardReferencesARemotePathWithoutUploading(t *testing.T) {
 
 	local := e.writeLocal("origin.txt", []byte("already on the server"))
 	remote := e.remotePath("origin.txt")
-	e.mustRun("put", local, remote)
+	e.mustRun("cp", local, "cb:"+remote)
 
 	var manifest clipManifest
 	e.runJSON(&manifest, "copy", "--slot", slot, "cb:"+remote)
@@ -130,7 +130,7 @@ func TestClipboardPasteInsideCERNBoxMovesNoData(t *testing.T) {
 
 	local := e.writeLocal("server-side.txt", payload(64<<10))
 	source := e.remotePath("server-side.txt")
-	e.mustRun("put", local, source)
+	e.mustRun("cp", local, "cb:"+source)
 	e.mustRun("copy", "--slot", slot, "cb:"+source)
 
 	destDir := e.remotePath("pasted")
@@ -494,7 +494,7 @@ func TestClipboardStreamRefusesARemoteSource(t *testing.T) {
 	e := setup(t)
 
 	remote := e.remotePath("already.txt")
-	e.mustRun("put", e.writeLocal("already.txt", []byte("on the server")), remote)
+	e.mustRun("cp", e.writeLocal("already.txt", []byte("on the server")), "cb:"+remote)
 
 	_, stderr, code := e.run("copy", "--stream", "--slot", clipSlot(t), "cb:"+remote)
 	if code == 0 {
@@ -644,7 +644,7 @@ func TestClipboardClearLeavesTheOriginalAlone(t *testing.T) {
 
 	local := e.writeLocal("precious.txt", []byte("do not delete me"))
 	remote := e.remotePath("precious.txt")
-	e.mustRun("put", local, remote)
+	e.mustRun("cp", local, "cb:"+remote)
 	e.mustRun("copy", "--slot", slot, "cb:"+remote)
 	e.mustRun("clipboard", "clear", slot)
 
@@ -766,7 +766,7 @@ func TestClipboardManifestIsReplacedConditionally(t *testing.T) {
 	e := setup(t)
 
 	remote := e.remotePath("precondition.txt")
-	e.mustRun("put", e.writeLocal("precondition.txt", []byte("original")), remote)
+	e.mustRun("cp", e.writeLocal("precondition.txt", []byte("original")), "cb:"+remote)
 	info := e.stat(remote)
 	if info.ETag == "" {
 		t.Fatal("the server reported no ETag, so there is nothing to be conditional on")
@@ -951,7 +951,7 @@ func TestHandoverOfACERNBoxPathMovesNoData(t *testing.T) {
 	// because a pointer to the sender's own path is unreadable to anybody else.
 	// The duplicate is made by the server.
 	source := e.remotePath("shared.txt")
-	e.mustRun("put", e.writeLocal("shared.txt", []byte("server side")), source)
+	e.mustRun("cp", e.writeLocal("shared.txt", []byte("server side")), "cb:"+source)
 	e.mustRun("copy", "cb:"+source, "--to", otherUser)
 
 	recipient := e.recipientDir()

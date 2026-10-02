@@ -177,8 +177,6 @@ func newRootCmd(app *App) *cobra.Command {
 		newMvCmd(app),
 
 		newCpCmd(app),
-		newGetCmd(app),
-		newPutCmd(app),
 		newSyncCmd(app),
 		newArchiveCmd(app),
 

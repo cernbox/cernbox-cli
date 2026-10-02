@@ -37,13 +37,6 @@ cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/
 cernbox cp -r cb:/eos/project/c/cernbox/data ./data
 ```
 
-`get` and `put` are unambiguous by position and are usually what you want:
-
-```bash
-cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
-cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
-```
-
 ## Listing
 
 `ls` behaves like `ls(1)`: no header, one entry per line when piped, columns when a terminal is attached, and the familiar switches.
@@ -221,7 +214,7 @@ The alternate screen takes its contents with it when it closes, so anything wort
 
 The final check before exiting deliberately skips the cheap stat gate and hashes regardless. A file rewritten to the same length inside one timestamp tick looks untouched to a stat, and on a filesystem with coarse timestamps that is not far-fetched — so the one sync that must never miss anything does not rely on timestamps at all.
 
-**A local file is edited where it lies.** `edit ./notes.txt` opens your own file, and nothing is ever downloaded over it — the CERNBox side is read into memory to compare, never to install. That comparison is what decides whether a name already in use is a problem: the same content means this is the file's own earlier upload, so editing the same file twice needs no flag, while *different* content under that name is refused until `--force`, the way `put` refuses to overwrite a destination. A warning would be too late, since closing the editor is enough to trigger the upload.
+**A local file is edited where it lies.** `edit ./notes.txt` opens your own file, and nothing is ever downloaded over it — the CERNBox side is read into memory to compare, never to install. That comparison is what decides whether a name already in use is a problem: the same content means this is the file's own earlier upload, so editing the same file twice needs no flag, while *different* content under that name is refused until `--force`, the way `cp` refuses to overwrite a destination. A warning would be too late, since closing the editor is enough to trigger the upload.
 
 **Each save leaves its predecessor somewhere.** Saving ten times sends ten writes, and the storage keeps what each one replaced: a version where version history is on, an entry in the trash bin where it is not — the dev EOS keeps no versions, and there an overwrite puts the content it replaced straight into the bin. Neither is lost work, but both consume quota, and `--no-watch` is the way to spend one write per session instead of one per save.
 
@@ -339,7 +332,7 @@ and a body beginning `37\r\n` — `0x37` being 55. XRootD has written chunked fr
 
 Nothing about the *length* gives it away either, which is why this went unnoticed. What does give it away is that the framing spells out the body's own length: a ranged response of n bytes that begins with the hexadecimal of n followed by CRLF is this bug and essentially nothing else, since real content would have to start by stating its own size in hex. `Download` checks exactly that when an offset was asked for, and refuses.
 
-**That check matters well beyond `tail`.** The transfer engine resumes an interrupted download by restarting its `.part` file with a range, so before the check a `cernbox get` that was interrupted and resumed produced a file of exactly the right length with the wrong bytes in it, and said nothing. It is now an error that names the storage as the thing to fix.
+**That check matters well beyond `tail`.** The transfer engine resumes an interrupted download by restarting its `.part` file with a range, so before the check a `cernbox cp` download that was interrupted and resumed produced a file of exactly the right length with the wrong bytes in it, and said nothing. It is now an error that names the storage as the thing to fix.
 
 Two things this is not. It is not an HTTP/1.1 problem: the corruption is identical over HTTP/2, which was measured after guessing wrong about it. And it is not reva's doing — its download helper sets `Content-Range` and copies exactly `ranges[0].Length` bytes, and the response it receives from EOS is already framed.
 
@@ -393,7 +386,7 @@ report.pdf  ███████████████░░░░░░░�
 
 It is erased when the transfer finishes, leaving the summary line. `--no-progress` turns it off, and so do `--quiet` and `--output json`; it is never drawn when stderr is not a terminal, so a log file or a pipe stays clean. The gate is on **stderr**, not stdout, so `cernbox paste - | tar xz` still shows you the bar while the payload goes down the pipe.
 
-`--no-progress` is global rather than a flag on `paste` alone, because it also silences the per-file lines `cp`, `get`, `put` and `sync` print.
+`--no-progress` is global rather than a flag on `paste` alone, because it also silences the per-file lines `cp` and `sync` print.
 
 A live handover of a pipe has no length until it ends, so there is no percentage to show and none is invented — the line becomes a byte count and a rate. On a narrow window the bar is dropped and then whole fields are, in order: the estimate, the rate, the total. Nothing is ever cut mid-number, because a figure you cannot trust is worse than one that is absent.
 

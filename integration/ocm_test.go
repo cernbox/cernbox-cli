@@ -111,7 +111,7 @@ func TestOCMShareReachesThePartner(t *testing.T) {
 	ensureContact(e)
 
 	target := e.remotePath("federated.txt")
-	e.mustRun("put", e.writeLocal("federated.txt", []byte("across the mesh")), target)
+	e.mustRun("cp", e.writeLocal("federated.txt", []byte("across the mesh")), "cb:"+target)
 
 	address := partnerUser + "@" + partnerDomain
 	stdout, stderr, code := e.run("share", "create", target, "--with-remote", address, "--role", "viewer")

@@ -53,8 +53,8 @@ func TestUploadLinkTakesFilesFromAStranger(t *testing.T) {
 
 	drop := e.remotePath("drop")
 	e.mustRun("mkdir", drop)
-	e.mustRun("put", e.writeLocal("private.txt", []byte("not for strangers")),
-		drop+"/private.txt")
+	e.mustRun("cp", e.writeLocal("private.txt", []byte("not for strangers")),
+		"cb:"+drop+"/private.txt")
 
 	var created struct {
 		ID   string `json:"id"`
@@ -106,7 +106,7 @@ func TestUploadLinkTakesFilesFromAStranger(t *testing.T) {
 func TestUploadLinkNeedsAFolder(t *testing.T) {
 	e := setup(t)
 	file := e.remotePath("report.txt")
-	e.mustRun("put", e.writeLocal("report.txt", []byte("x")), file)
+	e.mustRun("cp", e.writeLocal("report.txt", []byte("x")), "cb:"+file)
 
 	stdout, stderr, code := e.run("link", "create", file, "--role", "upload")
 	if code == 0 {

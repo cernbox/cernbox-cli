@@ -37,9 +37,7 @@ var coveredCommands = map[string]string{
 	"mv":    "TestMoveAndCat",
 
 	// Transfers.
-	"cp":      "TestServerSideCopy, TestCpRefusesAmbiguousPaths",
-	"get":     "TestPutAndGetRoundTrip, TestRecursiveUploadAndDownload",
-	"put":     "TestPutAndGetRoundTrip, TestLargeFileUsesResumableUpload",
+	"cp":      "TestCpUploadAndDownloadRoundTrip, TestRecursiveUploadAndDownload, TestLargeFileUsesResumableUpload, TestServerSideCopy, TestCpRefusesAmbiguousPaths",
 	"sync":    "TestSyncPushAndPull, TestSyncDelete, TestSyncDryRunChangesNothing, TestSyncExcludeIsInvisibleToBothSides",
 	"archive": "TestArchiveDownloadsATreeAsOneFile, TestArchiveCanProduceAZip, TestArchiveWritesToAPipe",
 

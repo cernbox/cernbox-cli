@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// transferFlags are shared by cp, get and put.
+// transferFlags are the options of cp.
 type transferFlags struct {
 	recursive bool
 	force     bool
@@ -46,8 +46,11 @@ func newCpCmd(app *App) *cobra.Command {
 		Long: "Copy files between your computer and CERNBox.\n" +
 			"\n" +
 			"Mark the CERNBox side with cb:, because a path like /eos/... can exist on your\n" +
-			"computer too. If the prefix is awkward, get and put tell the two sides apart\n" +
-			"by position instead.",
+			"computer too.\n" +
+			"\n" +
+			"Large uploads go up in chunks and an interrupted transfer carries on where it\n" +
+			"stopped. A whole directory comes down as one archive when the server can\n" +
+			"build one, which is much faster for many small files.",
 		Example: "  cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/\n" +
 			"  cernbox cp -r cb:/eos/project/c/cernbox/data ./data\n" +
 			"  cernbox cp cb:/eos/user/g/gdelmont/a.txt cb:/eos/user/g/gdelmont/b.txt",
@@ -69,68 +72,6 @@ func newCpCmd(app *App) *cobra.Command {
 			default:
 				return app.runDownload(ctx, cmd, src, dst.Path, flags)
 			}
-		},
-	}
-
-	flags.register(cmd)
-	return cmd
-}
-
-func newPutCmd(app *App) *cobra.Command {
-	flags := &transferFlags{}
-
-	cmd := &cobra.Command{
-		Use:   "put LOCAL REMOTE",
-		Short: "Upload a file or directory to CERNBox",
-		Long: "Upload to CERNBox. No cb: prefix is needed: your computer comes first.\n\n" +
-			"Large files go up in chunks and carry on where they stopped if the\n" +
-			"transfer is interrupted.",
-		Example: "  cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/\n" +
-			"  cernbox put -r ./data /eos/project/c/cernbox/data",
-		Args: cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := app.ctx(cmd)
-			defer cancel()
-
-			dst, err := pathspec.ParseRemote(args[1])
-			if err != nil {
-				return cberr.Usagef("%v", err)
-			}
-			return app.runUpload(ctx, cmd, args[0], dst, flags)
-		},
-	}
-
-	flags.register(cmd)
-	return cmd
-}
-
-func newGetCmd(app *App) *cobra.Command {
-	flags := &transferFlags{}
-
-	cmd := &cobra.Command{
-		Use:   "get REMOTE [LOCAL]",
-		Short: "Download from CERNBox to your computer",
-		Long: "Download from CERNBox. With no local path the file lands in the current\n" +
-			"directory under its own name.\n\n" +
-			"An interrupted download carries on where it stopped. A whole directory\n" +
-			"comes down as one archive when the server can build one, which is much\n" +
-			"faster for many small files.",
-		Example: "  cernbox get /eos/user/g/gdelmont/Documents/report.pdf\n" +
-			"  cernbox get -r /eos/project/c/cernbox/data ./data",
-		Args: cobra.RangeArgs(1, 2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := app.ctx(cmd)
-			defer cancel()
-
-			src, err := pathspec.ParseRemote(args[0])
-			if err != nil {
-				return cberr.Usagef("%v", err)
-			}
-			local := "."
-			if len(args) == 2 {
-				local = args[1]
-			}
-			return app.runDownload(ctx, cmd, src, local, flags)
 		},
 	}
 

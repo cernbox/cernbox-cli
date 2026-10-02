@@ -121,9 +121,9 @@ func TestCompleteLeavesLocalPathsToTheShell(t *testing.T) {
 	box := newTestBox(t)
 	box.putFile("/eos/user/e/einstein/notes.txt", "a")
 
-	// The first argument of put is on this computer. Nothing is suggested, and
+	// An unmarked cp argument is on this computer. Nothing is suggested, and
 	// the directive tells the shell to complete filenames itself.
-	got, directive := complete(t, box, "put", "./re")
+	got, directive := complete(t, box, "cp", "./re")
 	if len(got) != 0 {
 		t.Errorf("candidates = %v, want none for a local path", got)
 	}
@@ -131,10 +131,10 @@ func TestCompleteLeavesLocalPathsToTheShell(t *testing.T) {
 		t.Errorf("directive = %v, want the shell to complete the filename", directive)
 	}
 
-	// The second is in CERNBox, and is completed.
-	got, _ = complete(t, box, "put", "./report.pdf", "")
-	if len(got) != 1 || got[0] != "notes.txt" {
-		t.Errorf("candidates = %v, want [notes.txt]", got)
+	// A marked one is in CERNBox, and is completed.
+	got, _ = complete(t, box, "cp", "./report.pdf", "cb:")
+	if len(got) != 1 || got[0] != "cb:notes.txt" {
+		t.Errorf("candidates = %v, want [cb:notes.txt]", got)
 	}
 }
 

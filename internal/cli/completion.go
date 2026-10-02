@@ -421,8 +421,6 @@ func (a *App) argCompletions() map[string]completeFunc {
 		"mv":    byPosition(remote, remote),
 
 		"cp":      byPosition(transfer, transfer),
-		"get":     byPosition(remote, local),
-		"put":     byPosition(local, remote),
 		"sync":    byPosition(transfer, transfer),
 		"archive": remote,
 

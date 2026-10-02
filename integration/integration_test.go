@@ -62,7 +62,7 @@ func TestSpaceListIncludesHome(t *testing.T) {
 // listing rather than a fixture.
 func TestHomeAliasResolves(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("alias.txt", []byte("via alias")), e.remotePath("alias.txt"))
+	e.mustRun("cp", e.writeLocal("alias.txt", []byte("via alias")), "cb:"+e.remotePath("alias.txt"))
 
 	rel := strings.TrimPrefix(e.remote, homeRoot+"/")
 	info := e.stat("home:" + rel + "/alias.txt")
@@ -115,7 +115,7 @@ func TestStatOnMissingPathExitsFive(t *testing.T) {
 func TestMoveAndCat(t *testing.T) {
 	e := setup(t)
 	local := e.writeLocal("a.txt", []byte("move me"))
-	e.mustRun("put", local, e.remotePath("a.txt"))
+	e.mustRun("cp", local, "cb:"+e.remotePath("a.txt"))
 
 	e.mustRun("mv", e.remotePath("a.txt"), e.remotePath("b.txt"))
 	e.requireNames(e.remote, "b.txt")
@@ -127,7 +127,7 @@ func TestMoveAndCat(t *testing.T) {
 
 func TestServerSideCopy(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("a.txt", []byte("copy me")), e.remotePath("a.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("copy me")), "cb:"+e.remotePath("a.txt"))
 
 	e.mustRun("cp", "cb:"+e.remotePath("a.txt"), "cb:"+e.remotePath("c.txt"))
 	if out := e.mustRun("cat", e.remotePath("c.txt")); out != "copy me" {
@@ -137,13 +137,13 @@ func TestServerSideCopy(t *testing.T) {
 
 // ── transfers ────────────────────────────────────────────────────────────────
 
-func TestPutAndGetRoundTrip(t *testing.T) {
+func TestCpUploadAndDownloadRoundTrip(t *testing.T) {
 	e := setup(t)
 	body := []byte("round trip contents")
 	local := e.writeLocal("a.txt", body)
 
-	e.mustRun("put", local, e.remotePath("a.txt"))
-	e.mustRun("get", e.remotePath("a.txt"), e.localPath("back.txt"))
+	e.mustRun("cp", local, "cb:"+e.remotePath("a.txt"))
+	e.mustRun("cp", "cb:"+e.remotePath("a.txt"), e.localPath("back.txt"))
 
 	if got := e.readLocal("back.txt"); !bytes.Equal(got, body) {
 		t.Errorf("round trip changed the content: %q vs %q", got, body)
@@ -157,14 +157,14 @@ func TestLargeFileUsesResumableUpload(t *testing.T) {
 	body := payload(12 << 20)
 	local := e.writeLocal("big.bin", body)
 
-	e.mustRun("put", local, e.remotePath("big.bin"))
+	e.mustRun("cp", local, "cb:"+e.remotePath("big.bin"))
 
 	info := e.stat(e.remotePath("big.bin"))
 	if info.Size != int64(len(body)) {
 		t.Fatalf("uploaded size = %d, want %d", info.Size, len(body))
 	}
 
-	e.mustRun("get", e.remotePath("big.bin"), e.localPath("big-back.bin"))
+	e.mustRun("cp", "cb:"+e.remotePath("big.bin"), e.localPath("big-back.bin"))
 	got := e.readLocal("big-back.bin")
 	if sha256hex(got) != sha256hex(body) {
 		t.Errorf("the large file round trip changed the content (%d bytes back, %d sent)", len(got), len(body))
@@ -176,8 +176,8 @@ func TestPutWithVerify(t *testing.T) {
 	body := payload(1 << 20)
 	local := e.writeLocal("verified.bin", body)
 
-	e.mustRun("put", "--verify", local, e.remotePath("verified.bin"))
-	e.mustRun("get", "--verify", e.remotePath("verified.bin"), e.localPath("verified-back.bin"))
+	e.mustRun("cp", "--verify", local, "cb:"+e.remotePath("verified.bin"))
+	e.mustRun("cp", "--verify", "cb:"+e.remotePath("verified.bin"), e.localPath("verified-back.bin"))
 
 	if got := e.readLocal("verified-back.bin"); sha256hex(got) != sha256hex(body) {
 		t.Error("the verified round trip changed the content")
@@ -191,13 +191,13 @@ func TestRecursiveUploadAndDownload(t *testing.T) {
 	e.writeLocal("tree/sub/b.txt", []byte("beta"))
 	e.writeLocal("tree/sub/deep/c.txt", []byte("gamma"))
 
-	e.mustRun("put", "-r", e.localPath("tree"), e.remotePath("tree"))
+	e.mustRun("cp", "-r", e.localPath("tree"), "cb:"+e.remotePath("tree"))
 
 	e.requireNames(e.remotePath("tree"), "a.txt", "sub")
 	e.requireNames(e.remotePath("tree/sub"), "b.txt", "deep")
 
 	dest := e.localPath("downloaded")
-	e.mustRun("get", "-r", e.remotePath("tree"), dest)
+	e.mustRun("cp", "-r", "cb:"+e.remotePath("tree"), dest)
 
 	for rel, want := range map[string]string{
 		"a.txt":          "alpha",
@@ -221,10 +221,10 @@ func TestRecursiveDownloadWithoutArchiver(t *testing.T) {
 	e := setup(t)
 	e.writeLocal("tree/a.txt", []byte("alpha"))
 	e.writeLocal("tree/sub/b.txt", []byte("beta"))
-	e.mustRun("put", "-r", e.localPath("tree"), e.remotePath("tree"))
+	e.mustRun("cp", "-r", e.localPath("tree"), "cb:"+e.remotePath("tree"))
 
 	dest := e.localPath("walked")
-	e.mustRun("get", "-r", "--no-archive", e.remotePath("tree"), dest)
+	e.mustRun("cp", "-r", "--no-archive", "cb:"+e.remotePath("tree"), dest)
 
 	got, err := os.ReadFile(filepath.Join(dest, "sub", "b.txt"))
 	if err != nil {
@@ -238,15 +238,15 @@ func TestRecursiveDownloadWithoutArchiver(t *testing.T) {
 func TestPutSkipsExistingWithoutForce(t *testing.T) {
 	e := setup(t)
 	local := e.writeLocal("a.txt", []byte("first"))
-	e.mustRun("put", local, e.remotePath("a.txt"))
+	e.mustRun("cp", local, "cb:"+e.remotePath("a.txt"))
 
 	e.writeLocal("a.txt", []byte("second"))
-	e.mustRun("put", local, e.remotePath("a.txt"))
+	e.mustRun("cp", local, "cb:"+e.remotePath("a.txt"))
 	if out := e.mustRun("cat", e.remotePath("a.txt")); out != "first" {
 		t.Errorf("the existing file was overwritten without --force: %q", out)
 	}
 
-	e.mustRun("put", "--force", local, e.remotePath("a.txt"))
+	e.mustRun("cp", "--force", local, "cb:"+e.remotePath("a.txt"))
 	if out := e.mustRun("cat", e.remotePath("a.txt")); out != "second" {
 		t.Errorf("--force did not overwrite: %q", out)
 	}
@@ -256,7 +256,7 @@ func TestPutDryRunWritesNothing(t *testing.T) {
 	e := setup(t)
 	local := e.writeLocal("a.txt", []byte("dry"))
 
-	e.mustRun("put", "--dry-run", local, e.remotePath("a.txt"))
+	e.mustRun("cp", "--dry-run", local, "cb:"+e.remotePath("a.txt"))
 	if _, _, code := e.run("stat", e.remotePath("a.txt")); code != cberr.ExitNotFound {
 		t.Errorf("a dry run created the file (stat exited %d)", code)
 	}
@@ -281,7 +281,7 @@ func TestUnicodeAndSpacesInNames(t *testing.T) {
 	name := "my notes #1 – ümlaut.txt"
 	local := e.writeLocal("weird.txt", []byte("odd name"))
 
-	e.mustRun("put", local, e.remotePath(name))
+	e.mustRun("cp", local, "cb:"+e.remotePath(name))
 	if out := e.mustRun("cat", e.remotePath(name)); out != "odd name" {
 		t.Errorf("cat = %q", out)
 	}
@@ -302,7 +302,7 @@ func TestUnicodeAndSpacesInNames(t *testing.T) {
 
 func TestShareLifecycle(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("shared.txt", []byte("share me")), e.remotePath("shared.txt"))
+	e.mustRun("cp", e.writeLocal("shared.txt", []byte("share me")), "cb:"+e.remotePath("shared.txt"))
 	target := e.remotePath("shared.txt")
 
 	var created []struct {
@@ -346,7 +346,7 @@ func TestShareLifecycle(t *testing.T) {
 
 func TestPublicLinkLifecycle(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("linked.txt", []byte("link me")), e.remotePath("linked.txt"))
+	e.mustRun("cp", e.writeLocal("linked.txt", []byte("link me")), "cb:"+e.remotePath("linked.txt"))
 	target := e.remotePath("linked.txt")
 
 	var created struct {
@@ -386,7 +386,7 @@ func TestPublicLinkLifecycle(t *testing.T) {
 // informational goes to stderr, so a pipe sees only parseable data.
 func TestJSONOutputIsCleanOnStdout(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("a.txt", []byte("x")), e.remotePath("a.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("x")), "cb:"+e.remotePath("a.txt"))
 
 	stdout, _, code := e.run("--output", "json", "ls", e.remote)
 	if code != 0 {
@@ -402,7 +402,7 @@ func TestQuietSuppressesChatter(t *testing.T) {
 	e := setup(t)
 	local := e.writeLocal("a.txt", []byte("x"))
 
-	_, stderr, code := e.run("-q", "put", local, e.remotePath("a.txt"))
+	_, stderr, code := e.run("-q", "cp", local, "cb:"+e.remotePath("a.txt"))
 	if code != 0 {
 		t.Fatalf("exit code %d: %s", code, stderr)
 	}

@@ -4,7 +4,7 @@ Work with your CERNBox files from the command line: browse them, move them betwe
 
 ```console
 $ cernbox ls /eos/user/g/gdelmont
-$ cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
+$ cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/
 $ cernbox share create /eos/user/g/gdelmont/Documents --with marie --role editor
 ```
 
@@ -65,13 +65,7 @@ Commands that copy between your computer and CERNBox are the exception: there yo
 
 ```bash
 cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/
-```
-
-`get` and `put` need no marker, because your computer always comes first:
-
-```bash
-cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
-cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
+cernbox cp cb:/eos/user/g/gdelmont/Documents/report.pdf .
 ```
 
 ## Browsing
@@ -104,7 +98,7 @@ cernbox tail -f --timeout 1h job.log
 
 This is for the log a batch job is writing into CERNBox: only the bytes that were appended are transferred, so following a large log costs almost nothing. Following polls, because the server has nothing to announce a change with, and `--interval` sets how often.
 
-**It needs the storage to serve byte ranges, and the EOS behind this instance currently does not** — it answers a ranged request with chunked framing inside a body it has already given a length, so the bytes are not the file's. The client refuses that rather than print the wrong thing, and says so. The same gap silently corrupted a resumed `cernbox get` until it was caught; see [docs/behaviour.md](docs/behaviour.md).
+**It needs the storage to serve byte ranges, and the EOS behind this instance currently does not** — it answers a ranged request with chunked framing inside a body it has already given a length, so the bytes are not the file's. The client refuses that rather than print the wrong thing, and says so. The same gap silently corrupted a resumed `cernbox cp` download until it was caught; see [docs/behaviour.md](docs/behaviour.md).
 
 ## How much space you have
 
@@ -139,7 +133,7 @@ Which side an argument means: a bare name is CERNBox, in your `myfiles` folder; 
 
 The editor comes from `--editor`, then `CERNBOX_EDITOR`, then `VISUAL`, then `EDITOR`. `edit.folder` in the configuration file, or `CERNBOX_EDIT_FOLDER`, changes where bare names go.
 
-If somebody else changes the file while you have it open, your save is refused rather than allowed to overwrite theirs, and your version is kept on disk with its path printed so nothing is lost. Sending a local file to a name CERNBox already uses for *different* content is refused too, the way `put` refuses to overwrite. `--force` says yours should win.
+If somebody else changes the file while you have it open, your save is refused rather than allowed to overwrite theirs, and your version is kept on disk with its path printed so nothing is lost. Sending a local file to a name CERNBox already uses for *different* content is refused too, the way `cp` refuses to overwrite. `--force` says yours should win.
 
 ## A folder that uploads itself
 
@@ -243,7 +237,7 @@ Two differences from the outbox worth knowing. `inbox watch` **asks on a timer**
 ## Copying and mirroring
 
 ```bash
-cernbox get -r /eos/project/c/cernbox/data ./data    # a whole directory
+cernbox cp -r cb:/eos/project/c/cernbox/data ./data  # a whole directory
 cernbox sync ./data cb:/eos/project/c/cernbox/data   # make the far side match
 cernbox archive /eos/project/c/cernbox/data          # download it as one .tar
 ```

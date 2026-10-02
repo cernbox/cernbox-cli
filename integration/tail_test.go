@@ -24,8 +24,8 @@ func storageDoesRanges(t *testing.T, e *env) bool {
 	// offset. A single-line file is read whole, carries no Range at all, and
 	// would make this answer yes on a storage that cannot do ranges.
 	probe := e.remotePath("range-probe.txt")
-	e.mustRun("put", e.writeLocal("range-probe.txt",
-		[]byte("one\ntwo\nthree\nfour\nfive\n")), probe)
+	e.mustRun("cp", e.writeLocal("range-probe.txt",
+		[]byte("one\ntwo\nthree\nfour\nfive\n")), "cb:"+probe)
 
 	out, stderr, code := e.run("tail", "-n", "1", probe)
 	switch {
@@ -52,7 +52,7 @@ func TestTailShowsTheEndOfAFile(t *testing.T) {
 		sb.WriteString("\n")
 	}
 	remote := e.remotePath("job.log")
-	e.mustRun("put", e.writeLocal("job.log", []byte(sb.String())), remote)
+	e.mustRun("cp", e.writeLocal("job.log", []byte(sb.String())), "cb:"+remote)
 
 	if !storageDoesRanges(t, e) {
 		return
@@ -70,7 +70,7 @@ func TestTailFollowPrintsWhatWasAppended(t *testing.T) {
 	e := setup(t)
 
 	remote := e.remotePath("growing.log")
-	e.mustRun("put", e.writeLocal("growing.log", []byte("first\n")), remote)
+	e.mustRun("cp", e.writeLocal("growing.log", []byte("first\n")), "cb:"+remote)
 
 	if !storageDoesRanges(t, e) {
 		return
@@ -81,7 +81,7 @@ func TestTailFollowPrintsWhatWasAppended(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e.mustRun("put", e.writeLocal("growing2.log", []byte("first\nsecond\n")), remote)
+		e.mustRun("cp", e.writeLocal("growing2.log", []byte("first\nsecond\n")), "cb:"+remote)
 	}()
 
 	out, _, code := e.run("--timeout", "20s", "tail", "-f", "--interval", "500ms", remote)

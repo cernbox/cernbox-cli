@@ -18,7 +18,7 @@ import (
 
 func TestTrashRoundTrip(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("doomed.txt", []byte("delete me")), e.remotePath("doomed.txt"))
+	e.mustRun("cp", e.writeLocal("doomed.txt", []byte("delete me")), "cb:"+e.remotePath("doomed.txt"))
 	e.mustRun("rm", e.remotePath("doomed.txt"))
 
 	var items []struct {
@@ -55,7 +55,7 @@ func TestTrashRoundTrip(t *testing.T) {
 // take in one request has to come back split rather than refused.
 func TestTrashListSince(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("doomed.txt", []byte("delete me")), e.remotePath("doomed.txt"))
+	e.mustRun("cp", e.writeLocal("doomed.txt", []byte("delete me")), "cb:"+e.remotePath("doomed.txt"))
 	e.mustRun("rm", e.remotePath("doomed.txt"))
 
 	type item struct {
@@ -87,7 +87,7 @@ func TestTrashListSince(t *testing.T) {
 
 func TestTrashPurge(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("gone.txt", []byte("x")), e.remotePath("gone.txt"))
+	e.mustRun("cp", e.writeLocal("gone.txt", []byte("x")), "cb:"+e.remotePath("gone.txt"))
 	e.mustRun("rm", e.remotePath("gone.txt"))
 
 	var items []struct {
@@ -129,7 +129,7 @@ func TestTrashPurge(t *testing.T) {
 // up with what the storage actually reports.
 func TestTrashBrowseRestoresThroughTheTerminal(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("browsed.txt", []byte("bring me back")), e.remotePath("browsed.txt"))
+	e.mustRun("cp", e.writeLocal("browsed.txt", []byte("bring me back")), "cb:"+e.remotePath("browsed.txt"))
 	e.mustRun("rm", e.remotePath("browsed.txt"))
 
 	// Narrow the top level to this run's own directory, open it, restore what the
@@ -174,7 +174,7 @@ func TestTrashBrowseRefusesWithoutATerminal(t *testing.T) {
 func TestEditRoundTrip(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("edited.txt")
-	e.mustRun("put", e.writeLocal("edited.txt", []byte("from the server\n")), target)
+	e.mustRun("cp", e.writeLocal("edited.txt", []byte("from the server\n")), "cb:"+target)
 
 	// The editor appends, then asks the server what it holds — while still
 	// running. That answer is the proof that a save arrives before the editor
@@ -346,9 +346,9 @@ func TestFindPredicates(t *testing.T) {
 	e := setup(t)
 	dir := e.remotePath("search")
 	e.mustRun("mkdir", "-p", dir+"/raw")
-	e.mustRun("put", e.writeLocal("run1.root", make([]byte, 300000)), dir+"/raw/run1.root")
-	e.mustRun("put", e.writeLocal("run2.root", []byte("tiny")), dir+"/raw/run2.root")
-	e.mustRun("put", e.writeLocal("notes.txt", []byte("text")), dir+"/notes.txt")
+	e.mustRun("cp", e.writeLocal("run1.root", make([]byte, 300000)), "cb:"+dir+"/raw/run1.root")
+	e.mustRun("cp", e.writeLocal("run2.root", []byte("tiny")), "cb:"+dir+"/raw/run2.root")
+	e.mustRun("cp", e.writeLocal("notes.txt", []byte("text")), "cb:"+dir+"/notes.txt")
 
 	type hit struct {
 		Path  string `json:"path"`
@@ -419,7 +419,7 @@ func TestShareAuditFindsInheritedAccess(t *testing.T) {
 	file := nested + "/secret.txt"
 
 	e.mustRun("mkdir", "-p", nested)
-	e.mustRun("put", e.writeLocal("secret.txt", []byte("inherited")), file)
+	e.mustRun("cp", e.writeLocal("secret.txt", []byte("inherited")), "cb:"+file)
 
 	// Shared two levels above the file, and linked one level above.
 	e.mustRun("share", "create", dir, "--with", otherUser, "--role", "editor")
@@ -472,8 +472,8 @@ func TestShareAuditFindsInheritedAccess(t *testing.T) {
 func TestDuTopAndVersions(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", "-p", e.remotePath("deep/deeper"))
-	e.mustRun("put", e.writeLocal("big.bin", make([]byte, 300000)), e.remotePath("deep/deeper/big.bin"))
-	e.mustRun("put", e.writeLocal("small.txt", []byte("x")), e.remotePath("small.txt"))
+	e.mustRun("cp", e.writeLocal("big.bin", make([]byte, 300000)), "cb:"+e.remotePath("deep/deeper/big.bin"))
+	e.mustRun("cp", e.writeLocal("small.txt", []byte("x")), "cb:"+e.remotePath("small.txt"))
 
 	// --top has to look all the way down, since the biggest thing is rarely at
 	// the top level.
@@ -560,8 +560,8 @@ func TestVersionsRoundTrip(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("evolving.txt")
 
-	e.mustRun("put", e.writeLocal("evolving.txt", []byte("first draft")), target)
-	e.mustRun("put", "--force", e.writeLocal("evolving.txt", []byte("second draft")), target)
+	e.mustRun("cp", e.writeLocal("evolving.txt", []byte("first draft")), "cb:"+target)
+	e.mustRun("cp", "--force", e.writeLocal("evolving.txt", []byte("second draft")), "cb:"+target)
 
 	var versions []struct {
 		Key  string `json:"key"`
@@ -597,8 +597,8 @@ func TestVersionsDiff(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("diffable.txt")
 
-	e.mustRun("put", e.writeLocal("diffable.txt", []byte("alpha\nbeta\ngamma\n")), target)
-	e.mustRun("put", "--force", e.writeLocal("diffable.txt", []byte("alpha\nBETA\ngamma\n")), target)
+	e.mustRun("cp", e.writeLocal("diffable.txt", []byte("alpha\nbeta\ngamma\n")), "cb:"+target)
+	e.mustRun("cp", "--force", e.writeLocal("diffable.txt", []byte("alpha\nBETA\ngamma\n")), "cb:"+target)
 
 	var versions []struct {
 		Key string `json:"key"`
@@ -743,7 +743,7 @@ func TestSyncExcludeIsInvisibleToBothSides(t *testing.T) {
 
 	// An excluded entry on the destination is protected from --delete: it is not
 	// "missing from the source", it is outside the mirror altogether.
-	e.mustRun("put", e.writeLocal("theirs.o", []byte("not mine")), remote+"/theirs.o")
+	e.mustRun("cp", e.writeLocal("theirs.o", []byte("not mine")), "cb:"+remote+"/theirs.o")
 	e.mustRun("sync", e.localPath("tree"), "cb:"+remote, "--delete", "--exclude", "*.o", "--exclude", "build")
 	if _, _, code := e.run("stat", remote+"/theirs.o"); code != 0 {
 		t.Error("--delete removed an excluded file")
@@ -755,7 +755,7 @@ func TestSyncExcludeIsInvisibleToBothSides(t *testing.T) {
 func TestOpenWebLink(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("linked.txt")
-	e.mustRun("put", e.writeLocal("linked.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("linked.txt", []byte("x")), "cb:"+target)
 
 	stdout, stderr, code := e.run("open", "--web", target)
 	if code != 0 {

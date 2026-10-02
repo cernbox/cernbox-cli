@@ -1253,7 +1253,7 @@ func TestCatCommand(t *testing.T) {
 	}
 }
 
-func TestPutAndGet(t *testing.T) {
+func TestCpUploadAndDownload(t *testing.T) {
 	box := newTestBox(t)
 	box.mkdir("/eos/user/e/einstein")
 
@@ -1263,7 +1263,7 @@ func TestPutAndGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := run(t, box, "put", local, "/eos/user/e/einstein/report.txt"); err != nil {
+	if _, _, err := run(t, box, "cp", local, "cb:/eos/user/e/einstein/report.txt"); err != nil {
 		t.Fatal(err)
 	}
 	if got := box.files["/eos/user/e/einstein/report.txt"]; got != "report body" {
@@ -1271,7 +1271,7 @@ func TestPutAndGet(t *testing.T) {
 	}
 
 	back := filepath.Join(dir, "downloaded.txt")
-	if _, _, err := run(t, box, "get", "/eos/user/e/einstein/report.txt", back); err != nil {
+	if _, _, err := run(t, box, "cp", "cb:/eos/user/e/einstein/report.txt", back); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(back)
@@ -1317,7 +1317,7 @@ func TestCpUploadsWithCbPrefix(t *testing.T) {
 	}
 }
 
-func TestPutDryRunWritesNothing(t *testing.T) {
+func TestCpDryRunWritesNothing(t *testing.T) {
 	box := newTestBox(t)
 	box.mkdir("/eos/user/e/einstein")
 
@@ -1326,7 +1326,7 @@ func TestPutDryRunWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := run(t, box, "put", "--dry-run", local, "/eos/user/e/einstein/a.txt"); err != nil {
+	if _, _, err := run(t, box, "cp", "--dry-run", local, "cb:/eos/user/e/einstein/a.txt"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := box.files["/eos/user/e/einstein/a.txt"]; ok {
@@ -1580,7 +1580,7 @@ func TestCommandsDumpListsTheTree(t *testing.T) {
 	// A spread of leaves and nested subcommands, so a regression in either the
 	// walk or the nesting shows up.
 	for _, want := range []string{
-		"ls", "put", "get", "sync", "stat",
+		"ls", "cp", "sync", "stat",
 		"share create", "link password", "trash purge",
 		"versions download", "space info", "ocm invite accept", "token revoke",
 	} {

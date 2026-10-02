@@ -59,8 +59,8 @@ func TestLoginReportsTheProvider(t *testing.T) {
 func TestLsLongAndRecursive(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", e.remotePath("sub"))
-	e.mustRun("put", e.writeLocal("a.txt", []byte("alpha")), e.remotePath("a.txt"))
-	e.mustRun("put", e.writeLocal("b.txt", []byte("beta")), e.remotePath("sub/b.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("alpha")), "cb:"+e.remotePath("a.txt"))
+	e.mustRun("cp", e.writeLocal("b.txt", []byte("beta")), "cb:"+e.remotePath("sub/b.txt"))
 
 	// The long listing is shaped like ls: a total line, then one line per
 	// entry starting with a mode. No labelled headers.
@@ -102,8 +102,8 @@ func TestLsSortFlags(t *testing.T) {
 	e := setup(t)
 	// Written oldest-first and with distinct sizes, so name, time and size
 	// each give a different order.
-	e.mustRun("put", e.writeLocal("big.txt", []byte("0123456789")), e.remotePath("big.txt"))
-	e.mustRun("put", e.writeLocal("small.txt", []byte("x")), e.remotePath("small.txt"))
+	e.mustRun("cp", e.writeLocal("big.txt", []byte("0123456789")), "cb:"+e.remotePath("big.txt"))
+	e.mustRun("cp", e.writeLocal("small.txt", []byte("x")), "cb:"+e.remotePath("small.txt"))
 
 	first := func(out string) string {
 		lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -143,7 +143,7 @@ func TestLsSortFlags(t *testing.T) {
 func TestLsSizesMatchLs(t *testing.T) {
 	e := setup(t)
 	// 2048 bytes is 2.0K, so the two renderings cannot be confused.
-	e.mustRun("put", e.writeLocal("a.txt", make([]byte, 2048)), e.remotePath("a.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", make([]byte, 2048)), "cb:"+e.remotePath("a.txt"))
 
 	plain := e.mustRun("ls", "-l", e.remote)
 	if !strings.Contains(plain, "2048") {
@@ -174,7 +174,7 @@ func TestLsHelpIsStillReachable(t *testing.T) {
 
 func TestLsCSV(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("a.txt", []byte("alpha")), e.remotePath("a.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("alpha")), "cb:"+e.remotePath("a.txt"))
 
 	out := e.mustRun("--output", "csv", "ls", e.remote)
 	records, err := csv.NewReader(strings.NewReader(out)).ReadAll()
@@ -194,8 +194,8 @@ func TestLsCSV(t *testing.T) {
 func TestFindFallsBackToWalking(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", e.remotePath("deep"))
-	e.mustRun("put", e.writeLocal("needle.txt", []byte("x")), e.remotePath("deep/needle.txt"))
-	e.mustRun("put", e.writeLocal("other.txt", []byte("y")), e.remotePath("deep/other.txt"))
+	e.mustRun("cp", e.writeLocal("needle.txt", []byte("x")), "cb:"+e.remotePath("deep/needle.txt"))
+	e.mustRun("cp", e.writeLocal("other.txt", []byte("y")), "cb:"+e.remotePath("deep/other.txt"))
 
 	var results []entry
 	e.runJSON(&results, "find", e.remote, "--name", "needle")
@@ -214,7 +214,7 @@ func TestFindFallsBackToWalking(t *testing.T) {
 func TestDu(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", e.remotePath("sub"))
-	e.mustRun("put", e.writeLocal("a.txt", []byte("0123456789")), e.remotePath("sub/a.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("0123456789")), "cb:"+e.remotePath("sub/a.txt"))
 
 	var usage []struct {
 		Path string `json:"path"`
@@ -284,7 +284,7 @@ func TestSpaceListFilteredByType(t *testing.T) {
 func TestShareIsVisibleToTheRecipient(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("for-marie.txt")
-	e.mustRun("put", e.writeLocal("for-marie.txt", []byte("hello marie")), target)
+	e.mustRun("cp", e.writeLocal("for-marie.txt", []byte("hello marie")), "cb:"+target)
 
 	e.mustRun("share", "create", target, "--with", otherUser, "--role", "viewer")
 
@@ -312,7 +312,7 @@ func TestShareIsVisibleToTheRecipient(t *testing.T) {
 func TestShareWithGroup(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("for-group.txt")
-	e.mustRun("put", e.writeLocal("for-group.txt", []byte("hello group")), target)
+	e.mustRun("cp", e.writeLocal("for-group.txt", []byte("hello group")), "cb:"+target)
 
 	// physics-lovers is a group both einstein and marie belong to in the dev
 	// fixtures.
@@ -336,7 +336,7 @@ func TestShareWithGroup(t *testing.T) {
 func TestShareListWithoutPathShowsEverythingShared(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("shared-by-me.txt")
-	e.mustRun("put", e.writeLocal("shared-by-me.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("shared-by-me.txt", []byte("x")), "cb:"+target)
 	e.mustRun("share", "create", target, "--with", otherUser, "--role", "viewer")
 
 	var items []struct {
@@ -354,7 +354,7 @@ func TestShareListWithoutPathShowsEverythingShared(t *testing.T) {
 func TestShareExpiryIsAccepted(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("expiring.txt")
-	e.mustRun("put", e.writeLocal("expiring.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("expiring.txt", []byte("x")), "cb:"+target)
 
 	e.mustRun("share", "create", target, "--with", otherUser, "--role", "viewer", "--expiry", "2030-12-31")
 }
@@ -362,7 +362,7 @@ func TestShareExpiryIsAccepted(t *testing.T) {
 func TestShareRejectsAnUnknownRole(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("a.txt")
-	e.mustRun("put", e.writeLocal("a.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("x")), "cb:"+target)
 
 	_, _, code := e.run("share", "create", target, "--with", otherUser, "--role", "overlord")
 	if code != 2 {
@@ -375,7 +375,7 @@ func TestShareRejectsAnUnknownRole(t *testing.T) {
 func TestLinkWithExpiryAndName(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("linked.txt")
-	e.mustRun("put", e.writeLocal("linked.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("linked.txt", []byte("x")), "cb:"+target)
 
 	var created struct {
 		ID   string `json:"id"`
@@ -411,7 +411,7 @@ type linkView struct {
 func TestLinkUpdateKeepsTheSameAddress(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("linked.txt")
-	e.mustRun("put", e.writeLocal("linked.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("linked.txt", []byte("x")), "cb:"+target)
 
 	var created linkView
 	e.runJSONOne(&created, "link", "create", target, "--role", "viewer", "--name", "first")
@@ -452,7 +452,7 @@ func TestLinkUpdateKeepsTheSameAddress(t *testing.T) {
 func TestLinkUpdateNeedsSomethingToChange(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("a.txt")
-	e.mustRun("put", e.writeLocal("a.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("x")), "cb:"+target)
 
 	var created linkView
 	e.runJSONOne(&created, "link", "create", target, "--role", "viewer")
@@ -471,7 +471,7 @@ func TestLinkUpdateNeedsSomethingToChange(t *testing.T) {
 func TestLinkRejectsAnUnknownRole(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("a.txt")
-	e.mustRun("put", e.writeLocal("a.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("x")), "cb:"+target)
 
 	_, _, code := e.run("link", "create", target, "--role", "overlord")
 	if code != 2 {
@@ -486,7 +486,7 @@ func TestLinkRejectsAnUnknownRole(t *testing.T) {
 func TestLinkPasswordNeedsATerminal(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("a.txt")
-	e.mustRun("put", e.writeLocal("a.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("x")), "cb:"+target)
 
 	var created struct {
 		ID string `json:"id"`
@@ -584,7 +584,7 @@ func TestOpenReturnsAnApplicationLink(t *testing.T) {
 	requireApps(t, e)
 
 	target := e.remotePath("openable.txt")
-	e.mustRun("put", e.writeLocal("openable.txt", []byte("hello")), target)
+	e.mustRun("cp", e.writeLocal("openable.txt", []byte("hello")), "cb:"+target)
 
 	var result struct {
 		URL  string `json:"url"`
@@ -604,7 +604,7 @@ func TestOpenWithExplicitApp(t *testing.T) {
 	requireApps(t, e)
 
 	target := e.remotePath("openable.txt")
-	e.mustRun("put", e.writeLocal("openable.txt", []byte("hello")), target)
+	e.mustRun("cp", e.writeLocal("openable.txt", []byte("hello")), "cb:"+target)
 
 	// The dev environment runs the demo provider, which advertises itself under
 	// this name.
@@ -619,7 +619,7 @@ func TestOpenWriteMode(t *testing.T) {
 	requireApps(t, e)
 
 	target := e.remotePath("editable.txt")
-	e.mustRun("put", e.writeLocal("editable.txt", []byte("hello")), target)
+	e.mustRun("cp", e.writeLocal("editable.txt", []byte("hello")), "cb:"+target)
 
 	e.mustRun("open", "--view-mode", "write", target)
 }
@@ -718,7 +718,7 @@ func TestStatusJSON(t *testing.T) {
 func TestDuLooksLikeDu(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", "-p", e.remotePath("tree/inner"))
-	e.mustRun("put", e.writeLocal("a.txt", make([]byte, 2048)), e.remotePath("tree/inner/a.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", make([]byte, 2048)), "cb:"+e.remotePath("tree/inner/a.txt"))
 
 	out := e.mustRun("du", "-d", "2", e.remotePath("tree"))
 	if strings.Contains(out, "SIZE") || strings.Contains(out, "PATH") {
@@ -745,7 +745,7 @@ func TestDuLooksLikeDu(t *testing.T) {
 func TestDuSummarizeAndHuman(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", "-p", e.remotePath("tree/inner"))
-	e.mustRun("put", e.writeLocal("a.txt", make([]byte, 2048)), e.remotePath("tree/inner/a.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", make([]byte, 2048)), "cb:"+e.remotePath("tree/inner/a.txt"))
 
 	summary := strings.TrimSpace(e.mustRun("du", "-s", "-d", "2", e.remotePath("tree")))
 	if strings.Contains(summary, "\n") {
@@ -770,7 +770,7 @@ func TestDuSummarizeAndHuman(t *testing.T) {
 func TestTouchNeverTruncates(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("precious.txt")
-	e.mustRun("put", e.writeLocal("precious.txt", []byte("do not lose me")), target)
+	e.mustRun("cp", e.writeLocal("precious.txt", []byte("do not lose me")), "cb:"+target)
 
 	// touch(1) succeeds on a file that is already there, so this must too.
 	stdout, stderr, code := e.run("touch", target)
@@ -849,7 +849,7 @@ func TestRecursiveUppercaseAlias(t *testing.T) {
 func TestLinkCreateUsesTheLinkTable(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("shared.txt")
-	e.mustRun("put", e.writeLocal("shared.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("shared.txt", []byte("x")), "cb:"+target)
 
 	stdout, stderr, code := e.run("link", "create", target)
 	if code != 0 {
@@ -883,7 +883,7 @@ func TestLinkCreateUsesTheLinkTable(t *testing.T) {
 func TestShareListShowsALinkType(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("both.txt")
-	e.mustRun("put", e.writeLocal("both.txt", []byte("x")), target)
+	e.mustRun("cp", e.writeLocal("both.txt", []byte("x")), "cb:"+target)
 	e.mustRun("link", "create", target)
 
 	out := e.mustRun("share", "list", target)
@@ -907,7 +907,7 @@ func TestShareListShowsALinkType(t *testing.T) {
 func TestShareReceivedAcceptAndDecline(t *testing.T) {
 	e := setup(t)
 	target := e.remotePath("decidable.txt")
-	e.mustRun("put", e.writeLocal("decidable.txt", []byte("yours to refuse")), target)
+	e.mustRun("cp", e.writeLocal("decidable.txt", []byte("yours to refuse")), "cb:"+target)
 	e.mustRun("share", "create", target, "--with", otherUser, "--role", "viewer")
 
 	type row struct {

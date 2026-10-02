@@ -16,8 +16,8 @@ func (e *env) archiveTree() string {
 	e.t.Helper()
 
 	e.mustRun("mkdir", "-p", e.remotePath("tree/sub"))
-	e.mustRun("put", e.writeLocal("a.txt", []byte("first")), e.remotePath("tree/a.txt"))
-	e.mustRun("put", e.writeLocal("b.txt", []byte("second")), e.remotePath("tree/sub/b.txt"))
+	e.mustRun("cp", e.writeLocal("a.txt", []byte("first")), "cb:"+e.remotePath("tree/a.txt"))
+	e.mustRun("cp", e.writeLocal("b.txt", []byte("second")), "cb:"+e.remotePath("tree/sub/b.txt"))
 	return e.remotePath("tree")
 }
 

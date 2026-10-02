@@ -16,8 +16,8 @@ func TestInboxCollectsAnArrival(t *testing.T) {
 
 	remote := e.remotePath("incoming")
 	e.mustRun("mkdir", remote)
-	e.mustRun("put", e.writeLocal("arrival.txt", []byte("from a collaborator")),
-		remote+"/arrival.txt")
+	e.mustRun("cp", e.writeLocal("arrival.txt", []byte("from a collaborator")),
+		"cb:"+remote+"/arrival.txt")
 
 	local := filepath.Join(e.localDir, "collected")
 	e.mustRun("inbox", "pull", remote, "--to", local, "--settle", "0")
@@ -48,7 +48,7 @@ func TestInboxStatusExplainsWhatItIsWaitingFor(t *testing.T) {
 
 	remote := e.remotePath("incoming")
 	e.mustRun("mkdir", remote)
-	e.mustRun("put", e.writeLocal("fresh.txt", []byte("just now")), remote+"/fresh.txt")
+	e.mustRun("cp", e.writeLocal("fresh.txt", []byte("just now")), "cb:"+remote+"/fresh.txt")
 
 	local := filepath.Join(e.localDir, "collected")
 	out := e.mustRun("inbox", "status", remote, "--to", local, "--settle", "1h")
@@ -67,7 +67,7 @@ func TestInboxAfterMoveClearsTheFolder(t *testing.T) {
 
 	remote := e.remotePath("incoming")
 	e.mustRun("mkdir", remote)
-	e.mustRun("put", e.writeLocal("arrival.txt", []byte("collected")), remote+"/arrival.txt")
+	e.mustRun("cp", e.writeLocal("arrival.txt", []byte("collected")), "cb:"+remote+"/arrival.txt")
 
 	local := filepath.Join(e.localDir, "collected")
 	e.mustRun("inbox", "pull", remote, "--to", local, "--settle", "0", "--after", "move")
@@ -92,7 +92,7 @@ func TestInboxAfterDeleteVerifiesBeforeRemoving(t *testing.T) {
 	remote := e.remotePath("incoming")
 	e.mustRun("mkdir", remote)
 	body := strings.Repeat("payload\n", 1000)
-	e.mustRun("put", e.writeLocal("big.txt", []byte(body)), remote+"/big.txt")
+	e.mustRun("cp", e.writeLocal("big.txt", []byte(body)), "cb:"+remote+"/big.txt")
 
 	local := filepath.Join(e.localDir, "collected")
 	e.mustRun("inbox", "pull", remote, "--to", local, "--settle", "0", "--after", "delete")
@@ -136,8 +136,8 @@ func TestInboxWatchCollectsOnATimer(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e.mustRun("put", e.writeLocal("late.txt", []byte("arrived later")),
-			remote+"/late.txt")
+		e.mustRun("cp", e.writeLocal("late.txt", []byte("arrived later")),
+			"cb:"+remote+"/late.txt")
 	}()
 
 	out, stderr, code := e.run("--timeout", "20s", "inbox", "watch", remote,

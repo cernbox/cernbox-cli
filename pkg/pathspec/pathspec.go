@@ -306,7 +306,7 @@ func Join(s Spec, elems ...string) Spec {
 
 // Base returns the final element of the spec's path. For a space alias with an
 // empty path it returns the last segment of the alias, so that
-// "cernbox get project/cernbox:" lands in a directory named "cernbox".
+// "cernbox cp cb:project/cernbox: ." lands in a directory named "cernbox".
 func Base(s Spec) string {
 	if s.Path == "" || s.Path == "." || s.Path == "/" {
 		if s.Space != "" {

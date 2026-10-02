@@ -124,7 +124,7 @@ type archiveResult struct {
 
 // archiveDest decides where the archive is written. An empty --to means the
 // current directory, and a --to that names an existing directory means inside
-// it, which is the rule get and cp already follow.
+// it, which is the rule cp already follows.
 func archiveDest(to string, paths []string, format string) string {
 	name := archiveName(paths, format)
 	if to == "" {

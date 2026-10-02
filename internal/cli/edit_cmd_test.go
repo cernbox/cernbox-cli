@@ -539,7 +539,7 @@ func TestEditLocalFileIsNotOverwrittenByTheServer(t *testing.T) {
 	editor := fakeEditor(t, "copy $1 "+quote(seen))
 
 	// A different file already has that name in CERNBox, so this is refused:
-	// 'put' wants --force before replacing a destination, and so does this.
+	// 'cp' wants --force before replacing a destination, and so does this.
 	_, _, err := run(t, box, "edit", local, "--editor", editor)
 	if cberr.KindOf(err) != cberr.KindConflict {
 		t.Fatalf("err = %v (kind %v), want a refusal to replace the remote file",

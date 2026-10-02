@@ -647,7 +647,7 @@ func (r outboxResult) report(out *output.Writer) {
 		// Said out loud rather than passed over: an outbox sends files, and
 		// somebody who dropped a folder in needs to know it stayed put.
 		out.Warn("%s skipped: an outbox uploads files, not folders. "+
-			"'cernbox put -r' or 'cernbox sync' will send a directory.",
+			"'cernbox cp -r' or 'cernbox sync' will send a directory.",
 			itemsPlural(r.dirs, "folder"))
 	}
 }

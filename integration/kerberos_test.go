@@ -194,7 +194,7 @@ func TestKerberosSessionDoesRealWork(t *testing.T) {
 	k := requireKerberos(t)
 
 	local := e.writeLocal("krb.txt", []byte("authenticated with a ticket"))
-	e.mustRunKerberos(k, "put", local, e.remotePath("krb.txt"))
+	e.mustRunKerberos(k, "cp", local, "cb:"+e.remotePath("krb.txt"))
 
 	if out := e.mustRunKerberos(k, "cat", e.remotePath("krb.txt")); out != "authenticated with a ticket" {
 		t.Errorf("cat returned %q", out)

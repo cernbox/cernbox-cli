@@ -201,13 +201,6 @@ On lxplus, `/eos/user/g/gdelmont` is *both* a valid CERNBox remote path and a re
   cernbox cp -r cb:/eos/project/c/cernbox/data ./data
   ```
 
-- **`get` and `put`** are unambiguous by position and are what most users will actually type:
-
-  ```bash
-  cernbox put ./report.pdf /eos/user/g/gdelmont/Documents/
-  cernbox get /eos/user/g/gdelmont/Documents/report.pdf .
-  ```
-
 `cb:` is accepted everywhere a remote path is, so a script can be explicit throughout if it prefers.
 
 ## 5. Command surface
@@ -228,8 +221,6 @@ cernbox touch PATH
 cernbox rm [-r] [-f] PATH...
 cernbox mv SRC DST
 cernbox cp [-r] SRC DST                # cb: prefix marks the remote side
-cernbox get [-r] REMOTE [LOCAL]
-cernbox put [-r] LOCAL REMOTE
 cernbox sync LOCAL cb:REMOTE [--delete] [--dry-run]
 
 cernbox space list [--type personal|project]

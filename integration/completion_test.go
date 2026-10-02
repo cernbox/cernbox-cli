@@ -28,7 +28,7 @@ func (e *env) completeLine(args ...string) []string {
 func TestCompleteRemotePaths(t *testing.T) {
 	e := setup(t)
 	e.mustRun("mkdir", "-p", e.remotePath("papers"))
-	e.mustRun("put", e.writeLocal("notes.txt", []byte("x")), e.remotePath("notes.txt"))
+	e.mustRun("cp", e.writeLocal("notes.txt", []byte("x")), "cb:"+e.remotePath("notes.txt"))
 
 	got := e.completeLine("ls", e.remote+"/")
 	want := map[string]bool{e.remotePath("papers") + "/": true, e.remotePath("notes.txt"): true}
@@ -45,7 +45,7 @@ func TestCompleteRemotePaths(t *testing.T) {
 
 func TestCompleteKeepsTheSpaceAliasAsTyped(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("notes.txt", []byte("x")), e.remotePath("notes.txt"))
+	e.mustRun("cp", e.writeLocal("notes.txt", []byte("x")), "cb:"+e.remotePath("notes.txt"))
 
 	// The remote directory sits in the home space, so the same listing is
 	// reachable through the alias — and the candidate has to come back in the
@@ -60,7 +60,7 @@ func TestCompleteKeepsTheSpaceAliasAsTyped(t *testing.T) {
 
 func TestCompleteNeedsTheMarkerOnATransferPath(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("notes.txt", []byte("x")), e.remotePath("notes.txt"))
+	e.mustRun("cp", e.writeLocal("notes.txt", []byte("x")), "cb:"+e.remotePath("notes.txt"))
 
 	// cp cannot tell the two sides apart by the string alone, so an unmarked
 	// path is local and the shell completes it.
@@ -91,7 +91,7 @@ func TestCompleteSpacesAndSlots(t *testing.T) {
 
 func TestCompleteIsFastEnoughForAKeyPress(t *testing.T) {
 	e := setup(t)
-	e.mustRun("put", e.writeLocal("notes.txt", []byte("x")), e.remotePath("notes.txt"))
+	e.mustRun("cp", e.writeLocal("notes.txt", []byte("x")), "cb:"+e.remotePath("notes.txt"))
 
 	// Warm the token cache first: signing in is not what is being measured, and
 	// a shell that has completed once already has a token.
