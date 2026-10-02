@@ -53,7 +53,7 @@ nfpms:
     maintainer: CERNBox <cernbox-admins@cern.ch>
     description: |
       Command-line client for CERNBox. Browse, transfer, and share files from
-      your terminal, with Kerberos single sign-on on lxplus.
+      your terminal.
     license: Apache-2.0
     formats: [rpm, deb]
     bindir: /usr/bin
