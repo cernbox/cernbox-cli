@@ -8,7 +8,7 @@ Every setting has a default that works against production CERNBox, so the CLI is
 ~/.config/cernbox/config.yaml
 ```
 
-Precisely: `$XDG_CONFIG_HOME/cernbox/config.yaml`, which is `~/.config/cernbox/config.yaml` unless you set that variable, and the equivalent per-user location on macOS. Create it yourself; nothing writes it for you.
+Precisely: `$XDG_CONFIG_HOME/cernbox/config.yaml`, which is `~/.config/cernbox/config.yaml` unless you set that variable, and the equivalent per-user location on macOS. On Windows it is `%AppData%\cernbox\config.yaml`. Create it yourself; nothing writes it for you.
 
 A `cernbox.cfg` sitting in the same directory belongs to the desktop sync client and is ignored by this one.
 
@@ -16,7 +16,7 @@ Two other places are read:
 
 | Where | When |
 | --- | --- |
-| `/etc/cernbox/config.yaml` | always, first, for deployment-wide settings |
+| `/etc/cernbox/config.yaml` (`%ProgramData%\cernbox\config.yaml` on Windows) | always, first, for deployment-wide settings |
 | `~/.config/cernbox/config.yaml` | always, second, overriding the site file |
 | `$CERNBOX_CONFIG` | **instead of** the user file — the site file is still read |
 | `--config PATH` | **instead of both** |

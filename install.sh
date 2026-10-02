@@ -51,6 +51,11 @@ fi
 case "$(uname -s)" in
     Linux)  os=linux ;;
     Darwin) os=darwin ;;
+    # Git Bash and friends report themselves this way. The Windows release is
+    # a zip holding cernbox.exe, which this script has no business unpacking
+    # into a Unix-shaped PATH.
+    MINGW* | MSYS* | CYGWIN*)
+        die "on Windows, download the windows zip from https://github.com/$REPO/releases/latest and put cernbox.exe on your PATH" ;;
     *) die "$(uname -s) is not one of the systems this is built for (Linux, macOS)" ;;
 esac
 

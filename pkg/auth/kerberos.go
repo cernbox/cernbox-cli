@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -59,7 +58,8 @@ type KerberosProvider struct {
 	// CCachePath overrides the credential cache location. Empty means
 	// $KRB5CCNAME, then the conventional /tmp/krb5cc_<uid>.
 	CCachePath string
-	// ConfigPath overrides /etc/krb5.conf.
+	// ConfigPath overrides $KRB5_CONFIG and the platform default, /etc/krb5.conf
+	// or krb5.ini on Windows.
 	ConfigPath string
 	// SPNEGO overrides the SPNEGO header generator. Tests set it.
 	SPNEGO SPNEGOFunc
@@ -224,7 +224,7 @@ func (p *KerberosProvider) krb5Config() (*krb5config.Config, error) {
 		path = os.Getenv("KRB5_CONFIG")
 	}
 	if path == "" {
-		path = "/etc/krb5.conf"
+		path = defaultKrb5Config()
 	}
 	cfg, err := krb5config.Load(path)
 	if err != nil {
@@ -270,7 +270,7 @@ func DefaultCCachePath() string {
 		// clear error naming what it found.
 		return v
 	}
-	return filepath.Join(os.TempDir(), "krb5cc_"+strconv.Itoa(os.Getuid()))
+	return filepath.Join(os.TempDir(), "krb5cc"+userSuffix())
 }
 
 // loadTicket reads the principal from a credential cache.

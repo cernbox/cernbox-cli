@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,12 +35,13 @@ type cacheFile struct {
 }
 
 // DefaultCachePath returns the token cache location: $CERNBOX_TOKEN_CACHE if
-// set, otherwise /tmp/cernbox_cc_<uid>, mirroring where KRB5CCNAME points.
+// set, otherwise /tmp/cernbox_cc_<uid>, mirroring where KRB5CCNAME points. On
+// Windows it is cernbox_cc in the user's own temporary directory.
 func DefaultCachePath() string {
 	if p := os.Getenv("CERNBOX_TOKEN_CACHE"); p != "" {
 		return p
 	}
-	return filepath.Join(os.TempDir(), "cernbox_cc_"+strconv.Itoa(os.Getuid()))
+	return filepath.Join(os.TempDir(), "cernbox_cc"+userSuffix())
 }
 
 // NewCache returns a cache backed by the file at path. An empty path selects
@@ -152,7 +152,7 @@ func (c *Cache) read() (*cacheFile, error) {
 	// A cache readable by anyone else is not a cache we are willing to trust:
 	// its contents may have been replaced, and using a token from it would mean
 	// authenticating as whoever wrote it.
-	if info.Mode().Perm()&0o077 != 0 {
+	if !privateMode(info.Mode()) {
 		return nil, fmt.Errorf("token cache %s has permissions %o, refusing to read it", c.path, info.Mode().Perm())
 	}
 

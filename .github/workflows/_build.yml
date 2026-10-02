@@ -36,6 +36,11 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      # Code behind a build constraint only compiles for its own platform, so
+      # the Windows half of each split would otherwise go unchecked here.
+      - name: Run go vet for Windows
+        run: GOOS=windows go vet ./... && GOOS=windows go vet -tags integration ./integration/...
+
       # The integration suite is behind a build tag, so a plain "go vet ./..."
       # never compiles it. Without this, it can rot unnoticed until someone
       # brings up Docker.
@@ -54,7 +59,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macos-latest is Apple Silicon; macos-15-intel covers amd64.
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+    defaults:
+      run:
+        # Git Bash on Windows, so the smoke test is one script everywhere; it
+        # finds cernbox.exe when asked for ./cernbox.
+        shell: bash
     steps:
       - uses: actions/checkout@v6
 
@@ -63,7 +74,12 @@ jobs:
           go-version-file: go.mod
 
       - name: Build
+        if: runner.os != 'Windows'
         run: make build
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: go build -o cernbox.exe ./cmd/cernbox
 
       # A binary that cannot print its own help is broken in a way no unit test
       # would catch: cobra panics on a duplicate flag shorthand at startup, not
@@ -82,7 +98,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+    defaults:
+      run:
+        # PowerShell would split -coverprofile=coverage.out at the dot.
+        shell: bash
     steps:
       - uses: actions/checkout@v6
 

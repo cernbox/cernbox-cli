@@ -231,32 +231,47 @@ func (a *App) remoteInEditFolder(ctx context.Context, name, in string) (string, 
 // looksLocal reports whether an argument says plainly that it is a path on this
 // machine. Shells expand "~" themselves, so a literal one only survives when it
 // was quoted — in which case it still meant here.
+//
+// On Windows ".\notes.txt" says the same as "./notes.txt", and a path with a
+// volume ("C:\notes.txt", "\\server\share\notes.txt") cannot be anything but
+// local.
 func looksLocal(arg string) bool {
-	return strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, "../") ||
-		arg == "." || arg == ".." || strings.HasPrefix(arg, "~/") || arg == "~"
+	switch arg {
+	case ".", "..", "~":
+		return true
+	}
+	return hasDirPrefix(arg, ".") || hasDirPrefix(arg, "..") || hasDirPrefix(arg, "~") ||
+		filepath.VolumeName(arg) != ""
+}
+
+// hasDirPrefix reports whether p starts with dir followed by a separator,
+// either "/" or the platform's own.
+func hasDirPrefix(p, dir string) bool {
+	return strings.HasPrefix(p, dir+"/") || strings.HasPrefix(p, dir+string(os.PathSeparator))
 }
 
 func expandHome(p string) string {
-	if p != "~" && !strings.HasPrefix(p, "~/") {
+	if p != "~" && !hasDirPrefix(p, "~") {
 		return p
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return p
 	}
-	return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/"))
+	return filepath.Join(home, p[1:])
 }
 
 // isBareEditName reports whether arg is a plain file name rather than a path.
 //
 // ':' counts as a path character because it introduces a space alias
-// ("home:Documents"), so a name containing one is never bare here.
+// ("home:Documents"), so a name containing one is never bare here. So does the
+// platform's own separator, so that ".\notes.txt" on Windows is a path.
 func isBareEditName(arg string) bool {
 	switch arg {
 	case "", ".", "..":
 		return false
 	}
-	return !strings.ContainsAny(arg, "/:")
+	return !strings.ContainsAny(arg, "/:"+string(os.PathSeparator))
 }
 
 // editorCandidate is one place an editor command can come from, with the name
@@ -279,7 +294,7 @@ func (a *App) editorCandidates(flagValue string) []editorCandidate {
 		{a.cfg.Edit.Command, "edit.command or CERNBOX_EDITOR"},
 		{os.Getenv("VISUAL"), "VISUAL"},
 		{os.Getenv("EDITOR"), "EDITOR"},
-		{"vi", "the built-in fallback"},
+		{fallbackEditor, "the built-in fallback"},
 	}
 }
 

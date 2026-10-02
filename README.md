@@ -24,6 +24,8 @@ go install github.com/cernbox/cernbox-cli/cmd/cernbox@latest
 
 RPM and deb packages are attached to each release.
 
+On Windows, download `cernbox-cli_<version>_windows_amd64.zip` (or `_arm64`) from the [latest release](https://github.com/cernbox/cernbox-cli/releases/latest) and put `cernbox.exe` somewhere on your `PATH`. It runs in PowerShell, `cmd` and Windows Terminal alike.
+
 ## Signing in
 
 Usually nothing: the client finds your credentials and uses them. On a machine where you already have a CERN ticket it signs in silently. Elsewhere it prints a link to open and a code to enter, once, and remembers the session afterwards.

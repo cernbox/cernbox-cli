@@ -159,6 +159,8 @@ Tokens are cached so that a shell loop does not re-authenticate on every invocat
 
 Default location is `/tmp/cernbox_cc_$(id -u)`, mode `0600`, overridable with `$CERNBOX_TOKEN_CACHE`. **Not** the home directory: on lxplus, home is a network filesystem shared across every node in the cluster, and a long-lived bearer token sitting there has a materially different exposure profile from one in node-local `/tmp`. This deliberately mirrors where `KRB5CCNAME` points, so the token's blast radius matches the ticket's.
 
+On Windows the default is `cernbox_cc` in the user's own temporary directory (`%LOCALAPPDATA%\Temp`). There is no uid to put in the name and none needed, since that directory already belongs to one user, and the mode check is skipped: Windows does not keep Unix permission bits, and the directory's ACL is what keeps the file private.
+
 Each cache entry is keyed by `(endpoint, principal-or-subject)`. A user who does `kinit` as a different principal gets a different entry rather than silently reusing the previous identity's token — a real failure mode for anyone with a service principal alongside their personal one. Entries store the access token, refresh token if any, expiry, and the provider that produced them. Expired entries are pruned on write.
 
 ### 3.5 Batch and automation

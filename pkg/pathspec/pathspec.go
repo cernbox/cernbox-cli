@@ -19,7 +19,9 @@ package pathspec
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -203,7 +205,7 @@ func ParseTransfer(arg string) (Spec, error) {
 		if rest == "" {
 			return Spec{}, fmt.Errorf("%q has no path after %q", raw, LocalPrefix)
 		}
-		return Spec{Kind: Local, Path: path.Clean(rest), TrailingSlash: trailing, Raw: raw}, nil
+		return localSpec(rest, raw), nil
 	}
 
 	if rest, ok := strings.CutPrefix(arg, RemotePrefix); ok {
@@ -227,7 +229,15 @@ func ParseTransfer(arg string) (Spec, error) {
 		return Spec{Kind: Remote, Space: alias, Path: cleaned, TrailingSlash: trailing, Raw: raw}, nil
 	}
 
-	return Spec{Kind: Local, Path: path.Clean(arg), TrailingSlash: trailing, Raw: raw}, nil
+	return localSpec(arg, raw), nil
+}
+
+// localSpec builds the spec for a local path. It is cleaned by the platform's
+// rules rather than by CERNBox's, so that on Windows "C:\data\" keeps its
+// volume and its trailing separator.
+func localSpec(p, raw string) Spec {
+	trailing := len(p) > 1 && (strings.HasSuffix(p, "/") || strings.HasSuffix(p, string(os.PathSeparator)))
+	return Spec{Kind: Local, Path: filepath.Clean(p), TrailingSlash: trailing, Raw: raw}
 }
 
 // ParseTransferPair parses a source and destination and requires exactly one of
@@ -281,7 +291,11 @@ func SplitForCompletion(arg string) (dir, frag string) {
 // Join returns a spec for a child of s.
 func Join(s Spec, elems ...string) Spec {
 	out := s
-	out.Path = path.Join(append([]string{s.Path}, elems...)...)
+	if s.Kind == Local {
+		out.Path = filepath.Join(append([]string{s.Path}, elems...)...)
+	} else {
+		out.Path = path.Join(append([]string{s.Path}, elems...)...)
+	}
 	if s.Kind == Remote && s.Space == "" && !strings.HasPrefix(out.Path, "/") {
 		out.Path = "/" + out.Path
 	}
@@ -299,6 +313,9 @@ func Base(s Spec) string {
 			return path.Base(s.Space)
 		}
 		return ""
+	}
+	if s.Kind == Local {
+		return filepath.Base(s.Path)
 	}
 	return path.Base(s.Path)
 }

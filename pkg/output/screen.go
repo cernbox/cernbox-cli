@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -93,8 +91,8 @@ type termScreen struct {
 	out   *os.File
 	state *term.State
 
-	events chan Event
-	resize chan os.Signal
+	events     chan Event
+	stopResize func()
 
 	closeOnce sync.Once
 }
@@ -119,7 +117,6 @@ func OpenScreen(in, out *os.File) (Screen, error) {
 		out:    out,
 		state:  state,
 		events: make(chan Event, 64),
-		resize: make(chan os.Signal, 1),
 	}
 
 	fmt.Fprint(out, altScreenOn+cursorHide)
@@ -129,19 +126,18 @@ func OpenScreen(in, out *os.File) (Screen, error) {
 	// a normal quit, a signal, a panic in the caller — has to go through Close,
 	// so the signals that would otherwise kill the process silently are caught
 	// and turned into an ordinary interrupt event.
-	signal.Notify(s.resize, syscall.SIGWINCH)
+	s.stopResize = watchResize(out, s.resized)
 	go s.readKeys()
-	go s.watchResize()
 
 	return s, nil
 }
 
-func (s *termScreen) watchResize() {
-	for range s.resize {
-		select {
-		case s.events <- Event{Resize: true}:
-		default:
-		}
+// resized queues a resize event, dropping it when one is already waiting: a
+// redraw reads the size afresh, so two in a row draw the same frame twice.
+func (s *termScreen) resized() {
+	select {
+	case s.events <- Event{Resize: true}:
+	default:
 	}
 }
 
@@ -211,7 +207,7 @@ func (s *termScreen) Draw(lines []Line) error {
 func (s *termScreen) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
-		signal.Stop(s.resize)
+		s.stopResize()
 		fmt.Fprint(s.out, cursorShow+altScreenOff)
 		err = term.Restore(int(s.in.Fd()), s.state)
 	})

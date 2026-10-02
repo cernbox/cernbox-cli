@@ -6,6 +6,7 @@ import (
 
 	"github.com/cernbox/cernbox-cli/internal/cli"
 	"github.com/cernbox/cernbox-cli/pkg/client"
+	"github.com/cernbox/cernbox-cli/pkg/output"
 )
 
 // Stamped in at build time with -ldflags.
@@ -24,6 +25,8 @@ func main() {
 	// the client version distribution, which is what makes it possible to time
 	// a deprecation rather than guess at one.
 	client.DefaultUserAgent = "cernbox-cli/" + version + " (rev-" + commit + ")"
+
+	output.EnableVirtualTerminal()
 
 	os.Exit(cli.Execute())
 }

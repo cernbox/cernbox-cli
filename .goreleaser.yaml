@@ -20,7 +20,7 @@ builds:
     # artifact run across AlmaLinux versions and inside minimal containers.
     env:
       - CGO_ENABLED=0
-    goos: [linux, darwin]
+    goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ldflags:
       - -s -w
@@ -32,6 +32,10 @@ archives:
   - id: default
     ids: [cernbox]
     formats: [tar.gz]
+    # A zip is what Windows opens without extra tools.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md

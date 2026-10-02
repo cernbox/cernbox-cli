@@ -13,8 +13,8 @@ import (
 // SiteConfigPath is the deployment-wide configuration file. Shipping it with
 // the RPM is what makes the lxplus experience zero-configuration: a user runs
 // "cernbox ls" on a fresh login and it works, because the endpoint and the SSO
-// client are already set here.
-const SiteConfigPath = "/etc/cernbox/config.yaml"
+// client are already set here. On Windows it is %ProgramData%\cernbox\config.yaml.
+var SiteConfigPath = siteConfigPath()
 
 // Config is the CLI's configuration, assembled from the site file, the user
 // file, the environment, and flags, in increasing order of precedence.
