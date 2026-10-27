@@ -64,11 +64,20 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(dir)
 
-	binary = filepath.Join(dir, "cernbox")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/cernbox")
-	build.Dir = repoRoot()
-	if out, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "building cernbox: %v\n%s", err, out)
+	// CERNBOX_BINARY is the binary that the release ships: reva's CLI, built
+	// by gaia ("make build"). Without it, the suite builds this repository's
+	// own client, until that code is retired.
+	binary = os.Getenv("CERNBOX_BINARY")
+	if binary == "" {
+		binary = filepath.Join(dir, "cernbox")
+		build := exec.Command("go", "build", "-o", binary, "./cmd/cernbox")
+		build.Dir = repoRoot()
+		if out, err := build.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "building cernbox: %v\n%s", err, out)
+			os.Exit(1)
+		}
+	} else if !filepath.IsAbs(binary) {
+		fmt.Fprintf(os.Stderr, "CERNBOX_BINARY must be an absolute path, not %s\n", binary)
 		os.Exit(1)
 	}
 
