@@ -1,0 +1,25 @@
+# Site configuration of the cernbox CLI, installed at /etc/cernbox/config.toml.
+#
+# The CERNBox defaults are built into the binary (the brand, cli/cernbox.toml
+# in cernbox/reva-plugins): the endpoint, the sign-in chain with Kerberos and
+# CERN SSO, the transfer settings. So on lxplus a user logs in, runs
+# "cernbox ls", and it works, with this file empty.
+#
+# Set here what differs on this host. Per-user settings go in
+# ~/.config/cernbox/config.toml, and win over this file. Flags and the
+# environment win over both. An unknown key is an error, so that a typo does
+# not go unseen: "cernbox config" shows what is in effect.
+
+[connection]
+# The gRPC gateway of a CERNBox host. With a gateway, the default transport
+# (auto) uses gRPC; without one, HTTPS to the endpoint.
+#gateway    = "localhost:9142"
+# The Admin API, for operators. The local socket /run/reva/admin.sock is
+# always tried first.
+#admin_host = "localhost:9142"
+#endpoint   = "https://cernbox.cern.ch"
+#transport  = "auto"
+
+[transfer]
+#chunk_size = "8M"
+#archive    = true

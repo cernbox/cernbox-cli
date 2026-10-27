@@ -2,6 +2,8 @@
 
 Work with your CERNBox files from the command line: browse them, move them between your computer and CERNBox, move them between two computers, and share them.
 
+> **2.0 is a new program under the old name.** `cernbox` is now reva's command line client, built for CERNBox, and this repository packages it. The JSON output, the exit codes and some flags changed: read [docs/release-notes-2.0.md](docs/release-notes-2.0.md) before you upgrade a machine that runs scripts. The rest of this README, `docs/configuration.md` and `docs/behaviour.md` still describe 1.x, and are being rewritten.
+
 ```console
 $ cernbox ls /eos/user/g/gdelmont
 $ cernbox cp ./report.pdf cb:/eos/user/g/gdelmont/Documents/
@@ -16,13 +18,13 @@ curl cli.cernbox.cern.ch | sh
 
 That fetches the release built for your system, checks it against the published checksum, and installs it where you can write — `/usr/local/bin` if that is yours, otherwise `~/.local/bin`, telling you what to add to `PATH`. It never asks for a password. `CERNBOX_VERSION` pins a version and `CERNBOX_INSTALL_DIR` chooses where it goes.
 
-From source, or from a package:
+From source, with [gaia](https://github.com/cs3org/gaia) and the versions in `packaging/versions.env`:
 
 ```bash
-go install github.com/cernbox/cernbox-cli/cmd/cernbox@latest
+make build      # or: gaia build --binary reva --brand cernbox.toml --with github.com/cernbox/reva-plugins/cli -o cernbox
 ```
 
-RPM and deb packages are attached to each release.
+RPM and deb packages (`cernbox-cli`) are attached to each release.
 
 On Windows, download `cernbox-cli_<version>_windows_amd64.zip` (or `_arm64`) from the [latest release](https://github.com/cernbox/cernbox-cli/releases/latest) and put `cernbox.exe` somewhere on your `PATH`. It runs in PowerShell, `cmd` and Windows Terminal alike.
 
@@ -347,10 +349,10 @@ A trash listing covers a stretch of time rather than the whole bin, because that
 `--output json` and `--output csv` turn any listing into something a program can read, and informational messages go to standard error so a pipe sees only data.
 
 ```bash
-cernbox --output json ls data | jq -r '.[] | select(.size > 1e9) | .name'
+cernbox --output json ls data | jq -r '.[] | select((.size // "0" | tonumber) > 1e9) | .name'
 ```
 
-Exit codes distinguish the cases worth branching on: `0` success, `2` a mistake in the command, `3` a credentials problem, `4` not allowed, `5` not found.
+The JSON is the CS3 JSON of each resource, in which 64-bit numbers are strings. Exit codes: `0` success, `1` an error, `2` a mistake in the command.
 
 ## Shell completion
 
@@ -362,20 +364,25 @@ TAB then completes CERNBox paths as you type them, along with space names, share
 
 ## Development
 
+The client is in [cs3org/reva](https://github.com/cs3org/reva) (`cmd/reva`, `pkg/cli`) and the CERNBox plugins and brand in [cernbox/reva-plugins](https://github.com/cernbox/reva-plugins) (`cli/`). This repository builds and ships them: see [docs/packaging.md](docs/packaging.md).
+
 ```bash
-make build            # build
-make test             # unit tests
+make prepare          # the gaia workspace, ws/ (REVA_DIR, REVA_PLUGINS_DIR for local checkouts)
+make build            # ./cernbox for this machine
+make snapshot         # the release artefacts in dist/, with goreleaser
 make dev-up           # start a local CERNBox to test against
-make test-integration # run the tests that need it
+make test-integration # run the end-to-end tests against ./cernbox
 ```
 
 `make help` lists the rest.
 
 ## More
 
+- [docs/release-notes-2.0.md](docs/release-notes-2.0.md): what changed in 2.0, and how to move scripts and configuration over
+- [docs/packaging.md](docs/packaging.md): how a release is built, and the plan for the code of 1.x
 - [docs/configuration.md](docs/configuration.md) — the configuration file: where it goes, every setting, and the environment variables
 - [docs/behaviour.md](docs/behaviour.md) — what the client does when the server is awkward, and what each kind of transfer actually costs
-- [docs/design.md](docs/design.md) — the architecture and the decisions behind it
+- [docs/design.md](docs/design.md): the architecture of 1.x and the decisions behind it
 
 ## Licence
 

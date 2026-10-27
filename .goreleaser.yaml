@@ -2,19 +2,27 @@ version: 2
 
 project_name: cernbox-cli
 
+# goreleaser cross-compiles the gaia workspace in ws/. BFLAGS is the content
+# of ws/bflags. goreleaser reads the environment before any hook runs, so
+# prepare runs before goreleaser, not as a hook:
+#
+#   packaging/prepare.sh
+#   BFLAGS="$(cat ws/bflags)" goreleaser release --clean
+
+env:
+  # A go.work above ws/ would replace the module of the workspace.
+  - GOWORK=off
+
 before:
   hooks:
-    - go mod tidy
     # Completions are generated rather than committed, so they can never drift
     # from the command tree they describe.
-    - mkdir -p packaging/completions
-    - sh -c "go run ./cmd/cernbox completion bash > packaging/completions/cernbox.bash"
-    - sh -c "go run ./cmd/cernbox completion zsh  > packaging/completions/cernbox.zsh"
-    - sh -c "go run ./cmd/cernbox completion fish > packaging/completions/cernbox.fish"
+    - sh packaging/completions.sh
 
 builds:
   - id: cernbox
-    main: ./cmd/cernbox
+    dir: ws
+    main: .
     binary: cernbox
     # CGO off keeps the binary statically linkable, which is what lets one
     # artifact run across AlmaLinux versions and inside minimal containers.
@@ -22,11 +30,10 @@ builds:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    flags:
+      - -trimpath
     ldflags:
-      - -s -w
-      - -X main.version={{ .Version }}
-      - -X main.commit={{ .ShortCommit }}
-      - -X main.buildDate={{ .Date }}
+      - -s -w {{ .Env.BFLAGS }}
 
 archives:
   - id: default
@@ -40,7 +47,7 @@ archives:
     files:
       - README.md
       - LICENSE
-      - docs/design.md
+      - docs/release-notes-2.0.md
 
 # RPM for AlmaLinux, which is what lxplus runs. The site configuration is
 # marked as a config file so a local edit survives an upgrade.
@@ -58,8 +65,8 @@ nfpms:
     formats: [rpm, deb]
     bindir: /usr/bin
     contents:
-      - src: packaging/config.yaml
-        dst: /etc/cernbox/config.yaml
+      - src: packaging/config.toml
+        dst: /etc/cernbox/config.toml
         type: config|noreplace
       - src: packaging/completions/cernbox.bash
         dst: /usr/share/bash-completion/completions/cernbox
