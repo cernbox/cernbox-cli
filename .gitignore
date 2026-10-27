@@ -2,6 +2,9 @@
 /cernbox
 /dist/
 
+# The gaia workspace of the build (packaging/prepare.sh)
+/ws/
+
 # Generated shell completions
 /packaging/completions/
 

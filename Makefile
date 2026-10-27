@@ -1,22 +1,37 @@
 BINARY      := cernbox
-CMD         := ./cmd/cernbox
-VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-BUILD_DATE  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS     := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(BUILD_DATE)
+WS          := ws
+GORELEASER  ?= goreleaser
+
+# The build of cernbox is gaia's: packaging/prepare.sh writes the workspace
+# ws/, with the versions of packaging/versions.env, and go or goreleaser
+# compile it. For a local reva or reva-plugins, set REVA_DIR or
+# REVA_PLUGINS_DIR (and BRAND for another brand file); GAIA names the gaia
+# binary. They go to prepare.sh only, not exported: cernbox warns about any
+# REVA_* variable it sees, so the tests should not see them.
+PREPARE     := GAIA="$(GAIA)" BRAND="$(BRAND)" REVA_DIR="$(REVA_DIR)" REVA_PLUGINS_DIR="$(REVA_PLUGINS_DIR)" \
+               REVA_VERSION="$(REVA_VERSION)" REVA_PLUGINS_VERSION="$(REVA_PLUGINS_VERSION)" packaging/prepare.sh
 
 COMPOSE     := docker compose -f dev/docker-compose.yaml
 
-.PHONY: all build install test test-race test-cover test-integration test-all \
+.PHONY: all prepare build install snapshot test test-race test-cover test-integration test-all \
         lint vet fmt tidy clean completions dev-up dev-down dev-logs help
 
 all: build
 
-build: ## Build the cernbox binary
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
+prepare: ## Prepare the gaia workspace of cernbox (ws/)
+	$(PREPARE)
 
-install: ## Install the cernbox binary into GOBIN
-	go install -ldflags "$(LDFLAGS)" $(CMD)
+$(WS)/bflags:
+	$(PREPARE)
+
+build: $(WS)/bflags ## Build cernbox for this machine from the workspace
+	cd $(WS) && GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags "-s -w $$(cat bflags)" -o ../$(BINARY) .
+
+install: build ## Install cernbox into GOBIN
+	install -m 0755 $(BINARY) "$$(go env GOBIN | grep . || echo "$$(go env GOPATH)/bin")/$(BINARY)"
+
+snapshot: $(WS)/bflags ## Build the release artefacts into dist/, without publishing
+	BFLAGS="$$(cat $(WS)/bflags)" $(GORELEASER) release --snapshot --clean --skip=publish
 
 test: ## Run unit tests
 	go test ./...
@@ -29,8 +44,8 @@ test-cover: ## Run unit tests and write coverage.out / coverage.html
 	go tool cover -html=coverage.out -o coverage.html
 	@go tool cover -func=coverage.out | tail -1
 
-test-integration: build ## Run integration tests (requires: make dev-up)
-	go test -tags integration -count=1 -timeout 20m ./integration/...
+test-integration: build ## Run integration tests against ./cernbox (requires: make dev-up)
+	CERNBOX_BINARY=$(CURDIR)/$(BINARY) go test -tags integration -count=1 -timeout 20m ./integration/...
 
 test-all: dev-up test test-integration ## Run every test suite
 
@@ -47,15 +62,12 @@ fmt: ## Format the code
 tidy: ## Tidy go.mod
 	go mod tidy
 
-completions: ## Generate shell completion scripts for packaging
-	@mkdir -p packaging/completions
-	go run $(CMD) completion bash > packaging/completions/cernbox.bash
-	go run $(CMD) completion zsh  > packaging/completions/cernbox.zsh
-	go run $(CMD) completion fish > packaging/completions/cernbox.fish
+completions: build ## Generate shell completion scripts for packaging
+	packaging/completions.sh ./$(BINARY)
 
 clean: ## Remove build and test artifacts
 	rm -f $(BINARY) coverage.out coverage.html
-	rm -rf packaging/completions
+	rm -rf packaging/completions $(WS) dist
 
 dev-up: ## Start the dev environment (revad + EOS)
 	$(COMPOSE) up -d --build
