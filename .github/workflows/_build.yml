@@ -52,10 +52,41 @@ jobs:
           version: latest
           install-mode: goinstall
 
+  # ── Prepare ──────────────────────────────────────────────────────────────────
+  # cernbox is reva's CLI, built by gaia with the CERNBox CLI plugins and brand.
+  # The workspace is prepared once, here, and every job after this one builds
+  # that same workspace, so what is tested is what is released.
+  prepare:
+    name: Prepare the gaia workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install gaia
+        run: |
+          . packaging/versions.env
+          go install "github.com/cs3org/gaia@$GAIA_VERSION"
+
+      # gaia asks api.github.com for the commit of the reva version, without a
+      # token, and panics when the call fails. A shared runner can run out of
+      # the sixty calls an hour, so one retry after a pause.
+      - name: Prepare
+        run: packaging/prepare.sh || { sleep 60; packaging/prepare.sh; }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: workspace
+          path: ws/
+          if-no-files-found: error
+
   # ── Build ────────────────────────────────────────────────────────────────────
   build:
     name: Build (${{ matrix.os }})
-    needs: [lint]
+    needs: [prepare]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -69,24 +100,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: workspace
+          path: ws
+
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: ws/go.mod
+          cache-dependency-path: ws/go.sum
 
       - name: Build
-        if: runner.os != 'Windows'
-        run: make build
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: go build -o cernbox.exe ./cmd/cernbox
+        working-directory: ws
+        env:
+          GOWORK: "off"
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags "-s -w $(cat bflags)" -o ../cernbox${{ runner.os == 'Windows' && '.exe' || '' }} .
 
       # A binary that cannot print its own help is broken in a way no unit test
       # would catch: cobra panics on a duplicate flag shorthand at startup, not
-      # at compile time.
+      # at compile time. The version and the brand come from the ldflags and the
+      # embedded brand file, so a build that lost either shows here.
       - name: Smoke test
         run: |
-          ./cernbox version
+          ./cernbox version --plugins | tee version.txt
+          grep -q '^version=[^ ]' version.txt
+          grep -q '^brand=cernbox ' version.txt
           ./cernbox --help
           ./cernbox ls --help
           ./cernbox completion bash > /dev/null
@@ -133,9 +172,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: workspace
+          path: ws
+
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: ws/go.mod
+          cache-dependency-path: |
+            go.sum
+            ws/go.sum
+
+      # The suite drives the binary that the release ships.
+      - name: Build cernbox
+        working-directory: ws
+        env:
+          GOWORK: "off"
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags "-s -w $(cat bflags)" -o ../cernbox .
 
       # The EOS image alone is over 6GB, and a runner has around 14GB free, so
       # the stack fills the disk and EOS then fails every write with "no space
@@ -171,7 +226,7 @@ jobs:
         # as a pass. Here the realm is always present, so demand it.
         env:
           CERNBOX_REQUIRE_KERBEROS: "1"
-        run: go test -tags integration -count=1 -timeout 20m ./integration/...
+        run: CERNBOX_BINARY="$PWD/cernbox" go test -tags integration -count=1 -timeout 20m ./integration/...
 
       # The revad and EOS logs are the only way to tell a client bug from a
       # server one when a test fails, and the containers are gone by the time
@@ -207,9 +262,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: workspace
+          path: ws
+
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: ws/go.mod
+          cache-dependency-path: ws/go.sum
+
+      # goreleaser puts these in the ldflags of every build (.goreleaser.yaml).
+      - name: Read the version flags of the workspace
+        run: echo "BFLAGS=$(cat ws/bflags)" >> "$GITHUB_ENV"
 
       - name: Move the nightly tag to this commit
         if: inputs.version == 'nightly'
