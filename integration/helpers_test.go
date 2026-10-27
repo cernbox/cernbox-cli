@@ -64,9 +64,8 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(dir)
 
-	// CERNBOX_BINARY is the binary that the release ships: reva's CLI, built
-	// by gaia ("make build"). Without it, the suite builds this repository's
-	// own client, until that code is retired.
+	// CERNBOX_BINARY is the binary to test ("make build"). Without it, the
+	// suite builds ./cmd/cernbox of this repository.
 	binary = os.Getenv("CERNBOX_BINARY")
 	if binary == "" {
 		binary = filepath.Join(dir, "cernbox")

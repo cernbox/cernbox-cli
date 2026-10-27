@@ -2,12 +2,9 @@ BINARY      := cernbox
 WS          := ws
 GORELEASER  ?= goreleaser
 
-# The build of cernbox is gaia's: packaging/prepare.sh writes the workspace
-# ws/, with the versions of packaging/versions.env, and go or goreleaser
-# compile it. For a local reva or reva-plugins, set REVA_DIR or
-# REVA_PLUGINS_DIR (and BRAND for another brand file); GAIA names the gaia
-# binary. They go to prepare.sh only, not exported: cernbox warns about any
-# REVA_* variable it sees, so the tests should not see them.
+# packaging/prepare.sh writes the gaia workspace ws/. For a local reva or
+# reva-plugins, set REVA_DIR or REVA_PLUGINS_DIR. These go to prepare.sh only,
+# not exported: cernbox warns about any REVA_* variable it sees.
 PREPARE     := GAIA="$(GAIA)" BRAND="$(BRAND)" REVA_DIR="$(REVA_DIR)" REVA_PLUGINS_DIR="$(REVA_PLUGINS_DIR)" \
                REVA_VERSION="$(REVA_VERSION)" REVA_PLUGINS_VERSION="$(REVA_PLUGINS_VERSION)" packaging/prepare.sh
 

@@ -4,9 +4,7 @@
 #
 #   packaging/completions.sh [binary]
 #
-# Without a binary, it builds one for this machine from the prepared
-# workspace (packaging/prepare.sh). The scripts are generated rather than
-# committed, so they can never drift from the command tree they describe.
+# Without a binary, it builds one from the prepared workspace.
 set -eu
 
 die() { printf 'completions: %s\n' "$*" >&2; exit 1; }
@@ -25,9 +23,8 @@ if [ -z "$binary" ]; then
     (cd "$WS" && GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags "-s -w $(cat bflags)" -o "$binary" .)
 fi
 
-# An empty home and config dir: the CLI reads the user config, and copies a
-# cernbox-cli config.yaml it finds into config.toml, which a build has no
-# business doing to the machine it runs on.
+# Use an empty home: the CLI copies a cernbox-cli config.yaml that it finds
+# into config.toml, and a build must not do that to the machine.
 mkdir -p "$out" "$tmp/home"
 for shell in bash zsh fish; do
     HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/home/.config" APPDATA="$tmp/home" \

@@ -1,13 +1,8 @@
 #!/bin/sh
 # Prepare the gaia workspace of the cernbox build, which goreleaser and
-# "make build" then compile.
-#
-# cernbox is reva's CLI rebranded at build time: gaia writes a Go module with
-# a main.go that imports reva's CLI and the CERNBox CLI plugins, and embeds the
-# CERNBox brand. gaia also runs the brand and plugin check of reva
-# (go run . __brandcheck), so a bad brand fails here and not on a user's
-# machine. The workspace holds go.mod, go.sum, main.go, brand.toml, and bflags,
-# the -X flags that set the version of the build.
+# "make build" then compile. cernbox is reva's CLI with the CERNBox CLI
+# plugins and brand. gaia checks the brand here, so a bad brand fails in the
+# build and not on a user's machine. bflags holds the -X flags of the version.
 #
 # The versions come from packaging/versions.env. The environment overrides it:
 #   GAIA                  the gaia binary (default: gaia on PATH)
@@ -20,15 +15,14 @@
 #   BRAND                 the brand file (default: cli/cernbox.toml of
 #                         reva-plugins)
 #
-# A local checkout is for development. It writes its absolute path into the
-# go.mod of the workspace, so a release uses published versions only.
+# A local checkout writes its absolute path into the go.mod of the workspace:
+# a release must use published versions only.
 set -eu
 
 die() { printf 'prepare: %s\n' "$*" >&2; exit 1; }
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
-# versions.env sets what the environment has not set.
 # shellcheck disable=SC2034 # value is read by the eval
 while IFS='=' read -r key value; do
     case "$key" in '' | \#*) continue ;; esac
@@ -52,9 +46,8 @@ if [ -n "$REVA_PLUGINS_DIR" ]; then
 else
     with_plugins="$plugins@$REVA_PLUGINS_VERSION"
     if [ -z "$BRAND" ]; then
-        # The brand is a file of the plugins module: take it from the module
-        # cache, at the version the build uses. Outside the repo, so that this
-        # does not touch its go.mod or go.sum.
+        # Take the brand from the module cache, at the build version. Run
+        # outside the repo, so go.mod and go.sum stay as they are.
         dir="$(cd "$(mktemp -d)" && GOWORK=off GOFLAGS=-mod=mod \
             go mod download -json "github.com/cernbox/reva-plugins@$REVA_PLUGINS_VERSION" |
             sed -n 's/^[[:space:]]*"Dir": "\(.*\)",*$/\1/p')" ||
@@ -65,8 +58,6 @@ else
 fi
 [ -f "$BRAND" ] || die "no brand at $BRAND"
 
-# The arguments of gaia: a published reva is the version argument, a local
-# one is a replacement.
 set -- --only-prepare --workspace "$WS" --binary reva --brand "$BRAND" --with "$with_plugins"
 if [ -n "$REVA_DIR" ]; then
     set -- "$@" --with "github.com/cs3org/reva/v3=$REVA_DIR"
@@ -82,8 +73,8 @@ fi
 rm -rf "$WS"
 mkdir -p "$WS"
 
-# gaia passes only some variables to go, and GOWORK is not one of them, so a
-# go.work above the workspace would take over the build of the workspace.
+# gaia does not pass GOWORK to go: a go.work above the workspace would take
+# over the build.
 gowork="$(cd "$WS" && env -u GOWORK go env GOWORK)"
 [ -z "$gowork" ] || die "$WS is under $gowork: move the workspace (WS) out of that tree"
 

@@ -2,12 +2,9 @@ version: 2
 
 project_name: cernbox-cli
 
-# cernbox is reva's CLI, built by gaia with the CERNBox CLI plugins and the
-# CERNBox brand. packaging/prepare.sh runs gaia's prepare stage into ws/, and
-# goreleaser cross-compiles that workspace. BFLAGS is the content of
-# ws/bflags, the -X flags of gaia that set the version of reva: goreleaser
-# reads the environment before any hook runs, so prepare runs before
-# goreleaser (make snapshot, and the release job), not as a hook here.
+# goreleaser cross-compiles the gaia workspace in ws/. BFLAGS is the content
+# of ws/bflags. goreleaser reads the environment before any hook runs, so
+# prepare runs before goreleaser, not as a hook:
 #
 #   packaging/prepare.sh
 #   BFLAGS="$(cat ws/bflags)" goreleaser release --clean
@@ -53,7 +50,7 @@ archives:
       - docs/release-notes-2.0.md
 
 # RPM for AlmaLinux, which is what lxplus runs. The site configuration is
-# marked as a config file so a local edit (or puppet's) survives an upgrade.
+# marked as a config file so a local edit survives an upgrade.
 nfpms:
   - id: packages
     ids: [cernbox]

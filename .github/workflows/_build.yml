@@ -52,10 +52,8 @@ jobs:
           version: latest
           install-mode: goinstall
 
-  # ── Prepare ──────────────────────────────────────────────────────────────────
-  # cernbox is reva's CLI, built by gaia with the CERNBox CLI plugins and brand.
-  # The workspace is prepared once, here, and every job after this one builds
-  # that same workspace, so what is tested is what is released.
+  # The workspace is prepared once, and every job after this one builds it, so
+  # what is tested is what is released.
   prepare:
     name: Prepare the gaia workspace
     runs-on: ubuntu-latest
@@ -71,9 +69,8 @@ jobs:
           . packaging/versions.env
           go install "github.com/cs3org/gaia@$GAIA_VERSION"
 
-      # gaia asks api.github.com for the commit of the reva version, without a
-      # token, and panics when the call fails. A shared runner can run out of
-      # the sixty calls an hour, so one retry after a pause.
+      # gaia calls api.github.com without a token, and panics when the call
+      # fails. A shared runner can run out of its calls, so retry once.
       - name: Prepare
         run: packaging/prepare.sh || { sleep 60; packaging/prepare.sh; }
 
@@ -119,8 +116,8 @@ jobs:
 
       # A binary that cannot print its own help is broken in a way no unit test
       # would catch: cobra panics on a duplicate flag shorthand at startup, not
-      # at compile time. The version and the brand come from the ldflags and the
-      # embedded brand file, so a build that lost either shows here.
+      # at compile time. The version and the brand check catch a build that
+      # lost the ldflags or the embedded brand.
       - name: Smoke test
         run: |
           ./cernbox version --plugins | tee version.txt
@@ -184,7 +181,7 @@ jobs:
             go.sum
             ws/go.sum
 
-      # The suite drives the binary that the release ships.
+      # The suite tests the binary that the release ships.
       - name: Build cernbox
         working-directory: ws
         env:
